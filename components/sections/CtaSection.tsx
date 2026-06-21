@@ -1,3 +1,4 @@
+"use client";
 import Link from "next/link";
 
 function MiniCube({ size, x, y, opacity }: { size: number; x: number; y: number; opacity: number }) {
