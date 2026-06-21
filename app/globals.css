@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+/* ─── AIscentra Design System — Tailwind v4 @theme ─── */
+@theme {
+  /* Colors */
+  --color-phosphor-mint: #ddffdc;
+  --color-reactor-green: #7fee64;
+  --color-soft-glow: #c8f9b6;
+  --color-pale-mist: #def0dd;
+  --color-sage-tint: #aed2a4;
+  --color-void: #000000;
+  --color-carbon: #212525;
+  --color-moss: #3e4a3c;
+  --color-fern: #485346;
+  --color-lichen: #677d64;
+  --color-slate: #697368;
+  --color-stone: #859085;
+  --color-bone: #ffffff;
+
+  /* Surfaces */
+  --color-surface-0: #000000;
+  --color-surface-1: #212525;
+  --color-surface-2: #3e4a3c;
+  --color-surface-3: #485346;
+  --color-surface-4: #def0dd;
+
+  /* Typography — Font Families */
+  --font-goga: 'Goga', 'Inter Display', 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+  --font-inter: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  /* Typography — Scale */
+  --text-caption: 12px;
+  --text-body-sm: 14px;
+  --text-body: 16px;
+  --text-subheading: 20px;
+  --text-heading-sm: 24px;
+  --text-heading: 40px;
+  --text-heading-lg: 54px;
+  --text-display: 64px;
+
+  /* Spacing */
+  --spacing-4: 4px;
+  --spacing-8: 8px;
+  --spacing-12: 12px;
+  --spacing-16: 16px;
+  --spacing-20: 20px;
+  --spacing-24: 24px;
+  --spacing-32: 32px;
+  --spacing-36: 36px;
+  --spacing-40: 40px;
+  --spacing-48: 48px;
+  --spacing-56: 56px;
+  --spacing-60: 60px;
+  --spacing-64: 64px;
+  --spacing-80: 80px;
+  --spacing-120: 120px;
+  --spacing-128: 128px;
+
+  /* Border Radius */
+  --radius-btn: 4px;
+  --radius-link: 8px;
+  --radius-card: 16px;
+  --radius-pill: 9999px;
+
+  /* Shadows */
+  --shadow-nav: rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.1) 0px 4px 6px -4px;
+
+  /* Layout */
+  --page-max-width: 1200px;
+}
+
+/* ─── CSS Custom Properties (legacy :root) ─── */
+:root {
+  --color-phosphor-mint: #ddffdc;
+  --color-reactor-green: #7fee64;
+  --color-soft-glow: #c8f9b6;
+  --color-pale-mist: #def0dd;
+  --color-sage-tint: #aed2a4;
+  --color-void: #000000;
+  --color-carbon: #212525;
+  --color-moss: #3e4a3c;
+  --color-fern: #485346;
+  --color-lichen: #677d64;
+  --color-slate: #697368;
+  --color-stone: #859085;
+  --color-bone: #ffffff;
+  --font-goga: 'Goga', 'Inter Display', 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+  --font-inter-variable: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --page-max-width: 1200px;
+}
+
+/* ─── Base Reset ─── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  background-color: #000000;
+  color: #ddffdc;
+  font-family: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: #000000;
+  color: #ddffdc;
+  min-height: 100vh;
+}
