@@ -46,7 +46,7 @@ export default function GlobeAnimation() {
     function draw() {
       ctx!.clearRect(0, 0, W, H);
 
-      const rot = t * 0.05;
+      const rot = t * 0.0125;
 
       // Background glow
       const bgGrad = ctx!.createRadialGradient(cx, cy, 0, cx, cy, R * 1.1);

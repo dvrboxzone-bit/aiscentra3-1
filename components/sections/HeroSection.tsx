@@ -1,25 +1,19 @@
 import Link from "next/link";
-
-const partnerLogos = [
-  "OpenAI", "Anthropic", "DeepMind", "Mistral", "Cohere",
-  "Stability AI", "Runway", "Hugging Face", "Together AI", "Replicate",
-];
+import LogoStrip from "@/components/sections/LogoStrip";
 
 export default function HeroSection() {
   return (
-    <section
-      style={{
-        background: "#000000",
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        paddingTop: "60px",
-        position: "relative",
-        overflow: "hidden",
-      }}
-    >
-      {/* Subtle background glow */}
+    <section style={{
+      background: "#000000",
+      minHeight: "100vh",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      paddingTop: "60px",
+      position: "relative",
+      overflow: "hidden",
+    }}>
+      {/* Background glow */}
       <div style={{
         position: "absolute",
         top: "30%",
@@ -32,21 +26,18 @@ export default function HeroSection() {
         zIndex: 0,
       }} />
 
-      {/* Text block — full width centered */}
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "1200px",
-          padding: "120px 24px 0",
-          position: "relative",
-          zIndex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          textAlign: "center",
-        }}
-      >
-        {/* Eyebrow */}
+      {/* Text block */}
+      <div style={{
+        width: "100%",
+        maxWidth: "1200px",
+        padding: "120px 24px 0",
+        position: "relative",
+        zIndex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+      }}>
         <p style={{
           fontFamily: "var(--font-inter-variable)",
           fontSize: "12px",
@@ -59,7 +50,6 @@ export default function HeroSection() {
           Intelligence Observatory
         </p>
 
-        {/* Headline — wide */}
         <h1 style={{
           fontFamily: "var(--font-goga)",
           fontSize: "clamp(48px, 6.5vw, 80px)",
@@ -75,7 +65,6 @@ export default function HeroSection() {
           the future
         </h1>
 
-        {/* Subhead */}
         <p style={{
           fontFamily: "var(--font-inter-variable)",
           fontSize: "18px",
@@ -90,7 +79,6 @@ export default function HeroSection() {
           a single observatory for the global AI ecosystem.
         </p>
 
-        {/* CTA row */}
         <div style={{ display: "flex", gap: "12px", justifyContent: "center", flexWrap: "wrap" }}>
           <Link href="/signup" style={{
             fontFamily: "var(--font-inter-variable)",
@@ -120,38 +108,10 @@ export default function HeroSection() {
         </div>
       </div>
 
-      {/* Spacer before logo strip */}
       <div style={{ flex: 1, minHeight: "80px" }} />
 
-      {/* Logo strip */}
-      <div style={{
-        width: "100%",
-        borderTop: "1px solid #3e4a3c",
-        borderBottom: "1px solid #3e4a3c",
-        background: "#000000",
-        overflow: "hidden",
-        position: "relative",
-        zIndex: 1,
-      }}>
-        <div style={{ display: "flex", padding: "20px 0" }}>
-          <div className="logo-scroll" style={{ display: "flex", gap: "0", whiteSpace: "nowrap" }}>
-            {[...partnerLogos, ...partnerLogos].map((logo, i) => (
-              <span key={i} style={{
-                fontFamily: "var(--font-inter-variable)",
-                fontSize: "14px",
-                fontWeight: 500,
-                color: "#485346",
-                letterSpacing: "-0.022em",
-                padding: "0 32px",
-                borderRight: "1px solid #3e4a3c",
-                display: "inline-block",
-              }}>
-                {logo}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
+      {/* Animated logo strip */}
+      <LogoStrip />
     </section>
   );
 }
