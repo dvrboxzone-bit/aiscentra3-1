@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * AIscentra — Global Styles
+ * Design Foundation v1.0: The interface must feel like a living observatory.
+ */
+
+@layer base {
+  :root {
+    /* Observatory color tokens */
+    --color-black:   #0A0A0A;
+    --color-dark:    #111111;
+    --color-surface: #171717;
+    --color-border:  #242424;
+  }
+
+  html {
+    /* Dark base — no flash of white on load */
+    background-color: #0A0A0A;
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-observatory-black text-text-secondary antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Typography defaults — Modern Technical Editorial */
+  h1, h2, h3, h4, h5, h6 {
+    @apply text-text-primary font-medium tracking-tight;
+  }
+
+  /* Scrollbar — minimal, observatory aesthetic */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-observatory-black;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-observatory-border rounded-sm;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #3a3a3a;
+  }
+
+  /* Selection */
+  ::selection {
+    @apply bg-observatory-surface text-text-primary;
+  }
+
+  /* Focus — accessible but minimal */
+  :focus-visible {
+    @apply outline outline-1 outline-offset-2 outline-observatory-border;
+  }
+}
+
+@layer components {
+  /* Observatory grid background — Design Foundation v1.0
+   * "Backgrounds should be subtle...support observation theme, never compete with content" */
+  .observatory-grid {
+    background-image: var(--tw-gradient-stops);
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* Signal severity badges */
+  .severity-critical {
+    @apply text-text-primary border border-text-primary/30 bg-observatory-surface;
+  }
+  .severity-high {
+    @apply text-signal-high border border-signal-high/25 bg-observatory-surface;
+  }
+  .severity-medium {
+    @apply text-signal-medium border border-signal-medium/20 bg-observatory-surface;
+  }
+  .severity-low {
+    @apply text-signal-low border border-signal-low/15 bg-observatory-surface;
+  }
+}
