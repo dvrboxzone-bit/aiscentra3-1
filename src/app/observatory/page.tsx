@@ -1,25 +1,24 @@
 import type { Metadata } from 'next'
 import { Pulse } from '@/components/ui/pulse'
-import { getMockSignalStats, getMockSignals } from '@/modules/signals/mock'
-import { formatCategory } from '@/lib/utils/format'
+import { getSignals, getSignalStats } from '@/modules/signals/queries'
+import { getEvents } from '@/modules/events/queries'
+import { getReports } from '@/modules/reports/queries'
 import { getSignalSeverity } from '@/types/database'
-import type { SignalCategory } from '@/types/database'
 
 export const metadata: Metadata = {
   title: 'Observatory',
-  description: 'Global AI ecosystem activity dashboard — signal radar, category distribution, Observatory metrics.',
+  description: 'Global AI ecosystem monitoring dashboard.',
 }
 
 export const revalidate = 3600
 
-const CATEGORY_EXPIRY_DAYS: Record<SignalCategory, number> = {
-  RESEARCH: 90, MODELS: 60, COMPANIES: 45, INFRASTRUCTURE: 60,
-  OPEN_SOURCE: 45, FUNDING: 30, REGULATION: 120, AGENTS: 45, HARDWARE: 90,
-}
-
-export default function ObservatoryPage(): React.JSX.Element {
-  const stats = getMockSignalStats()
-  const signals = getMockSignals({ limit: 50 })
+export default async function ObservatoryPage(): Promise<React.JSX.Element> {
+  const [stats, signals, events, reports] = await Promise.all([
+    getSignalStats(),
+    getSignals({ limit: 100 }),
+    getEvents({ limit: 20 }),
+    getReports(undefined, 10),
+  ])
 
   const severityBreakdown = {
     CRITICAL: signals.filter((s) => getSignalSeverity(s.signal_score) === 'CRITICAL').length,
@@ -44,35 +43,28 @@ export default function ObservatoryPage(): React.JSX.Element {
           <p className="font-mono text-xs tracking-wider text-text-muted">GLOBAL MONITORING</p>
         </div>
         <h1 className="text-2xl font-light text-text-primary">Observatory Dashboard</h1>
-        <p className="mt-2 text-sm text-text-muted">
-          System-wide monitoring of AI ecosystem signal activity and Observatory health.
-        </p>
       </div>
 
       {/* Top metrics */}
-      <div className="grid border-b border-observatory-border grid-cols-2 md:grid-cols-4">
-        <MetricCell label="Total Signals"  value={stats.total}           />
-        <MetricCell label="Critical"       value={severityBreakdown.CRITICAL} accent />
-        <MetricCell label="Avg Signal Score" value={`${avgScores.signal}/100`} />
-        <MetricCell label="Avg Confidence" value={`${avgScores.confidence}%`} />
+      <div className="grid grid-cols-2 border-b border-observatory-border md:grid-cols-4">
+        <MetricCell label="Total Signals" value={stats.total} />
+        <MetricCell label="Critical"      value={severityBreakdown.CRITICAL} accent />
+        <MetricCell label="Events"        value={events.length} />
+        <MetricCell label="Reports"       value={reports.length} />
       </div>
 
       <div className="grid gap-px bg-observatory-border md:grid-cols-2">
 
-        {/* Signal severity distribution */}
+        {/* Severity distribution */}
         <section className="bg-observatory-black p-6">
-          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
-            SEVERITY DISTRIBUTION
-          </h2>
+          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">SEVERITY DISTRIBUTION</h2>
           <div className="space-y-3">
             {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map((sev) => {
               const count = severityBreakdown[sev]
               const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0
               const colors: Record<string, string> = {
-                CRITICAL: 'bg-text-primary',
-                HIGH:     'bg-signal-high',
-                MEDIUM:   'bg-signal-medium',
-                LOW:      'bg-signal-low',
+                CRITICAL: 'bg-text-primary', HIGH: 'bg-signal-high',
+                MEDIUM: 'bg-signal-medium', LOW: 'bg-signal-low',
               }
               return (
                 <div key={sev} className="flex items-center gap-3">
@@ -80,9 +72,7 @@ export default function ObservatoryPage(): React.JSX.Element {
                   <div className="h-px flex-1 bg-observatory-border">
                     <div className={`h-px ${colors[sev]}`} style={{ width: `${pct}%` }} />
                   </div>
-                  <span className="w-8 text-right font-mono text-xs tabular-nums text-text-secondary">
-                    {count}
-                  </span>
+                  <span className="w-6 text-right font-mono text-xs tabular-nums text-text-secondary">{count}</span>
                 </div>
               )
             })}
@@ -91,52 +81,50 @@ export default function ObservatoryPage(): React.JSX.Element {
 
         {/* Category activity */}
         <section className="bg-observatory-black p-6">
-          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
-            CATEGORY ACTIVITY
-          </h2>
-          <div className="space-y-2.5">
-            {Object.entries(stats.byCategory)
-              .sort(([, a], [, b]) => b - a)
-              .map(([cat, count]) => {
-                const category = cat as SignalCategory
-                const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0
-                return (
-                  <div key={cat} className="flex items-center gap-3">
-                    <span className="w-24 font-mono text-xs text-text-muted truncate">
-                      {cat.replace('_', ' ')}
-                    </span>
-                    <div className="h-px flex-1 bg-observatory-border">
-                      <div className="h-px bg-text-muted" style={{ width: `${pct}%` }} />
+          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">CATEGORY ACTIVITY</h2>
+          {Object.keys(stats.byCategory).length === 0 ? (
+            <p className="text-xs text-text-muted">No signals yet.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {Object.entries(stats.byCategory)
+                .sort(([, a], [, b]) => b - a)
+                .map(([cat, count]) => {
+                  const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0
+                  return (
+                    <div key={cat} className="flex items-center gap-3">
+                      <span className="w-24 truncate font-mono text-xs text-text-muted">{cat.replace('_', ' ')}</span>
+                      <div className="h-px flex-1 bg-observatory-border">
+                        <div className="h-px bg-text-muted" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="w-6 text-right font-mono text-xs tabular-nums text-text-secondary">{count}</span>
                     </div>
-                    <span className="w-6 text-right font-mono text-xs tabular-nums text-text-secondary">
-                      {count}
-                    </span>
-                  </div>
-                )
-              })}
-          </div>
+                  )
+                })}
+            </div>
+          )}
         </section>
 
-        {/* Observatory health */}
+        {/* System health */}
         <section className="bg-observatory-black p-6">
-          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
-            OBSERVATORY HEALTH
-          </h2>
+          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">SYSTEM STATUS</h2>
           <div className="space-y-3">
             {[
-              { label: 'Signal Engine',      status: 'STAGE 7', active: false },
-              { label: 'Observation Layer',  status: 'STAGE 6', active: false },
-              { label: 'Event Generator',    status: 'STAGE 8', active: false },
-              { label: 'Content Agent',      status: 'STAGE 9', active: false },
-              { label: 'Knowledge Agent',    status: 'STAGE 12', active: false },
-              { label: 'Observatory Assistant', status: 'STAGE 13', active: false },
-            ].map(({ label, status, active }) => (
+              { label: 'Database',           active: true,  status: 'CONNECTED' },
+              { label: 'Observation Layer',  active: false, status: 'STAGE 6' },
+              { label: 'Signal Engine',      active: false, status: 'STAGE 7' },
+              { label: 'Event Generator',    active: false, status: 'STAGE 8' },
+              { label: 'Content Agent',      active: false, status: 'STAGE 9' },
+              { label: 'Knowledge Agent',    active: false, status: 'STAGE 12' },
+              { label: 'Assistant',          active: false, status: 'STAGE 13' },
+            ].map(({ label, active, status }) => (
               <div key={label} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Pulse size="sm" active={active} />
                   <span className="text-xs text-text-muted">{label}</span>
                 </div>
-                <span className="font-mono text-xs text-text-muted">{status}</span>
+                <span className={`font-mono text-xs ${active ? 'text-text-secondary' : 'text-text-muted'}`}>
+                  {status}
+                </span>
               </div>
             ))}
           </div>
@@ -144,9 +132,7 @@ export default function ObservatoryPage(): React.JSX.Element {
 
         {/* Score averages */}
         <section className="bg-observatory-black p-6">
-          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
-            SCORE AVERAGES
-          </h2>
+          <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">SCORE AVERAGES</h2>
           <div className="space-y-4">
             {[
               { label: 'Signal Score',     value: avgScores.signal },
@@ -159,7 +145,7 @@ export default function ObservatoryPage(): React.JSX.Element {
                   <span>{value}/100</span>
                 </div>
                 <div className="h-px bg-observatory-border">
-                  <div className="h-px bg-text-secondary" style={{ width: `${value}%` }} />
+                  <div className="h-px bg-text-secondary transition-all" style={{ width: `${value}%` }} />
                 </div>
               </div>
             ))}
@@ -170,15 +156,7 @@ export default function ObservatoryPage(): React.JSX.Element {
   )
 }
 
-function MetricCell({
-  label,
-  value,
-  accent,
-}: {
-  label: string
-  value: number | string
-  accent?: boolean
-}): React.JSX.Element {
+function MetricCell({ label, value, accent }: { label: string; value: number; accent?: boolean }): React.JSX.Element {
   return (
     <div className="border-r border-observatory-border px-6 py-5 last:border-r-0">
       <p className="mb-1 font-mono text-xs text-text-muted">{label.toUpperCase()}</p>

@@ -2,7 +2,8 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { SeverityBadge, CategoryBadge, ConfidenceBadge } from '@/components/ui/badge'
 import { ScoreBar } from '@/components/ui/score-bar'
-import { getMockSignals, getMockSignalBySlug } from '@/modules/signals/mock'
+import { getSignalById, getSignals } from '@/modules/signals/queries'
+import { getEventsBySignal } from '@/modules/events/queries'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
 import { getSignalSeverity } from '@/types/database'
 
@@ -12,15 +13,16 @@ interface SignalPageProps {
   params: Promise<{ slug: string }>
 }
 
+// Pre-generate paths for known signals at build time
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
-  return getMockSignals().map((s) => ({ slug: s.id }))
+  const signals = await getSignals({ limit: 100 })
+  return signals.map((s) => ({ slug: s.id }))
 }
 
 export async function generateMetadata({ params }: SignalPageProps): Promise<Metadata> {
   const { slug } = await params
-  const signal = getMockSignalBySlug(slug)
+  const signal = await getSignalById(slug)
   if (!signal) return { title: 'Signal Not Found' }
-
   return {
     title: signal.title,
     description: signal.description,
@@ -29,7 +31,10 @@ export async function generateMetadata({ params }: SignalPageProps): Promise<Met
 
 export default async function SignalPage({ params }: SignalPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
-  const signal = getMockSignalBySlug(slug)
+  const [signal, relatedEvents] = await Promise.all([
+    getSignalById(slug),
+    getEventsBySignal(slug),
+  ])
 
   if (!signal) notFound()
 
@@ -52,15 +57,11 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
           <CategoryBadge category={signal.category} />
           <ConfidenceBadge score={signal.confidence_score} />
         </div>
-
         <h1 className="mb-4 text-xl font-medium leading-snug text-text-primary md:text-2xl">
           {signal.title}
         </h1>
-
-        <div className="flex items-center gap-4 font-mono text-xs text-text-muted">
-          <time dateTime={signal.created_at}>
-            Detected {formatRelativeTime(signal.created_at)}
-          </time>
+        <div className="flex flex-wrap items-center gap-4 font-mono text-xs text-text-muted">
+          <time dateTime={signal.created_at}>Detected {formatRelativeTime(signal.created_at)}</time>
           <span className="text-observatory-border">·</span>
           <span>{formatDate(signal.created_at)}</span>
           <span className="text-observatory-border">·</span>
@@ -68,26 +69,46 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
         </div>
       </header>
 
-      {/* Two-column layout */}
       <div className="grid gap-8 md:grid-cols-[1fr_240px]">
 
         {/* Main content */}
         <div className="space-y-6">
-          {/* Description */}
+          {/* Analysis */}
           <section>
             <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SIGNAL ANALYSIS</h2>
             <p className="text-sm leading-relaxed text-text-secondary">{signal.description}</p>
           </section>
 
-          {/* Status */}
+          {/* Related events */}
+          {relatedEvents.length > 0 && (
+            <section className="border-t border-observatory-border pt-6">
+              <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
+                RELATED EVENTS ({relatedEvents.length})
+              </h2>
+              <div className="space-y-3">
+                {relatedEvents.map((event) => (
+                  <a
+                    key={event.id}
+                    href={`/events/${event.id}`}
+                    className="block border border-observatory-border bg-observatory-surface p-4 transition-colors hover:bg-observatory-dark"
+                  >
+                    <p className="mb-1 font-mono text-xs text-text-muted">{event.event_type.replace('_', ' ')}</p>
+                    <p className="text-sm text-text-secondary">{event.title}</p>
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Status grid */}
           <section className="border border-observatory-border bg-observatory-surface p-4">
             <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SIGNAL STATUS</h2>
             <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-              <StatusItem label="Status"    value={signal.status} />
-              <StatusItem label="Category"  value={formatCategory(signal.category)} />
-              <StatusItem label="Sources"   value={`${signal.observation_ids.length} linked`} />
-              <StatusItem label="Entities"  value={`${signal.entity_ids.length} detected`} />
-              <StatusItem label="Override"  value={signal.manual_override ? 'Manual' : 'Automated'} />
+              <StatusItem label="Status"   value={signal.status} />
+              <StatusItem label="Category" value={formatCategory(signal.category)} />
+              <StatusItem label="Sources"  value={`${signal.observation_ids.length} linked`} />
+              <StatusItem label="Entities" value={`${signal.entity_ids.length} detected`} />
+              <StatusItem label="Override" value={signal.manual_override ? 'Manual' : 'Automated'} />
               <StatusItem
                 label="Momentum"
                 value={signal.momentum_last_calculated
@@ -98,7 +119,7 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
           </section>
         </div>
 
-        {/* Sidebar — scoring */}
+        {/* Sidebar */}
         <aside className="space-y-6">
           <section className="border border-observatory-border bg-observatory-surface p-4">
             <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">SIGNAL SCORES</h2>
@@ -112,11 +133,11 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
           <section className="border border-observatory-border bg-observatory-surface p-4">
             <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">FACTOR BREAKDOWN</h2>
             <div className="space-y-2">
-              <ScoreBar value={signal.impact_factor * 10}       label="Impact" />
-              <ScoreBar value={signal.actor_factor * 10}        label="Actor" />
-              <ScoreBar value={signal.novelty_factor * 10}      label="Novelty" />
+              <ScoreBar value={signal.impact_factor * 10}        label="Impact" />
+              <ScoreBar value={signal.actor_factor * 10}         label="Actor" />
+              <ScoreBar value={signal.novelty_factor * 10}       label="Novelty" />
               <ScoreBar value={signal.verifiability_factor * 10} label="Verify" />
-              <ScoreBar value={signal.strategic_factor * 10}    label="Strategic" />
+              <ScoreBar value={signal.strategic_factor * 10}     label="Strategic" />
             </div>
           </section>
 

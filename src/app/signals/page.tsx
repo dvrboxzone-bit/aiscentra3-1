@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { SignalCard } from '@/components/signals/signal-card'
-import { CategoryBadge } from '@/components/ui/badge'
-import { getMockSignals } from '@/modules/signals/mock'
+import { getSignals } from '@/modules/signals/queries'
 import type { SignalCategory } from '@/types/database'
 
 export const metadata: Metadata = {
@@ -24,14 +23,13 @@ export default async function SignalsPage({ searchParams }: SignalsPageProps): P
   const params = await searchParams
   const activeCategory = params.category as SignalCategory | undefined
 
-  const signals = getMockSignals({
+  const signals = await getSignals({
     category: activeCategory,
-    limit: 30,
+    limit: 50,
   })
 
   return (
     <div className="mx-auto max-w-7xl">
-      {/* Page header */}
       <div className="border-b border-observatory-border px-6 py-8">
         <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">SIGNAL DISCOVERY</p>
         <h1 className="text-2xl font-light text-text-primary">Signal Feed</h1>
@@ -71,8 +69,13 @@ export default async function SignalsPage({ searchParams }: SignalsPageProps): P
       {/* Signal list */}
       <div>
         {signals.length === 0 ? (
-          <div className="px-6 py-16 text-center">
-            <p className="text-sm text-text-muted">No signals detected in this category yet.</p>
+          <div className="px-6 py-20 text-center">
+            <p className="mb-2 font-mono text-xs tracking-wider text-text-muted">OBSERVATORY</p>
+            <p className="text-sm text-text-muted">
+              {activeCategory
+                ? `No signals detected in ${activeCategory.replace('_', ' ')} yet.`
+                : 'Signal Engine initializing. First signals arriving soon.'}
+            </p>
           </div>
         ) : (
           signals.map((signal) => (
