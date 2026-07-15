@@ -13,7 +13,10 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
-  return updateSession(request, NextResponse.next({ request }))
+  const response = NextResponse.next({ request })
+  // Pass pathname to layouts for active nav detection
+  response.headers.set('x-pathname', request.nextUrl.pathname)
+  return updateSession(request, response)
 }
 
 export const config = {

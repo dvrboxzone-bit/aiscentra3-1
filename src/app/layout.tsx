@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
+import { headers } from 'next/headers'
+import { Nav } from '@/components/layout/nav'
+import { Footer } from '@/components/layout/footer'
 import './globals.css'
 
 const inter = Inter({
@@ -29,25 +32,29 @@ export const metadata: Metadata = {
     card:  'summary_large_image',
     title: 'AIscentra — Intelligence Observatory',
   },
-  robots: {
-    index:  true,
-    follow: true,
-  },
+  robots: { index: true, follow: true },
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0A0A0A',
+  themeColor:  '#0A0A0A',
   colorScheme: 'dark',
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
-}): React.JSX.Element {
+}): Promise<React.JSX.Element> {
+  const headersList = await headers()
+  const pathname = headersList.get('x-pathname') ?? ''
+
   return (
     <html lang="en" className={inter.variable}>
-      <body>{children}</body>
+      <body className="flex min-h-screen flex-col bg-observatory-black">
+        <Nav currentPath={pathname} />
+        <main className="flex-1">{children}</main>
+        <Footer />
+      </body>
     </html>
   )
 }
