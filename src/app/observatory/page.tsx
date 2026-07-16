@@ -3,6 +3,7 @@ import { Pulse } from '@/components/ui/pulse'
 import { getSignals, getSignalStats } from '@/modules/signals/queries'
 import { getEvents } from '@/modules/events/queries'
 import { getReports } from '@/modules/reports/queries'
+import { getObservationStats } from '@/modules/observations/queries'
 import { getSignalSeverity } from '@/types/database'
 
 export const metadata: Metadata = {
@@ -13,11 +14,12 @@ export const metadata: Metadata = {
 export const revalidate = 3600
 
 export default async function ObservatoryPage(): Promise<React.JSX.Element> {
-  const [stats, signals, events, reports] = await Promise.all([
+  const [stats, signals, events, reports, obsStats] = await Promise.all([
     getSignalStats(),
     getSignals({ limit: 100 }),
     getEvents({ limit: 20 }),
     getReports(undefined, 10),
+    getObservationStats(),
   ])
 
   const severityBreakdown = {
@@ -47,10 +49,10 @@ export default async function ObservatoryPage(): Promise<React.JSX.Element> {
 
       {/* Top metrics */}
       <div className="grid grid-cols-2 border-b border-observatory-border md:grid-cols-4">
-        <MetricCell label="Total Signals" value={stats.total} />
+        <MetricCell label="Observations"  value={obsStats.total} />
+        <MetricCell label="Signals"       value={stats.total} />
         <MetricCell label="Critical"      value={severityBreakdown.CRITICAL} accent />
         <MetricCell label="Events"        value={events.length} />
-        <MetricCell label="Reports"       value={reports.length} />
       </div>
 
       <div className="grid gap-px bg-observatory-border md:grid-cols-2">
@@ -109,13 +111,13 @@ export default async function ObservatoryPage(): Promise<React.JSX.Element> {
           <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">SYSTEM STATUS</h2>
           <div className="space-y-3">
             {[
-              { label: 'Database',           active: true,  status: 'CONNECTED' },
-              { label: 'Observation Layer',  active: false, status: 'STAGE 6' },
-              { label: 'Signal Engine',      active: false, status: 'STAGE 7' },
-              { label: 'Event Generator',    active: false, status: 'STAGE 8' },
-              { label: 'Content Agent',      active: false, status: 'STAGE 9' },
-              { label: 'Knowledge Agent',    active: false, status: 'STAGE 12' },
-              { label: 'Assistant',          active: false, status: 'STAGE 13' },
+              { label: 'Database',           active: true,                    status: 'CONNECTED' },
+              { label: 'Observation Layer',  active: obsStats.last24h > 0,   status: obsStats.last24h > 0 ? `${obsStats.last24h} TODAY` : 'STAGE 6' },
+              { label: 'Pipeline Queue',     active: obsStats.unprocessed > 0, status: `${obsStats.unprocessed} PENDING` },
+              { label: 'Signal Engine',      active: false,                   status: 'STAGE 7' },
+              { label: 'Event Generator',    active: false,                   status: 'STAGE 8' },
+              { label: 'Content Agent',      active: false,                   status: 'STAGE 9' },
+              { label: 'Assistant',          active: false,                   status: 'STAGE 13' },
             ].map(({ label, active, status }) => (
               <div key={label} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

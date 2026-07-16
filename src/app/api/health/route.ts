@@ -1,78 +1,58 @@
 /**
  * AIscentra — Health Check API
- *
- * GET /api/health
- * Returns system status and Supabase connectivity.
- * Used for monitoring and verifying deployments.
+ * GET /api/health — system status, DB connectivity, observation pipeline state
  */
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 
 export const dynamic = 'force-dynamic'
 
-interface HealthResponse {
-  status: 'ok' | 'degraded' | 'error'
-  timestamp: string
-  version: string
-  checks: {
-    database: 'ok' | 'error'
-    sources: number
-    signals: number
-    events: number
-  }
-  error?: string
-}
-
-export async function GET(): Promise<NextResponse<HealthResponse>> {
+export async function GET(): Promise<NextResponse> {
   const timestamp = new Date().toISOString()
-  const version = process.env['npm_package_version'] ?? '0.1.0'
 
   try {
     const supabase = createAdminClient()
 
-    // Run parallel count queries — fastest way to verify connectivity and data
-    const [sourcesResult, signalsResult, eventsResult] = await Promise.all([
+    const [sources, signals, events, observations] = await Promise.all([
       supabase.from('sources').select('id', { count: 'exact', head: true }),
       supabase.from('signals').select('id', { count: 'exact', head: true }),
       supabase.from('events').select('id', { count: 'exact', head: true }),
+      supabase.from('observations').select('id', { count: 'exact', head: true }),
     ])
 
-    // If any query has a non-PGRST error, database is not reachable
-    const dbError = sourcesResult.error ?? signalsResult.error ?? eventsResult.error
+    const dbError = sources.error ?? signals.error ?? events.error ?? observations.error
     if (dbError && !dbError.code?.startsWith('PGRST')) {
       return NextResponse.json(
-        {
-          status: 'error',
-          timestamp,
-          version,
-          checks: { database: 'error', sources: 0, signals: 0, events: 0 },
-          error: dbError.message,
-        },
+        { status: 'error', timestamp, error: dbError.message },
         { status: 503 },
       )
     }
 
+    // Check for unprocessed observations (pipeline health indicator)
+    const { count: unprocessed } = await supabase
+      .from('observations')
+      .select('id', { count: 'exact', head: true })
+      .eq('processed', false)
+
     return NextResponse.json({
       status: 'ok',
       timestamp,
-      version,
+      version: '0.1.0',
       checks: {
-        database: 'ok',
-        sources: sourcesResult.count ?? 0,
-        signals: signalsResult.count ?? 0,
-        events:  eventsResult.count ?? 0,
+        database:     'ok',
+        sources:      sources.count      ?? 0,
+        observations: observations.count ?? 0,
+        signals:      signals.count      ?? 0,
+        events:       events.count       ?? 0,
+        pipeline: {
+          unprocessed: unprocessed ?? 0,
+          status: (unprocessed ?? 0) > 50 ? 'backlogged' : 'healthy',
+        },
       },
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json(
-      {
-        status: 'error',
-        timestamp,
-        version,
-        checks: { database: 'error', sources: 0, signals: 0, events: 0 },
-        error: message,
-      },
+      { status: 'error', timestamp, error: err instanceof Error ? err.message : 'Unknown' },
       { status: 503 },
     )
   }
