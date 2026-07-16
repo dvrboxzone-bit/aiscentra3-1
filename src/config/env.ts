@@ -42,6 +42,7 @@ export const env = {
 export const serverEnv = {
   SUPABASE_SERVICE_ROLE_KEY: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
   OPENROUTER_API_KEY:        requireEnv('OPENROUTER_API_KEY'),
-  OPENROUTER_MODEL:          optionalEnv('OPENROUTER_MODEL', 'anthropic/claude-3-haiku'),
+  OPENROUTER_MODEL:          optionalEnv('OPENROUTER_MODEL', 'anthropic/claude-haiku-4-5'),
   ADMIN_EMAIL:               requireEnv('ADMIN_EMAIL'),
+  CRON_SECRET:               requireEnv('CRON_SECRET'),
 } as const
