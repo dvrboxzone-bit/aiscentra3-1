@@ -8,7 +8,8 @@
     { "path": "/api/cron/collect",  "schedule": "0 */4 * * *"  },
     { "path": "/api/cron/enrich",   "schedule": "30 */4 * * *" },
     { "path": "/api/cron/events",   "schedule": "45 */4 * * *" },
-    { "path": "/api/cron/momentum", "schedule": "0 2 * * *"    }
+    { "path": "/api/cron/momentum", "schedule": "0 2 * * *"    },
+    { "path": "/api/cron/reports",  "schedule": "0 6 * * *"    }
   ],
   "headers": [
     {
