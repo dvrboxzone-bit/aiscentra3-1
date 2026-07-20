@@ -34,12 +34,16 @@ export type AIResult = {
 export class AIProviderError extends Error {
   constructor(
     message: string,
-    public readonly provider:   ProviderName,
-    public readonly statusCode: number,
+    public readonly provider:     ProviderName,
+    public readonly statusCode:   number,
+    public readonly retryAfterMs?: number,  // from Retry-After header
   ) {
     super(message)
     this.name = 'AIProviderError'
   }
+
+  get isRateLimit(): boolean { return this.statusCode === 429 }
+  get isServerError(): boolean { return this.statusCode >= 500 }
 }
 
 // ── Response schema ───────────────────────────────────────────────────────────
@@ -89,12 +93,22 @@ export async function callProvider(
   })
 
   if (!response.ok) {
-    const body = await response.text()
-    throw new AIProviderError(
-      `${ref.provider} API error: ${response.status} ${response.statusText}\n${body}`,
+    const body        = await response.text()
+    const statusCode  = response.status
+
+    // Parse Retry-After header for 429 — providers often tell us when to retry
+    const retryAfterHeader = response.headers.get('retry-after') ?? response.headers.get('x-ratelimit-reset-requests')
+    const retryAfterMs = retryAfterHeader
+      ? Math.ceil(parseFloat(retryAfterHeader) * 1000)
+      : undefined
+
+    const err = new AIProviderError(
+      `${ref.provider} API error: ${statusCode} ${response.statusText}\n${body}`,
       ref.provider,
-      response.status,
+      statusCode,
+      retryAfterMs,
     )
+    throw err
   }
 
   const raw    = await response.json() as unknown

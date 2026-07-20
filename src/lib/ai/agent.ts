@@ -2,17 +2,11 @@
  * AIscentra — Agent Completion API
  *
  * Single import point for all AI agents.
- * Agents declare their role — Provider Layer handles the rest.
- *
- * Usage:
- *   import { agentComplete, agentCompleteJSON } from '@/lib/ai/agent'
- *   const result = await agentComplete('analyzer', messages)
- *   const data   = await agentCompleteJSON('parser', messages, schema)
- *
- * Fallback flow:
- *   getModelChain(role) → [ModelRef, ModelRef, ...]
- *   Try each ref via callProvider() until one succeeds.
- *   Each ref can be a different provider — agents never know.
+ * Handles:
+ * - Model chain fallback (primary → mini)
+ * - Rate limit (429) retry with exponential backoff + Retry-After header
+ * - Error classification: rate_limit | server_error | client_error | unknown
+ * - Concurrency: sequential by design (one request at a time per agent call)
  */
 import { z } from 'zod'
 import { callProvider, callProviderJSON, AIProviderError, type AIMessage, type AIOptions, type AIResult } from './client'
@@ -20,38 +14,97 @@ import { getModelChain, type AgentRole } from './models'
 
 export type { AgentRole, AIMessage, AIOptions, AIResult }
 
-/**
- * Text completion with automatic provider/model fallback.
- */
+export type ErrorKind =
+  | 'rate_limit'
+  | 'server_error'
+  | 'client_error'
+  | 'json_parse'
+  | 'validation'
+  | 'unknown'
+
+// ── Retry config ──────────────────────────────────────────────────────────────
+const MAX_RETRIES    = 3
+const BASE_BACKOFF   = 5_000   // 5s base
+const MAX_BACKOFF    = 60_000  // 60s ceiling
+
+function backoffMs(attempt: number, retryAfterMs?: number): number {
+  if (retryAfterMs) return Math.min(retryAfterMs + 500, MAX_BACKOFF)
+  return Math.min(BASE_BACKOFF * Math.pow(2, attempt), MAX_BACKOFF)
+}
+
+function classifyError(err: unknown): ErrorKind {
+  if (err instanceof AIProviderError) {
+    if (err.isRateLimit)   return 'rate_limit'
+    if (err.isServerError) return 'server_error'
+    return 'client_error'
+  }
+  if (err instanceof SyntaxError)  return 'json_parse'
+  if (err instanceof z.ZodError)   return 'validation'
+  return 'unknown'
+}
+
+// ── Core retry wrapper ────────────────────────────────────────────────────────
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+): Promise<T> {
+  let lastErr: unknown
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err
+      const kind = classifyError(err)
+
+      // Only retry on rate limit or server errors
+      if (kind !== 'rate_limit' && kind !== 'server_error') throw err
+      if (attempt === MAX_RETRIES) break
+
+      const retryAfterMs = err instanceof AIProviderError ? err.retryAfterMs : undefined
+      const delay = backoffMs(attempt, retryAfterMs)
+
+      console.warn(`[${label}] ${kind} — retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`)
+      await new Promise(r => setTimeout(r, delay))
+    }
+  }
+
+  throw lastErr
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
 export async function agentComplete(
   role:     AgentRole,
   messages: AIMessage[],
   options:  AIOptions = {},
-): Promise<AIResult & { modelUsed: string }> {
+): Promise<AIResult & { modelUsed: string; errorKind?: ErrorKind }> {
   const chain  = getModelChain(role)
   const errors: string[] = []
 
   for (const ref of chain) {
+    const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
-      const result = await callProvider(ref, messages, options)
-      console.info(`[agent:${role}] ${ref.provider}/${ref.model} — ${result.tokensUsed} tokens`)
+      const result = await withRetry(
+        () => callProvider(ref, messages, options),
+        label,
+      )
+      console.info(`[agent:${role}] ✓ ${ref.provider}/${ref.model} — ${result.tokensUsed} tokens`)
       return { ...result, modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
-      const msg = err instanceof AIProviderError
-        ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode} — ${err.message}`
-        : `${ref.provider}/${ref.model}: ${String(err)}`
-      errors.push(msg)
-      console.warn(`[agent:${role}] fallback from ${ref.provider}/${ref.model}`)
+      const kind = classifyError(err)
+      const msg  = err instanceof AIProviderError
+        ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode} — ${err.message.slice(0, 200)}`
+        : `${ref.provider}/${ref.model}: ${String(err).slice(0, 200)}`
+      errors.push(`[${kind}] ${msg}`)
+      console.warn(`[agent:${role}] ✗ ${ref.provider}/${ref.model} (${kind}) — trying next`)
     }
   }
 
-  throw new Error(`[agent:${role}] All providers failed:\n${errors.join('\n')}`)
+  throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
 }
 
-/**
- * JSON completion with automatic provider/model fallback.
- * Used by Signal Engine and structured-output agents.
- */
 export async function agentCompleteJSON<T>(
   role:     AgentRole,
   messages: AIMessage[],
@@ -62,18 +115,23 @@ export async function agentCompleteJSON<T>(
   const errors: string[] = []
 
   for (const ref of chain) {
+    const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
-      const result = await callProviderJSON(ref, messages, schema, options)
-      console.info(`[agent:${role}] JSON — ${ref.provider}/${ref.model}`)
+      const result = await withRetry(
+        () => callProviderJSON(ref, messages, schema, options),
+        label,
+      )
+      console.info(`[agent:${role}] ✓ JSON ${ref.provider}/${ref.model}`)
       return { ...result, _modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
-      const msg = err instanceof AIProviderError
-        ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode} — ${err.message}`
-        : `${ref.provider}/${ref.model}: ${String(err)}`
-      errors.push(msg)
-      console.warn(`[agent:${role}] JSON fallback from ${ref.provider}/${ref.model}`)
+      const kind = classifyError(err)
+      const msg  = err instanceof AIProviderError
+        ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
+        : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
+      errors.push(`[${kind}] ${msg}`)
+      console.warn(`[agent:${role}] ✗ JSON ${ref.provider}/${ref.model} (${kind})`)
     }
   }
 
-  throw new Error(`[agent:${role}] All providers failed:\n${errors.join('\n')}`)
+  throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
 }

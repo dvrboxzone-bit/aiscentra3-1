@@ -62,18 +62,17 @@ export interface ModelRef {
 // To change a model: set the env var in Vercel. No code change needed.
 
 export const DEFAULT_MODELS = {
-  // Primary: groq/compound — Production System, FREE, 200K TPM, 200 RPM
-  // Agentic system with built-in web search and code execution
+  // Primary: llama-3.3-70b-versatile — direct model, predictable TPM cost
+  // groq/compound is a routing system that fans out to multiple models = 3-4x TPM usage
   // Override: set AI_PRIMARY_MODEL in Vercel env
   PRIMARY: {
     provider: 'groq' as ProviderName,
-    model:    process.env['AI_PRIMARY_MODEL'] ?? 'groq/compound',
+    model:    process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile',
   },
-  // Mini: groq/compound-mini — Production System, FREE, 200K TPM, 200 RPM
-  // Lighter variant for classification, preprocessing, fast tasks
+  // Mini: llama-3.1-8b-instant — fast, low token cost, direct model
   // Override: set AI_MINI_MODEL in Vercel env
   MINI: {
     provider: 'groq' as ProviderName,
-    model:    process.env['AI_MINI_MODEL'] ?? 'groq/compound-mini',
+    model:    process.env['AI_MINI_MODEL'] ?? 'llama-3.1-8b-instant',
   },
 } satisfies Record<string, ModelRef>

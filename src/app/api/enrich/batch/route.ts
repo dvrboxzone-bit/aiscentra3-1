@@ -35,14 +35,15 @@ import type { ObservationRow }            from '@/modules/observations/queries'
 export const maxDuration = 60
 export const dynamic     = 'force-dynamic'
 
-// ── Batch sizing ──────────────────────────────────────────────────────────────
-// groq/compound + groq/compound-mini: FREE, 200K TPM, 200 RPM
-// No inter-request throttle needed — 200K TPM >> our usage
-// Average AI call: ~3-6s → TIME_BUDGET 54s → safe batch: floor(54/6) = 9
-// Conservative: BATCH_SIZE = 7 (leaves buffer for slower calls)
-const BATCH_SIZE    = 7       // 7 observations per 54s window
-const TIME_BUDGET   = 54_000  // 54s — leave 6s buffer before Vercel kills function
-const AI_RETRY_MS   = 30_000  // 30s backoff after 429 (rare with 200K TPM)
+// ── Batch sizing & rate limiting ──────────────────────────────────────────────
+// Direct models: llama-3.3-70b (12K TPM) + llama-3.1-8b (fallback)
+// Each enrichment: ~1000-1500 tokens → max 8-12 requests/minute safely
+// Conservative: 1 request per 6s = 10 requests/minute (20% headroom)
+// TIME_BUDGET 54s → max 9 requests but we cap at 3 for stability
+const BATCH_SIZE         = 3       // 3 observations per run — conservative for stability
+const TIME_BUDGET        = 54_000  // 54s — leave 6s buffer before Vercel kills function
+const AI_RETRY_MS        = 30_000  // 30s backoff after 429
+const INTER_REQUEST_MS   = 6_000   // 6s between requests — 10 RPM effective rate
 
 function isAuthorized(request: Request): boolean {
   const secret = process.env['CRON_SECRET']
@@ -63,9 +64,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     processed:      0,
     signal_created: 0,
     rejected:       0,
-    retried:        0,    // returned to queue after 429
+    retried:        0,
     errors:         0,
     stopped_reason: 'queue_empty' as 'queue_empty' | 'time_budget' | 'rate_limited',
+    // Detailed error breakdown per analysis report
+    error_breakdown: {
+      rate_limit:  0,
+      server_error: 0,
+      timeout:     0,
+      json_parse:  0,
+      validation:  0,
+      database:    0,
+      unknown:     0,
+    },
   }
 
   // ── Autonomous loop — runs until queue empty or time budget exhausted ───────
@@ -138,29 +149,45 @@ export async function POST(request: Request): Promise<NextResponse> {
 
         console.log(`[enrich/batch] ${observation.id} → ${result.outcome}`)
 
+        // Inter-request delay — prevents TPM/RPM exhaustion on direct models
+        const timeLeft = TIME_BUDGET - (Date.now() - startedAt)
+        if (timeLeft > INTER_REQUEST_MS + 8_000) {
+          await new Promise(r => setTimeout(r, INTER_REQUEST_MS))
+        }
+
 
 
       } catch (err) {
-        const isRateLimit = err instanceof AIProviderError && err.statusCode === 429
+        // Classify error
+        const isRateLimit  = err instanceof AIProviderError && err.isRateLimit
+        const isServerErr  = err instanceof AIProviderError && err.isServerError
+        const errMsg       = err instanceof Error ? err.message : String(err)
+
+        // Update error breakdown
+        if (isRateLimit)        stats.error_breakdown.rate_limit++
+        else if (isServerErr)   stats.error_breakdown.server_error++
+        else if (errMsg.includes('JSON'))  stats.error_breakdown.json_parse++
+        else if (errMsg.includes('schema') || errMsg.includes('validation')) stats.error_breakdown.validation++
+        else                    stats.error_breakdown.unknown++
 
         if (isRateLimit) {
-          // 429 = temporary — return to queue with 60s backoff
+          // 429 = temporary provider limit — NOT a processing error
+          // agent.ts already retried with backoff — if still 429, wait longer
           await markObservationForRetry(observation.id, AI_RETRY_MS)
           stats.retried++
           stats.stopped_reason = 'rate_limited'
-          console.warn(`[enrich/batch] 429 rate limit — ${observation.id} queued for retry in 60s`)
-          // Stop processing this batch — wait for rate limit to clear
+          console.warn(`[enrich/batch] rate_limit — ${observation.id} queued for retry in ${AI_RETRY_MS}ms`)
           break
         }
 
-        // Real error — mark and continue
+        // Real error — mark and continue to next observation
         await markObservationProcessed(
           observation.id,
           null,
-          err instanceof Error ? err.message : String(err),
+          `[${isServerErr ? 'server_error' : 'error'}] ${errMsg.slice(0, 500)}`,
         ).catch(() => {})
         stats.errors++
-        console.error(`[enrich/batch] error on ${observation.id}:`, err)
+        console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
       }
     }
 
