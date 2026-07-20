@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { SeverityBadge, CategoryBadge, ConfidenceBadge } from '@/components/ui/badge'
 import { ScoreBar } from '@/components/ui/score-bar'
-import { getSignalById, getSignals } from '@/modules/signals/queries'
+import { getSignalById } from '@/modules/signals/queries'
 import { getEventsBySignal } from '@/modules/events/queries'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
 import { getSignalSeverity } from '@/types/database'
@@ -15,8 +15,7 @@ interface SignalPageProps {
 
 // Pre-generate paths for known signals at build time
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
-  const signals = await getSignals({ limit: 100 })
-  return signals.map((s) => ({ slug: s.id }))
+  return []
 }
 
 export async function generateMetadata({ params }: SignalPageProps): Promise<Metadata> {

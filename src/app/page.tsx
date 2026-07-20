@@ -3,7 +3,6 @@ import { Suspense } from 'react'
 import { SignalCard } from '@/components/signals/signal-card'
 import { Pulse } from '@/components/ui/pulse'
 import { getSignals, getSignalStats, getFeaturedSignals } from '@/modules/signals/queries'
-import type { Signal } from '@/types/database'
 
 export const metadata: Metadata = {
   title: 'AIscentra — Intelligence Observatory',

@@ -34,6 +34,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     .from('sources')
     .select('id, name')
     .eq('status', 'ACTIVE')
+    .returns<{ id: string; name: string }[]>()
 
   if (error) {
     console.error('[cron/collect] Failed to fetch sources:', error.message)

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { getEvents } from '@/modules/events/queries'
-import { formatDate, formatRelativeTime } from '@/lib/utils/format'
+import { formatRelativeTime } from '@/lib/utils/format'
 import type { EventType } from '@/types/database'
 
 export const metadata: Metadata = {

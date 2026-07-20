@@ -8,7 +8,7 @@
  * Intelligence Evolution Framework v1.0, Section 10.2:
  * "Reports are permanently archived. Never edited after publication."
  */
-import { completeJSON } from '@/lib/openrouter/client'
+import { agentCompleteJSON } from '@/lib/ai/agent'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   ReportOutputSchema,
@@ -33,7 +33,8 @@ export async function generateSignalBrief(signal: Signal): Promise<ReportResult>
   const supabase = createAdminClient()
 
   // Check if brief already exists for this signal
-  const { data: existing } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
     .from('reports')
     .select('id')
     .contains('signal_ids', [signal.id])
@@ -46,7 +47,7 @@ export async function generateSignalBrief(signal: Signal): Promise<ReportResult>
 
   let output
   try {
-    output = await completeJSON(
+    output = await agentCompleteJSON('writer', 
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
         { role: 'user',   content: buildSignalBriefPrompt(signal) },
@@ -58,7 +59,8 @@ export async function generateSignalBrief(signal: Signal): Promise<ReportResult>
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
-  const { data: report, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
       title:        output.title,
@@ -89,7 +91,8 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
   const supabase = createAdminClient()
 
   // Check if analysis already exists for this event
-  const { data: existing } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
     .from('reports')
     .select('id')
     .contains('event_ids', [event.id])
@@ -101,7 +104,8 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
   }
 
   // Fetch origin signal for context
-  const { data: signalData } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: signalData } = await (supabase as any)
     .from('signals')
     .select('*')
     .eq('id', event.signal_id)
@@ -110,7 +114,7 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
 
   let output
   try {
-    output = await completeJSON(
+    output = await agentCompleteJSON('writer', 
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
         { role: 'user',   content: buildEventAnalysisPrompt(event, signal) },
@@ -122,7 +126,8 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
-  const { data: report, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
       title:        output.title,
@@ -158,7 +163,8 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
   const weekEndStr   = weekEnd.toISOString().slice(0, 10)
 
   // Check if weekly review already exists for this week
-  const { data: existing } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
     .from('reports')
     .select('id')
     .eq('report_type', 'WEEKLY_REVIEW')
@@ -196,7 +202,7 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
 
   let output
   try {
-    output = await completeJSON(
+    output = await agentCompleteJSON('writer', 
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
         { role: 'user',   content: buildWeeklyReviewPrompt(events, signals, weekStartStr, weekEndStr) },
@@ -208,7 +214,8 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
-  const { data: report, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
       title:        output.title,
@@ -247,7 +254,8 @@ export async function generateTrendReport(category: SignalCategory): Promise<Rep
   monthStart.setDate(1)
   monthStart.setHours(0, 0, 0, 0)
 
-  const { data: existing } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
     .from('reports')
     .select('id')
     .eq('report_type', 'TREND_REPORT')
@@ -260,7 +268,8 @@ export async function generateTrendReport(category: SignalCategory): Promise<Rep
     return { outcome: 'skipped', reason: `Trend report already exists for ${category} this month` }
   }
 
-  const { data: signalsData } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: signalsData } = await (supabase as any)
     .from('signals')
     .select('*')
     .eq('category', category)
@@ -277,7 +286,7 @@ export async function generateTrendReport(category: SignalCategory): Promise<Rep
 
   let output
   try {
-    output = await completeJSON(
+    output = await agentCompleteJSON('writer', 
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
         { role: 'user',   content: buildTrendReportPrompt(signals, category, period) },
@@ -289,7 +298,8 @@ export async function generateTrendReport(category: SignalCategory): Promise<Rep
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
-  const { data: report, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
       title:        output.title,

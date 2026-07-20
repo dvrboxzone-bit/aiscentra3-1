@@ -106,7 +106,7 @@ export function ObservatoryChat(): React.JSX.Element {
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsg.id
-                    ? { ...m, content: accumulated, context: contextData, loading: false }
+                    ? { ...m, content: accumulated, context: contextData, loading: false } as Message
                     : m,
                 ),
               )

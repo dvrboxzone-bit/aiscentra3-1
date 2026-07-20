@@ -67,7 +67,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   // Fetch source metadata for trust_score and name
-  const { data: source } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: source } = await (supabase as any)
     .from('sources')
     .select('trust_score, name')
     .eq('id', observation.source_id)

@@ -41,9 +41,12 @@ export async function GET(request: Request): Promise<NextResponse> {
   const supabase = createAdminClient()
 
   // Fetch all ACTIVE signals
-  const { data: signals, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: signals, error } = await (supabase as any)
     .from('signals')
     .select('id, category, created_at, momentum_score, observation_ids, metadata')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     .eq('status', 'ACTIVE')
     .limit(200)
 
@@ -69,7 +72,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     // Check age-based expiration
     const expirationDays = EXPIRATION_DAYS[category] ?? 60
     if (daysSince > expirationDays) {
-      await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
         .from('signals')
         .update({
           status:            'EXPIRED',
@@ -97,7 +101,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     // Check momentum-based expiration (< 5 for 7 days)
     // Simplified for MVP: if score drops to 0 and signal is old enough
     if (newMomentum < 5 && daysSince > 7) {
-      await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
         .from('signals')
         .update({
           momentum_score:            newMomentum,
@@ -113,7 +118,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
 
     // Update momentum score
-    await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
       .from('signals')
       .update({
         momentum_score:           newMomentum,

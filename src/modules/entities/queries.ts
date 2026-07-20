@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import type { Entity, EntityRelationship, EntityType } from '@/types/database'
+import type { Entity, EntityRelationship } from '@/types/database'
 
 export async function getEntityById(id: string): Promise<Entity | null> {
   const supabase = await createClient()

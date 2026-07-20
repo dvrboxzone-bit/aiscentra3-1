@@ -92,7 +92,8 @@ export async function checkDuplicate(
   // Fetch active signals from last 14 days in same category
   const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
 
-  const { data: recentSignals, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: recentSignals, error } = await (supabase as any)
     .from('signals')
     .select('id, title')
     .eq('category', candidateCategory)

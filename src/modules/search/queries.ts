@@ -8,7 +8,7 @@
  * Enables: discovery of Observatory intelligence by topic or entity.
  */
 import { createClient } from '@/lib/supabase/server'
-import type { Signal, Event, Report, SignalCategory } from '@/types/database'
+import type { SignalCategory } from '@/types/database'
 import { getSignalSeverity } from '@/types/database'
 
 export interface SearchResult {
@@ -40,16 +40,7 @@ function sanitiseQuery(raw: string): string {
     .slice(0, 100)               // max length
 }
 
-function toTsQuery(query: string): string {
-  // Convert plain text to Postgres tsquery format
-  // "open source models" → "open & source & models"
-  return query
-    .split(/\s+/)
-    .filter((w) => w.length > 1)
-    .map((w) => w.replace(/[^a-zA-Z0-9]/g, ''))
-    .filter(Boolean)
-    .join(' & ')
-}
+
 
 // ── Search Signals ─────────────────────────────────────────────────────────────
 

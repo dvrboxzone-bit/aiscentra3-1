@@ -12,7 +12,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
-export async function middleware(request: NextRequest): Promise<NextResponse> {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   const response = NextResponse.next({ request })
   // Pass pathname to layouts for active nav detection
   response.headers.set('x-pathname', request.nextUrl.pathname)
@@ -22,7 +22,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 export const config = {
   matcher: [
     /*
-     * Run middleware on all routes except:
+     * Run proxy on all routes except:
      * - _next/static (static files)
      * - _next/image (image optimization)
      * - favicon.ico

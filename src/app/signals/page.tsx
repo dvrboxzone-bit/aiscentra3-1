@@ -24,7 +24,7 @@ export default async function SignalsPage({ searchParams }: SignalsPageProps): P
   const activeCategory = params.category as SignalCategory | undefined
 
   const signals = await getSignals({
-    category: activeCategory,
+    ...(activeCategory !== undefined && { category: activeCategory }),
     limit: 50,
   })
 

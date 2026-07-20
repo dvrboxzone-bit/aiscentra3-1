@@ -7,7 +7,7 @@
  * Flow:
  * Signal (PROMOTED) → Enrich → Validate → Create Event → Mark Signal PROMOTED
  */
-import { completeJSON } from '@/lib/openrouter/client'
+import { agentCompleteJSON } from '@/lib/ai/agent'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EventEnrichmentSchema,
@@ -28,7 +28,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   const supabase = createAdminClient()
 
   // ── Guard: check for existing event on this signal ────────────────────────
-  const { data: existing } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
     .from('events')
     .select('id')
     .eq('signal_id', signal.id)
@@ -45,7 +46,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   // ── Fetch entity names for context ────────────────────────────────────────
   let entityNames: string[] = []
   if (signal.entity_ids.length > 0) {
-    const { data: entities } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: entities } = await (supabase as any)
       .from('entities')
       .select('name')
       .in('id', signal.entity_ids)
@@ -55,7 +57,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   // ── Fetch original observation content ────────────────────────────────────
   let observationContent = signal.description  // fallback
   if (signal.observation_ids.length > 0) {
-    const { data: obs } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: obs } = await (supabase as any)
       .from('observations')
       .select('content')
       .eq('id', signal.observation_ids[0])
@@ -76,7 +79,7 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
 
   let enriched
   try {
-    enriched = await completeJSON(
+    enriched = await agentCompleteJSON('analyzer', 
       [
         { role: 'system', content: EVENT_ENRICHMENT_SYSTEM_PROMPT },
         { role: 'user',   content: prompt },
@@ -114,7 +117,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
       .replace(/\s+/g, ' ')
       .trim()
 
-    const { data: entity } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: entity } = await (supabase as any)
       .from('entities')
       .select('id')
       .eq('canonical_name', canonicalName)
@@ -126,7 +130,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   }
 
   // ── Create Event record ───────────────────────────────────────────────────
-  const { data: event, error: eventError } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: event, error: eventError } = await (supabase as any)
     .from('events')
     .insert({
       signal_id:           signal.id,

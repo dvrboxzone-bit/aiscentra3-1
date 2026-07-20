@@ -89,7 +89,7 @@ export function checkPromotionEligibility(signal: Signal): PromotionCheck {
 
 // ── Rate Limit Check ──────────────────────────────────────────────────────────
 
-export async function checkRateLimits(category: string): Promise<{
+export async function checkRateLimits(_category: string): Promise<{
   allowed: boolean
   categoryCount: number
   totalCount: number
@@ -154,11 +154,12 @@ export async function fetchEligibleSignals(limit = 10): Promise<Signal[]> {
 
 export async function markSignalPromoted(
   signalId: string,
-  eventId: string,
+  _eventId: string,
 ): Promise<void> {
   const supabase = createAdminClient()
 
-  await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
     .from('signals')
     .update({
       status:     'PROMOTED',

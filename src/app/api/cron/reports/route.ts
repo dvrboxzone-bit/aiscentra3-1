@@ -39,7 +39,8 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   // 1. Event Analysis: find events without a report yet (last 48h)
   const since48h = new Date(Date.now() - 48 * 3600000).toISOString()
-  const { data: events } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: events } = await (supabase as any)
     .from('events')
     .select('id')
     .gte('created_at', since48h)

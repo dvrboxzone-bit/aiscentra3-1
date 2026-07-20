@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 export const revalidate = 3600
 
 export default async function ObservatoryPage(): Promise<React.JSX.Element> {
-  const [stats, signals, events, reports, obsStats] = await Promise.all([
+  const [stats, signals, events, , obsStats] = await Promise.all([
     getSignalStats(),
     getSignals({ limit: 100 }),
     getEvents({ limit: 20 }),

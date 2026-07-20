@@ -8,7 +8,7 @@
  *
  * Called per observation to stay within Vercel's 10s function timeout.
  */
-import { completeJSON } from '@/lib/openrouter/client'
+import { agentCompleteJSON } from '@/lib/ai/agent'
 import { createAdminClient } from '@/lib/supabase/server'
 import { serverEnv } from '@/config/env'
 import {
@@ -59,9 +59,9 @@ export interface SignalEngineResult {
     | 'rejected_validation'
     | 'rejected_low_score'
     | 'error'
-  signalId?: string
-  reason?: string
-  scores?: { signal_score: number; confidence_score: number; momentum_score: number }
+  signalId?: string | undefined
+  reason?: string | undefined
+  scores?: { signal_score: number; confidence_score: number; momentum_score: number } | undefined
 }
 
 // ── Main Engine Function ──────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ export async function processObservation(
 
   let enriched
   try {
-    enriched = await completeJSON(
+    enriched = await agentCompleteJSON('parser', 
       [
         { role: 'system', content: ENRICHMENT_SYSTEM_PROMPT },
         { role: 'user',   content: prompt },
@@ -198,7 +198,8 @@ export async function processObservation(
       .trim()
 
     // Upsert entity — canonical_name is the unique key
-    const { data: entityRecord } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: entityRecord } = await (supabase as any)
       .from('entities')
       .upsert(
         {
@@ -217,7 +218,8 @@ export async function processObservation(
   }
 
   // ── Step 11: Create Signal record ─────────────────────────────────────────
-  const { data: signal, error: signalError } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: signal, error: signalError } = await (supabase as any)
     .from('signals')
     .insert({
       title:       enriched.title,

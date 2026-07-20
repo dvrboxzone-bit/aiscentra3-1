@@ -3,7 +3,7 @@
  *
  * GET /api/cron/enrich
  * Triggered by Vercel Cron every 4 hours, 30 minutes after collection.
- * Schedule: 30 */4 * * * (30 mins after collection at 0 */4 * * *)
+ * Schedule: 30 *\/4 * * * (30 mins after collection at 0 /4 * * *)
  *
  * Pattern: fetches IDs of unprocessed observations, fires one
  * /api/enrich call per observation (non-blocking).
@@ -33,6 +33,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     .is('processing_error', null)
     .order('collected_at', { ascending: true })
     .limit(50)
+    .returns<{ id: string }[]>()
 
   if (error) {
     console.error('[cron/enrich] Failed to fetch observations:', error.message)

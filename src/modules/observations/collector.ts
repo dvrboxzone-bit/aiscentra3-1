@@ -141,11 +141,12 @@ export async function collectSource(source: Source): Promise<CollectionResult> {
       },
     }))
 
-    const { data: saved, error: insertError } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: saved, error: insertError } = await (supabase as any)
       .from('observations')
       .upsert(observations, {
-        onConflict:        'url',        // unique index from migration 003
-        ignoreDuplicates:  true,
+        onConflict:       'url',
+        ignoreDuplicates: true,
       })
       .select('id')
 
@@ -177,7 +178,8 @@ async function updateSourceStatus(
   sourceId: string,
   status: 'ACTIVE' | 'ERROR',
 ): Promise<void> {
-  await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
     .from('sources')
     .update({
       status,

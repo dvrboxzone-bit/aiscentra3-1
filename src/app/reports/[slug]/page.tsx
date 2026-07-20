@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { getReportById, getReports } from '@/modules/reports/queries'
-import { formatDate, formatRelativeTime } from '@/lib/utils/format'
+import { getReportById } from '@/modules/reports/queries'
+import { formatRelativeTime } from '@/lib/utils/format'
 import type { ReportType } from '@/types/database'
 
 export const revalidate = 3600
@@ -18,8 +18,7 @@ const REPORT_TYPE_LABELS: Record<ReportType, string> = {
 }
 
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
-  const reports = await getReports(undefined, 100)
-  return reports.map((r) => ({ slug: r.id }))
+  return []
 }
 
 export async function generateMetadata({ params }: ReportPageProps): Promise<Metadata> {

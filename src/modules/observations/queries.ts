@@ -48,12 +48,34 @@ export async function markObservationProcessed(
 ): Promise<void> {
   const supabase = createAdminClient()
 
-  await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
     .from('observations')
     .update({
       processed:        true,
       signal_id:        signalId,
       processing_error: error ?? null,
+    })
+    .eq('id', id)
+}
+
+/**
+ * Mark observation for retry after rate limit (HTTP 429).
+ * Does NOT set processing_error — keeps observation in the queue.
+ */
+export async function markObservationForRetry(
+  id: string,
+  retryAfterMs: number = 60_000,
+): Promise<void> {
+  const supabase = createAdminClient()
+  const retryAt  = new Date(Date.now() + retryAfterMs).toISOString()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
+    .from('observations')
+    .update({
+      processed:        false,
+      processing_error: null,
+      metadata:         { retry_after: retryAt },
     })
     .eq('id', id)
 }

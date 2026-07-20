@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { getReports } from '@/modules/reports/queries'
-import { formatDate, formatRelativeTime } from '@/lib/utils/format'
+import { formatRelativeTime } from '@/lib/utils/format'
 import type { ReportType } from '@/types/database'
 
 export const metadata: Metadata = {

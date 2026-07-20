@@ -69,7 +69,7 @@ function parseDate(dateStr: string): Date {
 // ── RSS 2.0 Parser ────────────────────────────────────────────────────────────
 
 function parseRSS(xml: string): FeedItem[] {
-  const feedTitle = cleanText(extractTag(xml, 'title'))
+  void cleanText(extractTag(xml, 'title')) // feedTitle reserved
 
   // Split into items
   const itemPattern = /<item[^>]*>([\s\S]*?)<\/item>/gi

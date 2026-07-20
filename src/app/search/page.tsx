@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { search } from '@/modules/search/queries'
 import { formatRelativeTime, formatCategory } from '@/lib/utils/format'
-import { getSignalSeverity } from '@/types/database'
+
 
 export const dynamic = 'force-dynamic'
 

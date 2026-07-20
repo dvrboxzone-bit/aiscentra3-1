@@ -2,7 +2,7 @@
  * AIscentra — Cron: Event Promotion
  *
  * GET /api/cron/events
- * Schedule: 45 */4 * * * (45 mins after collection, 15 after enrichment)
+ * Schedule: 45 /4 * * * (45 mins after collection, 15 after enrichment)
  * Fires per-signal promotion requests non-blocking.
  */
 import { NextResponse } from 'next/server'

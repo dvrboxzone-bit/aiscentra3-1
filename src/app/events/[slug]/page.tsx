@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { getEventById, getEvents } from '@/modules/events/queries'
+import { getEventById } from '@/modules/events/queries'
 import { getSignalById } from '@/modules/signals/queries'
 import { formatDate, formatRelativeTime } from '@/lib/utils/format'
 
@@ -11,8 +11,7 @@ interface EventPageProps {
 }
 
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
-  const events = await getEvents({ limit: 100 })
-  return events.map((e) => ({ slug: e.id }))
+  return []
 }
 
 export async function generateMetadata({ params }: EventPageProps): Promise<Metadata> {

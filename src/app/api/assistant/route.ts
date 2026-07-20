@@ -12,8 +12,6 @@
  * 3. Stream response from OpenRouter
  * 4. Never answer from general AI knowledge
  */
-import { createAdminClient } from '@/lib/supabase/server'
-import { serverEnv } from '@/config/env'
 import { retrieveContext, formatContextForPrompt } from '@/modules/assistant/retrieval'
 import { buildAssistantPrompt } from '@/modules/assistant/prompt'
 
@@ -59,23 +57,30 @@ export async function POST(request: Request): Promise<Response> {
   // Include conversation history (without system context to avoid duplication)
   if (body.history && body.history.length > 0) {
     // Insert history before the current message
-    messages.splice(0, 0, ...body.history.slice(-6))  // Last 3 exchanges max
+    messages.splice(0, 0, ...(body.history.slice(-6) as typeof messages))  // Last 3 exchanges max
   }
 
-  // 3. Call OpenRouter with streaming
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  // 3. Call Groq with streaming (OpenAI-compatible API)
+  const groqApiKey = process.env['GROQ_API_KEY']
+  if (!groqApiKey) {
+    return new Response(
+      JSON.stringify({ error: 'Assistant temporarily unavailable.' }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  const model = process.env['AI_PRIMARY_MODEL'] ?? 'groq/compound'
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method:  'POST',
     headers: {
-      'Authorization': `Bearer ${serverEnv.OPENROUTER_API_KEY}`,
+      'Authorization': `Bearer ${groqApiKey}`,
       'Content-Type':  'application/json',
-      'HTTP-Referer':  'https://aiscentra.com',
-      'X-Title':       'AIscentra Observatory Assistant',
     },
     body: JSON.stringify({
-      model:       serverEnv.OPENROUTER_MODEL,
+      model,
       messages,
       max_tokens:  1000,
-      temperature: 0.3,   // Slight creativity for natural responses, but grounded
+      temperature: 0.3,
       stream:      true,
     }),
   })
