@@ -87,9 +87,11 @@ export function preQualify(
     return { passed: false, rejectionReason: 'REJECT: content_too_short' }
   }
 
-  // PQ-03: Recency — published within 72 hours of collection
+  // PQ-03: Recency — published within 720 hours (30 days) of collection
+  // Extended from 72h to allow initial population of new database.
+  // Will be tightened back to 72h after Stage 9 scheduler scaling.
   const hoursSincePublished = (Date.now() - item.publishedAt.getTime()) / 3600000
-  if (hoursSincePublished > 72) {
+  if (hoursSincePublished > 720) {
     return { passed: false, rejectionReason: 'REJECT: observation_stale' }
   }
 
