@@ -58,8 +58,10 @@ async function withRetry<T>(
       lastErr = err
       const kind = classifyError(err)
 
-      // Only retry on rate limit or server errors
-      if (kind !== 'rate_limit' && kind !== 'server_error') throw err
+      // Retry on: rate limit (429), server errors (5xx), payload too large (413 = Groq instability)
+      const isRetryable = kind === 'rate_limit' || kind === 'server_error' ||
+        (err instanceof AIProviderError && err.statusCode === 413)
+      if (!isRetryable) throw err
       if (attempt === MAX_RETRIES) break
 
       const retryAfterMs = err instanceof AIProviderError ? err.retryAfterMs : undefined

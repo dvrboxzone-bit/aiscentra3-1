@@ -87,7 +87,7 @@ export interface EnrichmentInput {
 
 export function buildEnrichmentPrompt(input: EnrichmentInput): string {
   // Truncate content to 400 chars to stay well under 413 request size limit
-  const body = input.content.slice(0, 400)
+  const body = input.content.slice(0, 300)
 
   return `SOURCE: ${input.sourceName} | trust=${input.sourceTrustScore} | category=${input.candidateCategory}
 TITLE: ${input.title}
