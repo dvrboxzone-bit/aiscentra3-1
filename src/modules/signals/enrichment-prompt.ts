@@ -17,7 +17,7 @@ import type { SignalCategory } from '@/types/database'
 export const EnrichmentOutputSchema = z.object({
   // Signal identity
   title: z.string().min(10).max(80),
-  description: z.string().min(50).max(500),
+  description: z.string().min(50).max(1200).transform(s => s.slice(0, 1200)),
   category: z.enum([
     'RESEARCH', 'MODELS', 'COMPANIES', 'INFRASTRUCTURE',
     'OPEN_SOURCE', 'FUNDING', 'REGULATION', 'AGENTS', 'HARDWARE',
