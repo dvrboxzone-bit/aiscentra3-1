@@ -41,7 +41,7 @@ interface RoleConfig {
 }
 
 const ROLE_CONFIG: Record<AgentRole, RoleConfig> = {
-  // ── PRIMARY: compound ─────────────────────────────────────────────────────
+  // ── PRIMARY: llama-3.3-70b-versatile ───────────────────────────────────────
   assistant:    { primary: DEFAULT_MODELS.PRIMARY, fallback: [DEFAULT_MODELS.MINI] },
   writer:       { primary: DEFAULT_MODELS.PRIMARY, fallback: [DEFAULT_MODELS.MINI] },
   analyzer:     { primary: DEFAULT_MODELS.PRIMARY, fallback: [DEFAULT_MODELS.MINI] },
@@ -49,7 +49,7 @@ const ROLE_CONFIG: Record<AgentRole, RoleConfig> = {
   editor:       { primary: DEFAULT_MODELS.PRIMARY, fallback: [DEFAULT_MODELS.MINI] },
   strategy:     { primary: DEFAULT_MODELS.PRIMARY, fallback: [DEFAULT_MODELS.MINI] },
   parser:       { primary: DEFAULT_MODELS.PRIMARY, fallback: [DEFAULT_MODELS.MINI] },
-  // ── PRIMARY: compound-mini ────────────────────────────────────────────────
+  // ── PRIMARY: llama-3.1-8b-instant (mini) ───────────────────────────────────
   classifier:   { primary: DEFAULT_MODELS.MINI, fallback: [DEFAULT_MODELS.PRIMARY] },
   summarizer:   { primary: DEFAULT_MODELS.MINI, fallback: [DEFAULT_MODELS.PRIMARY] },
   translator:   { primary: DEFAULT_MODELS.MINI, fallback: [DEFAULT_MODELS.PRIMARY] },

@@ -56,7 +56,7 @@ export async function GET(): Promise<NextResponse> {
   trace['system_prompt_chars'] = ENRICHMENT_SYSTEM_PROMPT.length
 
   // Step 4: ONE raw LLM call — no fallback, no retry
-  const model = { provider: 'groq' as const, model: 'groq/compound' }
+  const model = { provider: 'groq' as const, model: process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile' }
   let rawContent: string | null = null
 
   try {

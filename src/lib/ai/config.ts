@@ -32,7 +32,7 @@ export const PROVIDER_CONFIG: Record<ProviderName, ProviderConfig> = {
   groq: {
     baseUrl:      'https://api.groq.com/openai/v1',
     apiKeyEnv:    'GROQ_API_KEY',
-    defaultModel: process.env['AI_PRIMARY_MODEL'] ?? 'compound',
+    defaultModel: process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile',
   },
   openrouter: {
     baseUrl:      'https://openrouter.ai/api/v1',

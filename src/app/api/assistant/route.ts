@@ -69,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
     )
   }
 
-  const model = process.env['AI_PRIMARY_MODEL'] ?? 'groq/compound'
+  const model = process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile'
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method:  'POST',
     headers: {
