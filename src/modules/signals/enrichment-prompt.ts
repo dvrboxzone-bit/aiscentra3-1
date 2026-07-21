@@ -48,11 +48,11 @@ export const EnrichmentOutputSchema = z.object({
 
   // Duplicate and quality flags
   is_duplicate:   z.boolean(),
-  duplicate_note: z.string().optional(),
+  duplicate_note: z.union([z.string(), z.null()]).optional().default(''),
   is_marketing:   z.boolean(),
 
   // Required when novelty_factor > 7 — prevents inflation
-  novelty_prior_example: z.string().optional(),
+  novelty_prior_example: z.union([z.string(), z.null()]).optional().default(''),
 })
 
 export type EnrichmentOutput = z.infer<typeof EnrichmentOutputSchema>
