@@ -65,13 +65,14 @@ export const ENRICHMENT_SYSTEM_PROMPT = `You are a senior AI intelligence analys
 Write exactly 2-3 sentences structured as follows:
 Sentence 1: What ecosystem problem or limitation does this address? (Do NOT restate the title. Start from the broader context.)
 Sentence 2: What is the specific approach or mechanism, and what makes it genuinely different from prior work?
-Sentence 3: Where does the real-world impact land — who benefits, which domains, what downstream effect?
+Sentence 3: Concrete downstream effect — name a specific use case, product category, or industry outcome. NEVER use generic phrases like "benefits researchers", "improves AI systems", "enhances applications in various domains". Instead: "robotics teams can now train agents without expensive real-world data collection" or "code generation tools that adopt this benchmark will surface reasoning failures invisible in current evals".
 
 FORBIDDEN in description:
 - Copying or paraphrasing the title
 - Starting with the paper/product/company name
 - Phrases like "This paper presents", "researchers propose", "introduces a new"
 - Summarizing what the abstract says
+- Generic impact: "benefits X community", "improves various applications", "enhances AI systems"
 
 EXAMPLE INPUT: "RAD: Retrieval High-quality Demonstrations to Enhance Decision-making"
 BAD: "RAD enhances decision-making with retrieval of high-quality demonstrations in offline RL."
