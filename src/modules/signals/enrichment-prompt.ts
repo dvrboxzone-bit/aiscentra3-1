@@ -82,8 +82,19 @@ EXAMPLE INPUT: "Workflow-GYM: Towards Long-Horizon Evaluation of Computer-use Ag
 BAD: "Evaluates AI agents on long-horizon tasks in real-world professional fields using GUIs."
 GOOD: "Current agent benchmarks test isolated tasks on toy environments — they cannot predict whether an agent will succeed at the multi-step, context-dependent workflows that define real professional work. Workflow-GYM closes this gap with a benchmark built from actual GUI-driven business workflows, exposing failure modes invisible in short-horizon settings. Adoption of this benchmark would accelerate development of enterprise-grade agents capable of reliably replacing human operators in knowledge work."
 
-## ENTITIES — extract ALL present:
-Research paper/system names, methods, techniques (e.g. "offline RL", "retrieval-augmented"), technologies, organizations, application domains, models, datasets, products.
+## ENTITIES — extract ALL that are meaningful to the AI ecosystem:
+- Research paper or system names (the subject being reported)
+- Methods and techniques (e.g. "attention steering", "retrieval-augmented RL", "compositional reasoning")
+- AI models mentioned by name
+- Organizations (universities, companies, labs) — only if explicitly named in the content
+- Application domains (e.g. "autonomous driving", "video editing", "medical imaging")
+- Datasets and benchmarks referenced
+- Products and tools
+
+DO NOT include:
+- The source publication itself (arXiv, GitHub, TechCrunch) as an entity
+- Generic terms ("AI", "LLM", "deep learning") unless they are the specific subject
+- Broad academic fields ("Computer Science", "Social Sciences") as RESEARCH_PAPER type
 
 ## AUTHORITY FACTOR — by source type:
 10=OpenAI/Anthropic/Google DeepMind/Meta AI official channel
