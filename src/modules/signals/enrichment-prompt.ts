@@ -74,9 +74,9 @@ FORBIDDEN in description:
 - Summarizing what the abstract says
 - Generic impact: "benefits X community", "improves various applications", "enhances AI systems"
 
-EXAMPLE INPUT: "RAD: Retrieval High-quality Demonstrations to Enhance Decision-making"
-BAD: "RAD enhances decision-making with retrieval of high-quality demonstrations in offline RL."
-GOOD: "Offline reinforcement learning agents fail in production because static training datasets cannot cover the full range of real-world scenarios. RAD addresses this by retrieving relevant past demonstrations dynamically at inference time — effectively giving the agent an expanding behavioral library without online interaction. This unlocks RL for robotics and autonomous systems where collecting live experience is dangerous or expensive."
+EXAMPLE INPUT: "CARV: Compositional Analogical Reasoning Benchmark for Multimodal LLMs"
+BAD: "CARV benchmarks multimodal LLMs on compositional analogical reasoning tasks."
+GOOD: "Multimodal models that pass standard VQA benchmarks still fail at compositional analogical reasoning — the ability to map structural relationships across domains. CARV exposes this gap with targeted diagnostic tests that existing benchmarks miss entirely. Visual reasoning systems adopted in medical imaging and robotics inspection will need to pass CARV-class evaluations before they can be trusted with multi-step inference chains."
 
 EXAMPLE INPUT: "Workflow-GYM: Towards Long-Horizon Evaluation of Computer-use Agentic Tasks"
 BAD: "Evaluates AI agents on long-horizon tasks in real-world professional fields using GUIs."
