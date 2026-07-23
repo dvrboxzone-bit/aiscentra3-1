@@ -70,6 +70,7 @@ export async function processObservation(
   observation: ObservationRow,
   sourceTrustScore: number,
   sourceName: string,
+  sourceType: string = '',
 ): Promise<SignalEngineResult> {
   const supabase = createAdminClient()
 
@@ -145,6 +146,20 @@ export async function processObservation(
     specificity_factor:         enriched.specificity_factor,
     category_confidence_factor: enriched.category_confidence_factor,
     consistency_factor:         7, // Default for first 30 days (Signal Spec 6.6)
+  }
+
+  // ── Step 6.5: Override authority_factor by source type (more reliable than LLM) ─
+  const SOURCE_AUTHORITY: Record<string, number> = {
+    'company_blog': 10,  // OpenAI, Anthropic, Google, Meta official blogs
+    'research':     7,   // arXiv preprints
+    'technical':    6,   // GitHub Blog, HuggingFace Blog
+    'news':         5,   // Tech media
+    'community':    3,   // Forums, aggregators
+  }
+  const srcType  = sourceType.toLowerCase()
+  const authOver = SOURCE_AUTHORITY[srcType]
+  if (authOver !== undefined) {
+    factors.authority_factor = authOver
   }
 
   const factorErrors = validateFactors(factors)

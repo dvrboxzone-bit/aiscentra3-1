@@ -127,7 +127,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       try {
         const { data: source } = await (supabase as any)
           .from('sources')
-          .select('trust_score, name')
+          .select('trust_score, name, type')
           .eq('id', observation.source_id)
           .single()
 

@@ -70,7 +70,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: source } = await (supabase as any)
     .from('sources')
-    .select('trust_score, name')
+    .select('trust_score, name, type')
     .eq('id', observation.source_id)
     .single()
 
