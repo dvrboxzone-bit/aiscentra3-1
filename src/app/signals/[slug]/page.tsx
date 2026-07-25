@@ -7,7 +7,7 @@ import { getEventsBySignal } from '@/modules/events/queries'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
 import { getSignalSeverity } from '@/types/database'
 
-export const revalidate = 3600
+export const dynamic = "force-dynamic"
 
 interface SignalPageProps {
   params: Promise<{ slug: string }>
