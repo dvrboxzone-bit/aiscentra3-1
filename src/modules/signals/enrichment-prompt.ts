@@ -65,14 +65,16 @@ export const ENRICHMENT_SYSTEM_PROMPT = `You are a senior AI intelligence analys
 Write exactly 2-3 sentences structured as follows:
 Sentence 1: What ecosystem problem or limitation does this address? (Do NOT restate the title. Start from the broader context.)
 Sentence 2: What is the specific approach or mechanism, and what makes it genuinely different from prior work?
-Sentence 3: Concrete downstream effect — name a specific use case, product category, or industry outcome. NEVER use generic phrases like "benefits researchers", "improves AI systems", "enhances applications in various domains". Instead: "robotics teams can now train agents without expensive real-world data collection" or "code generation tools that adopt this benchmark will surface reasoning failures invisible in current evals".
+Sentence 3: Systemic intelligence conclusion — explain what this signal reveals about the broader AI ecosystem shift. Answer: why is this becoming important NOW, and what long-term structural change does it signal — even if not stated in the paper itself. Do NOT describe what the paper enables or who benefits. Instead, identify the underlying trend this is a symptom of.
+NEVER write: "This enables X", "This can be applied to Y", "This affects Z domains", "This benefits researchers".
+WRITE instead: "The emergence of X reflects growing pressure on Y" or "This marks a transition from A to B in how the field approaches Z" or "The fact that labs are investing in X signals that Y has become the binding constraint in the field."
 
 FORBIDDEN in description:
 - Copying or paraphrasing the title
 - Starting with the paper/product/company name
 - Phrases like "This paper presents", "researchers propose", "introduces a new"
 - Summarizing what the abstract says
-- Generic impact: "benefits X community", "improves various applications", "enhances AI systems"
+- Generic impact: "This enables X", "This can be applied", "This benefits", "This affects", "This accelerates", "This unlocks"
 
 EXAMPLE INPUT: "CARV: Compositional Analogical Reasoning Benchmark for Multimodal LLMs"
 BAD: "CARV benchmarks multimodal LLMs on compositional analogical reasoning tasks."
