@@ -1,29 +1,34 @@
 /**
  * AIscentra — Observation Queries
- *
- * Used by: Signal Engine (reads unprocessed observations),
- * Admin interface (monitoring), Health check.
- * All queries use the admin client — observations are not public.
+ * Updated for Signal Engine V2
  */
 import { createAdminClient } from '@/lib/supabase/server'
 
 export interface ObservationRow {
-  id: string
-  source_id: string
-  title: string
-  content: string
-  url: string
-  published_at: string
-  collected_at: string
-  processed: boolean
-  processing_error: string | null
-  signal_id: string | null
-  metadata: Record<string, unknown>
-  created_at: string
+  id:                   string
+  source_id:            string
+  title:                string
+  content:              string
+  url:                  string
+  published_at:         string
+  collected_at:         string
+  metadata:             Record<string, unknown>
+  processed:            boolean
+  processing_error:     string | null
+  signal_id:            string | null
+  qualification_result: string | null
+  rejection_code:       string | null
+  rejection_reason:     string | null
+  rejection_detail:     Record<string, unknown>
+  qualification_score:  number | null
+  dry_run_result:       Record<string, unknown>
+  engine_version:       string
+  created_at:           string
 }
 
-export async function getUnprocessedObservations(limit = 20): Promise<ObservationRow[]> {
+export async function getUnprocessedObservations(limit = 8): Promise<ObservationRow[]> {
   const supabase = createAdminClient()
+  const now      = new Date().toISOString()
 
   const { data, error } = await supabase
     .from('observations')
@@ -31,23 +36,27 @@ export async function getUnprocessedObservations(limit = 20): Promise<Observatio
     .eq('processed', false)
     .is('processing_error', null)
     .order('collected_at', { ascending: true })
-    .limit(limit)
+    .limit(limit * 3)
 
   if (error) {
     console.error('[observations/queries] getUnprocessed error:', error.message)
     return []
   }
 
-  return (data ?? []) as ObservationRow[]
+  const rows = (data ?? []) as ObservationRow[]
+  const ready = rows.filter((obs) => {
+    const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
+    return !retryAfter || retryAfter < now
+  })
+  return ready.slice(0, limit)
 }
 
 export async function markObservationProcessed(
-  id: string,
+  id:       string,
   signalId: string | null,
-  error?: string,
+  error?:   string,
 ): Promise<void> {
   const supabase = createAdminClient()
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabase as any)
     .from('observations')
@@ -59,12 +68,8 @@ export async function markObservationProcessed(
     .eq('id', id)
 }
 
-/**
- * Mark observation for retry after rate limit (HTTP 429).
- * Does NOT set processing_error — keeps observation in the queue.
- */
 export async function markObservationForRetry(
-  id: string,
+  id:           string,
   retryAfterMs: number = 60_000,
 ): Promise<void> {
   const supabase = createAdminClient()
@@ -80,26 +85,41 @@ export async function markObservationForRetry(
     .eq('id', id)
 }
 
+export async function markObservationRejected(
+  id:               string,
+  rejectionCode:    string,
+  rejectionReason:  string,
+  qualificationScore: number,
+): Promise<void> {
+  const supabase = createAdminClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
+    .from('observations')
+    .update({
+      processed:            true,
+      processing_error:     null,
+      qualification_result: 'DISCARD',
+      rejection_code:       rejectionCode,
+      rejection_reason:     rejectionReason,
+      qualification_score:  qualificationScore,
+      engine_version:       'v2.0',
+    })
+    .eq('id', id)
+}
+
 export async function getObservationStats(): Promise<{
   total: number
+  processed: number
   unprocessed: number
-  withErrors: number
-  last24h: number
+  errors: number
 }> {
   const supabase = createAdminClient()
-  const since24h = new Date(Date.now() - 86400000).toISOString()
-
-  const [total, unprocessed, withErrors, last24h] = await Promise.all([
+  const [total, processed, errors] = await Promise.all([
     supabase.from('observations').select('id', { count: 'exact', head: true }),
-    supabase.from('observations').select('id', { count: 'exact', head: true }).eq('processed', false),
+    supabase.from('observations').select('id', { count: 'exact', head: true }).eq('processed', true),
     supabase.from('observations').select('id', { count: 'exact', head: true }).not('processing_error', 'is', null),
-    supabase.from('observations').select('id', { count: 'exact', head: true }).gte('collected_at', since24h),
   ])
-
-  return {
-    total:       total.count ?? 0,
-    unprocessed: unprocessed.count ?? 0,
-    withErrors:  withErrors.count ?? 0,
-    last24h:     last24h.count ?? 0,
-  }
+  const t = total.count ?? 0
+  const p = processed.count ?? 0
+  return { total: t, processed: p, unprocessed: t - p, errors: errors.count ?? 0 }
 }

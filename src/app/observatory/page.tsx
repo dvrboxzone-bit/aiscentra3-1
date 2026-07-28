@@ -112,7 +112,7 @@ export default async function ObservatoryPage(): Promise<React.JSX.Element> {
           <div className="space-y-3">
             {[
               { label: 'Database',           active: true,                    status: 'CONNECTED' },
-              { label: 'Observation Layer',  active: obsStats.last24h > 0,   status: obsStats.last24h > 0 ? `${obsStats.last24h} TODAY` : 'STAGE 6' },
+              { label: 'Observation Layer',  active: obsStats.errors > 0,   status: obsStats.errors > 0 ? `${obsStats.errors} TODAY` : 'STAGE 6' },
               { label: 'Pipeline Queue',     active: obsStats.unprocessed > 0, status: `${obsStats.unprocessed} PENDING` },
               { label: 'Signal Engine',      active: false,                   status: 'STAGE 7' },
               { label: 'Event Generator',    active: false,                   status: 'STAGE 8' },
