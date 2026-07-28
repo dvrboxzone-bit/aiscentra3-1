@@ -68,7 +68,7 @@ Sentence 2: What is the specific approach or mechanism, and what makes it genuin
 Sentence 3: Strategic intelligence conclusion — identify the underlying industry dynamic this work is a symptom of. Explain what it reveals about where the field is heading and why this is happening now. Be specific and non-obvious.
 
 BANNED phrases for sentence 3 (these are lazy and will be rejected):
-"reflects growing pressure", "This marks a transition", "This shift", "This approach reflects", "This enables", "This can be applied", "This affects", "This accelerates", "This unlocks", "This benefits", "growing pressure on", "marks a transition from A to B"
+"reflects growing pressure", "This marks a transition", "This shift", "This approach reflects", "This enables", "This can be applied", "This affects", "This accelerates", "This unlocks", "This benefits", "growing pressure on", "marks a transition from A to B", "signals a shift", "making obsolete", "proliferation of such", "making it crucial", "potentially making", "it is crucial", "signals that the industry"
 
 INSTEAD use concrete strategic framing:
 - Name what the industry bottleneck actually is and why this matters now
