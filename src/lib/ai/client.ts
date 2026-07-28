@@ -9,6 +9,7 @@
  */
 import { z } from 'zod'
 import { PROVIDER_CONFIG, type ProviderName, type ModelRef } from './config'
+import { waitForTPMBudget, recordActualTokens } from './tpm-manager'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -78,6 +79,10 @@ export async function callProvider(
     )
   }
 
+  // ── TPM Budget check — wait if limit would be exceeded ─────────────────────
+  const estimatedTokens = maxTokens + 1000  // conservative: max_output + typical_input
+  await waitForTPMBudget(ref.model, estimatedTokens)
+
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method:  'POST',
     headers: {
@@ -127,9 +132,15 @@ export async function callProvider(
     throw new AIProviderError(`${ref.provider} returned empty content`, ref.provider, 0)
   }
 
+  const tokensUsed = parsed.data.usage?.total_tokens ?? 0
+  // Record actual consumption in TPM window (estimate split if not available)
+  const inputTokens  = Math.round(tokensUsed * 0.7)
+  const outputTokens = Math.round(tokensUsed * 0.3)
+  recordActualTokens(ref.model, inputTokens, outputTokens)
+
   return {
     content,
-    tokensUsed: parsed.data.usage?.total_tokens ?? 0,
+    tokensUsed,
     provider:   ref.provider,
     model:      ref.model,
   }

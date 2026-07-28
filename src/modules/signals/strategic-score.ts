@@ -74,11 +74,12 @@ sis_novelty (0-10): Is this genuinely new?
   6-8=significant capability that did not exist before
   9-10=paradigm shift, categorically new
 
-sis_importance (0-10): If adopted at scale, how much does this change the ecosystem?
-  0-2=niche academic subfield only
-  3-5=changes practice within one domain
-  6-8=changes competitive dynamics across multiple actors
-  9-10=reshapes entire AI landscape
+sis_importance (0-10): If adopted at scale, how much does this change the BROAD AI ecosystem?
+  0-2=niche application, affects <1% of AI practitioners (e.g. fingerprint AI, single-disease medical AI)
+  3-5=changes practice within one specific domain (e.g. robotics, speech recognition)
+  6-8=changes competitive dynamics across multiple major actors (labs, enterprises, cloud providers)
+  9-10=reshapes entire AI landscape (new training paradigm, frontier capability, major safety concern)
+  WARNING: domain-specific benchmarks, niche applications, and single-use-case tools score 1-4 maximum.
 
 sis_urgency (0-10): How time-sensitive is this for decision-makers?
   0-2=relevant in 2+ years

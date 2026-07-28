@@ -10,6 +10,7 @@
  */
 import { z } from 'zod'
 import { callProvider, callProviderJSON, AIProviderError, type AIMessage, type AIOptions, type AIResult } from './client'
+import { withModelQueue } from './tpm-manager'
 import { getModelChain, type AgentRole } from './models'
 
 export type { AgentRole, AIMessage, AIOptions, AIResult }
@@ -89,7 +90,7 @@ export async function agentComplete(
     const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
       const result = await withRetry(
-        () => callProvider(ref, messages, options),
+        () => withModelQueue(ref.model, () => callProvider(ref, messages, options)),
         label,
       )
       console.info(`[agent:${role}] ✓ ${ref.provider}/${ref.model} — ${result.tokensUsed} tokens`)
@@ -120,7 +121,7 @@ export async function agentCompleteJSON<T>(
     const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
       const result = await withRetry(
-        () => callProviderJSON(ref, messages, schema, options),
+        () => withModelQueue(ref.model, () => callProviderJSON(ref, messages, schema, options)),
         label,
       )
       console.info(`[agent:${role}] ✓ JSON ${ref.provider}/${ref.model}`)
