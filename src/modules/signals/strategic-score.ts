@@ -102,7 +102,80 @@ Evaluate strategic importance. Return JSON only.`
 
 // ── Compute final SIS ─────────────────────────────────────────────────────────
 
-export function computeSIS(raw: SISOutput): {
+// ── Survey/Tutorial/Review Detection ──────────────────────────────────────────
+// Deterministic rule — NOT dependent on LLM judgment.
+// Survey/Tutorial/Review papers systematize existing knowledge; they do not
+// create new technology. Novelty is capped regardless of what the LLM scored,
+// UNLESS the title/content clearly indicates a new architecture/standard/protocol
+// is being introduced alongside the review.
+
+const SURVEY_PATTERNS = [
+  /\bsurvey\b/i,
+  /\btutorial\b/i,
+  /\breview\b/i,
+  /\bsystematic review\b/i,
+  /\bstate.of.the.art review\b/i,
+  /\bliterature review\b/i,
+  /\ba (?:comprehensive |systematic )?(?:overview|survey) (?:of|on)\b/i,
+]
+
+const NEW_CONTRIBUTION_OVERRIDE_PATTERNS = [
+  /\bnew architecture\b/i,
+  /\bnew protocol\b/i,
+  /\bnew standard\b/i,
+  /\bnew framework\b/i,
+  /\bnovel architecture\b/i,
+  /\bwe propose\b/i,
+  /\bwe introduce\b/i,
+  /\bwe present a new\b/i,
+]
+
+const SURVEY_NOVELTY_CAP = 3
+
+export function isSurveyOrReview(title: string, content: string): boolean {
+  const text = `${title} ${content.slice(0, 300)}`
+  return SURVEY_PATTERNS.some(p => p.test(text))
+}
+
+export function hasNewContributionOverride(title: string, content: string): boolean {
+  const text = `${title} ${content.slice(0, 500)}`
+  return NEW_CONTRIBUTION_OVERRIDE_PATTERNS.some(p => p.test(text))
+}
+
+export function applySurveyNoveltyCap(
+  title:        string,
+  content:      string,
+  rawNovelty:   number,
+): { novelty: number; capped: boolean; reason: string | null } {
+  const isSurvey = isSurveyOrReview(title, content)
+  if (!isSurvey) {
+    return { novelty: rawNovelty, capped: false, reason: null }
+  }
+
+  const hasOverride = hasNewContributionOverride(title, content)
+  if (hasOverride) {
+    return {
+      novelty: rawNovelty,
+      capped:  false,
+      reason:  'Survey/review detected but introduces new architecture/protocol/standard — cap not applied',
+    }
+  }
+
+  const capped = Math.min(rawNovelty, SURVEY_NOVELTY_CAP)
+  return {
+    novelty: capped,
+    capped:  capped < rawNovelty,
+    reason:  capped < rawNovelty
+      ? `Survey/Tutorial/Review detected — novelty capped at ${SURVEY_NOVELTY_CAP} (systematizes existing knowledge, does not create new technology)`
+      : null,
+  }
+}
+
+export function computeSIS(
+  raw:     SISOutput,
+  title:   string = '',
+  content: string = '',
+): {
   sis:                   StrategicImportanceScore
   human_relevance:       HumanRelevanceFlags
   anti_hype_score:       number
@@ -110,9 +183,15 @@ export function computeSIS(raw: SISOutput): {
   relevance_horizon:     string
   engine_justification:  string
   decision:              QualificationResult
+  novelty_cap_applied:   boolean
+  novelty_cap_reason:    string | null
 } {
+  // ── Deterministic Survey/Tutorial/Review novelty cap ─────────────────────
+  // Applied BEFORE SIS_FINAL computation — not dependent on LLM self-assessment.
+  const noveltyCapResult = applySurveyNoveltyCap(title, content, raw.sis_novelty)
+
   const sis: StrategicImportanceScore = {
-    novelty:    raw.sis_novelty,
+    novelty:    noveltyCapResult.novelty,
     importance: raw.sis_importance,
     urgency:    raw.sis_urgency,
     confidence: raw.sis_confidence,
@@ -169,7 +248,11 @@ export function computeSIS(raw: SISOutput): {
     anti_hype_score:      raw.anti_hype_score,
     anti_hype_flags:      raw.anti_hype_flags,
     relevance_horizon:    raw.relevance_horizon,
-    engine_justification: raw.engine_justification,
+    engine_justification: noveltyCapResult.capped
+      ? `${raw.engine_justification} [ENGINE OVERRIDE: ${noveltyCapResult.reason}]`
+      : raw.engine_justification,
     decision,
+    novelty_cap_applied:  noveltyCapResult.capped,
+    novelty_cap_reason:   noveltyCapResult.reason,
   }
 }

@@ -75,7 +75,7 @@ export async function GET(): Promise<NextResponse> {
         [{ role: 'system', content: SIS_SYSTEM_PROMPT },
          { role: 'user',   content: buildSISPrompt(obs.title, obs.content, sourceName, sourceType) }],
         SISOutputSchema, { temperature: 0, maxTokens: 400 })
-      const sis = computeSIS(sisRaw as Parameters<typeof computeSIS>[0])
+      const sis = computeSIS(sisRaw as Parameters<typeof computeSIS>[0], obs.title, obs.content)
       item.sis_final = sis.sis.final
       item.human_roles_yes = sis.human_relevance.roles_yes_count
       item.v2_decision = sis.decision

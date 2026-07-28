@@ -247,7 +247,7 @@ export async function processObservation(
       SISOutputSchema,
       { temperature: 0, maxTokens: 400 },
     )
-    sisResult = computeSIS(sisRaw as Parameters<typeof computeSIS>[0])
+    sisResult = computeSIS(sisRaw as Parameters<typeof computeSIS>[0], observation.title, observation.content)
   } catch (err) {
     // Re-throw rate limit — batch handler will retry
     if (err instanceof AIProviderError && err.statusCode === 429) throw err
