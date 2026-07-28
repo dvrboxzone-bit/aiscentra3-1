@@ -85,6 +85,7 @@ async function writeDecisionLog(params: {
   sis_final?:           number | null
   human_relevance_breakdown?: Record<string, unknown>
   anti_hype_score?:     number | null
+  rule_trace?:          string[]
 }): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -105,6 +106,7 @@ async function writeDecisionLog(params: {
         sis_final:                 params.sis_final ?? null,
         human_relevance_breakdown: params.human_relevance_breakdown ?? {},
         anti_hype_score:           params.anti_hype_score ?? null,
+        rule_trace:                params.rule_trace ?? [],
         thresholds_snapshot:       V2_THRESHOLDS,
         engine_version:            ENGINE_VERSION,
       })
@@ -281,6 +283,7 @@ export async function processObservation(
       sis_final:                sisResult.sis.final,
       human_relevance_breakdown: sisResult.human_relevance as unknown as Record<string, unknown>,
       anti_hype_score:          sisResult.anti_hype_score,
+      rule_trace:               sisResult.rule_trace,
     })
 
     return {
@@ -489,6 +492,7 @@ export async function processObservation(
     sis_final:                 sisResult?.sis.final      ?? null,
     human_relevance_breakdown: sisResult?.human_relevance as unknown as Record<string, unknown>,
     anti_hype_score:           sisResult?.anti_hype_score ?? null,
+    rule_trace:                sisResult?.rule_trace ?? [],
   })
 
   // ── Update observation ────────────────────────────────────────────────────

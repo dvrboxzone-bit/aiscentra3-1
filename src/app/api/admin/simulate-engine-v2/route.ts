@@ -26,6 +26,8 @@ type SimResult = {
   v2_decision:          string
   engine_justification: string
   decision_changed:     boolean
+  publication_type?:    string
+  rule_trace?:          string[]
 }
 
 export async function GET(): Promise<NextResponse> {
@@ -80,6 +82,8 @@ export async function GET(): Promise<NextResponse> {
       item.human_roles_yes = sis.human_relevance.roles_yes_count
       item.v2_decision = sis.decision
       item.engine_justification = sis.engine_justification
+      item.publication_type = sis.publication_type.type
+      item.rule_trace = sis.rule_trace
       item.decision_changed = (!!obs.signal_id) !== (sis.decision === 'SIGNAL' || sis.decision === 'WEAK_SIGNAL')
     } catch (err) {
       item.v2_decision = err instanceof AIProviderError && err.statusCode === 429 ? 'RATE_LIMITED' : 'ERROR'
