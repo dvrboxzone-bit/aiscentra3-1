@@ -14,7 +14,7 @@ export const V2_THRESHOLDS = {
   WEAK_SIGNAL_MIN:     3.0,
   SIS_SIGNAL_MIN:      6.0,
   SIS_WEAK_MIN:        4.0,
-  HUMAN_RELEVANCE_MIN: 2,
+  HUMAN_RELEVANCE_MIN: 1,
   ANTI_HYPE_MIN:       3.0,
   ENGINE_VERSION:      'v2.0',
 } as const

@@ -93,12 +93,13 @@ sis_confidence (0-10): How well-evidenced is this?
   9-10=peer-reviewed + reproduced + adopted
 
 Human relevance (true/false for each role):
-human_cto: Would a CTO reprioritize engineering roadmap?
-human_research_director: Would a Research Director reassign team?
-human_vc: Would a VC update investment thesis?
-human_founder: Would a Founder change architecture choices?
-human_government_analyst: Would a Government Analyst flag for policy review?
-human_enterprise_architect: Would an Enterprise Architect change infrastructure plans?
+human_cto: Would a CTO reprioritize engineering roadmap? (true for infrastructure, models, agents, cost optimization)
+human_research_director: Would a Research Director reassign team? (true for novel benchmarks, new capabilities, research directions)
+human_vc: Would a VC update investment thesis? (true for funding news, new labs, breakthrough capabilities)
+human_founder: Would a Founder change architecture choices? (true for new APIs, infrastructure tools, cost changes)
+human_government_analyst: Would a Government Analyst flag for policy review? (true for safety, regulation, national security AI)
+human_enterprise_architect: Would an Enterprise Architect change infrastructure plans? (true for cloud AI, APIs, inference costs, serverless AI)
+Be generous: if ANY professional in that role would reasonably care — answer true.
 
 anti_hype_score (0-10): How credible is this? (10=highly credible, peer-reviewed, reproduced. 1=marketing press release)
 anti_hype_flags: Array of concerns, e.g. ["single_source", "no_reproduction", "marketing_language"]
