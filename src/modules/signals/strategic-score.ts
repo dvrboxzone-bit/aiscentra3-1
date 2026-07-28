@@ -133,14 +133,34 @@ export function computeSIS(raw: SISOutput): {
     ].filter(Boolean).length,
   }
 
-  // Force DISCARD if no human would act on this
-  let decision = classifyBySIS(sis.final)
-  if (human_relevance.roles_yes_count < V2_THRESHOLDS.HUMAN_RELEVANCE_MIN) {
-    decision = 'DISCARD'
+  // ── Human Relevance as a MODIFIER, not a gate ────────────────────────────────
+  // Strategic Importance Score remains the primary decision driver.
+  // Human relevance adjusts sis.final by a bounded correction factor:
+  //   0 roles  → -1.0  (no identifiable decision-maker acts on this)
+  //   1 role   → -0.3  (narrow relevance)
+  //   2 roles  → +0.0  (neutral — baseline expectation)
+  //   3 roles  → +0.4  (broad relevance reinforces importance)
+  //   4+ roles → +0.8  (strong cross-functional relevance)
+  // This can move a borderline SIGNAL down to WEAK_SIGNAL, or a strong
+  // Observation up — but a very high SIS_FINAL can still become a Signal
+  // even at roles_yes_count = 0, since Strategic Importance dominates.
+  const HUMAN_RELEVANCE_ADJUSTMENT: Record<number, number> = {
+    0: -1.0,
+    1: -0.3,
+    2:  0.0,
+    3:  0.4,
   }
-  // Cap at WEAK_SIGNAL if anti-hype is too low
+  const roleAdjustment = HUMAN_RELEVANCE_ADJUSTMENT[human_relevance.roles_yes_count] ?? 0.8
+
+  const adjustedFinal = parseFloat(
+    Math.max(0, Math.min(10, sis.final + roleAdjustment)).toFixed(2)
+  )
+  sis.final = adjustedFinal
+
+  // Anti-hype as a modifier too — reduces confidence-adjacent trust, not a hard gate
+  let decision = classifyBySIS(sis.final)
   if (raw.anti_hype_score < V2_THRESHOLDS.ANTI_HYPE_MIN && decision === 'SIGNAL') {
-    decision = 'WEAK_SIGNAL'
+    decision = 'WEAK_SIGNAL'  // Strong strategic score but weak evidence → demote, don't discard
   }
 
   return {
