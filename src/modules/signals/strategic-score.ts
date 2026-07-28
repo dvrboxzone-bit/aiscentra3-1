@@ -54,7 +54,23 @@ export const SISOutputSchema = z.object({
   // Relevance horizon
   relevance_horizon: z.enum(['DAYS', 'WEEKS', 'MONTHS', 'YEARS', 'STRUCTURAL']).default('MONTHS'),
 
-  // Engine justification
+  // ── Structured classification fields (used by deterministic overrides) ────
+  // These are DATA, not explanation. Deterministic rules read these fields,
+  // never the free-text engine_justification.
+  is_normal_science: z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
+  // true = incremental engineering/optimization/application of known technique,
+  // false = genuine new capability or ecosystem-level consequence
+
+  event_type: z.enum([
+    'DISCRETE_EVENT',           // a specific, confirmed capability/event (default)
+    'EMERGING_TREND',
+    'ECOSYSTEM_CONSOLIDATION',
+    'TECHNOLOGY_MATURITY',
+    'DIRECTION_CONFIRMATION',
+    'INDUSTRY_MOVEMENT',
+  ]).default('DISCRETE_EVENT'),
+
+  // Engine justification — EXPLANATION ONLY, never used as input to logic
   engine_justification: z.string().min(10).max(800),
 }).passthrough()
 
@@ -90,6 +106,17 @@ human_enterprise_architect: would change infra procurement because of THIS
 anti_hype_score(0-10): 10=rigorous+reproducible. 1=marketing/unverified.
 relevance_horizon: DAYS|WEEKS|MONTHS|YEARS|STRUCTURAL
 
+is_normal_science(true/false): true if this is incremental engineering — applies/combines/optimizes
+known techniques without creating new capability or ecosystem consequence. false if genuinely new.
+
+event_type: classify what KIND of intelligence this is:
+DISCRETE_EVENT(default)=a specific confirmed capability or event.
+EMERGING_TREND=early pattern suggesting a direction, not yet confirmed.
+ECOSYSTEM_CONSOLIDATION=market/actor consolidation (mergers, standardization).
+TECHNOLOGY_MATURITY=technique moving from research to production readiness.
+DIRECTION_CONFIRMATION=confirms a previously hypothesized direction.
+INDUSTRY_MOVEMENT=organizational movement (talent, partnerships, lab formation).
+
 engine_justification: 2-3 sentences. State explicitly: "normal science/engineering" or "ecosystem-changing intelligence" and why. If high score, name the SPECIFIC actor/market/direction that changes.`
 
 export function buildSISPrompt(title: string, content: string, sourceName: string, sourceType: string): string {
@@ -119,49 +146,6 @@ const SURVEY_PATTERNS = [
   /\ba (?:comprehensive |systematic )?(?:overview|survey) (?:of|on)\b/i,
 ]
 
-// ── Weak Signal event-type classification ─────────────────────────────────────
-// Weak Signal is a distinct intelligence class, not merely "SIS between 4-6".
-// These event types qualify as Weak Signal even at lower/higher SIS scores
-// because they represent a DIFFERENT KIND of intelligence — directional evidence
-// rather than a discrete capability change.
-
-export type WeakSignalEventType =
-  | 'EMERGING_TREND'          // early pattern across multiple observations
-  | 'ECOSYSTEM_CONSOLIDATION' // market/actor consolidation signal
-  | 'TECHNOLOGY_MATURITY'     // technique moving from research to production readiness
-  | 'DIRECTION_CONFIRMATION'  // confirms a previously hypothesized direction
-  | 'INDUSTRY_MOVEMENT'       // actor/organizational movement (talent, partnerships)
-  | null
-
-const WEAK_SIGNAL_EVENT_PATTERNS: Record<Exclude<WeakSignalEventType, null>, RegExp[]> = {
-  EMERGING_TREND: [
-    /emerging trend/i, /early sign(?:s|al)? of/i, /growing (?:interest|adoption) in/i,
-  ],
-  ECOSYSTEM_CONSOLIDATION: [
-    /consolidat/i, /merger|acquisition/i, /industry (?:is )?converging/i,
-  ],
-  TECHNOLOGY_MATURITY: [
-    /production.ready/i, /moving from research to/i, /maturing technology/i,
-    /widely adopted/i, /industry standard/i,
-  ],
-  DIRECTION_CONFIRMATION: [
-    /confirms? (?:the )?(?:hypothesis|direction|trend)/i, /validates? (?:prior|earlier) work/i,
-  ],
-  INDUSTRY_MOVEMENT: [
-    /joins? (?:openai|anthropic|google|meta|microsoft)/i, /partnership between/i,
-    /talent (?:move|shift)/i, /key researcher/i,
-  ],
-}
-
-export function classifyWeakSignalEventType(justificationText: string): WeakSignalEventType {
-  for (const [eventType, patterns] of Object.entries(WEAK_SIGNAL_EVENT_PATTERNS)) {
-    if (patterns.some(p => p.test(justificationText))) {
-      return eventType as WeakSignalEventType
-    }
-  }
-  return null
-}
-
 const NEW_CONTRIBUTION_OVERRIDE_PATTERNS = [
   /\bnew architecture\b/i,
   /\bnew protocol\b/i,
@@ -176,59 +160,9 @@ const NEW_CONTRIBUTION_OVERRIDE_PATTERNS = [
 const SURVEY_NOVELTY_CAP = 3
 const NORMAL_SCIENCE_IMPORTANCE_CAP = 3
 
-// Patterns indicating "normal science" — incremental engineering, not ecosystem change.
-// Checked against the LLM's own justification text (self-disclosure signal).
-const NORMAL_SCIENCE_JUSTIFICATION_PATTERNS = [
-  /combines? known techniques?/i,
-  /incremental improvement/i,
-  /\boptimization\b/i,
-  /\bbenchmark\b/i,
-  /\bsurvey\b/i,
-  /\btutorial\b/i,
-  /\breview\b/i,
-  /does not introduce a new capability/i,
-  /not a breakthrough/i,
-  /applies? (?:known|existing) (?:technique|method)/i,
-]
-
-// Exceptions — if justification also claims genuine ecosystem consequence,
-// do not cap even if normal-science language is present.
-const ECOSYSTEM_CHANGE_OVERRIDE_PATTERNS = [
-  /reshapes? (?:the )?(?:entire )?(?:ai )?(?:ecosystem|landscape)/i,
-  /changes? strategy for multiple major actors/i,
-  /new capability class/i,
-  /paradigm shift/i,
-  /redefines? what (?:ai )?systems? can do/i,
-]
-
-export function applyNormalScienceImportanceCap(
-  justificationText: string,
-  rawImportance:     number,
-): { importance: number; capped: boolean; reason: string | null } {
-  const isNormalScience = NORMAL_SCIENCE_JUSTIFICATION_PATTERNS.some(p => p.test(justificationText))
-  if (!isNormalScience) {
-    return { importance: rawImportance, capped: false, reason: null }
-  }
-
-  const hasEcosystemOverride = ECOSYSTEM_CHANGE_OVERRIDE_PATTERNS.some(p => p.test(justificationText))
-  if (hasEcosystemOverride) {
-    return {
-      importance: rawImportance,
-      capped:     false,
-      reason:     'Normal-science language present but justification also claims genuine ecosystem consequence — cap not applied',
-    }
-  }
-
-  const capped = Math.min(rawImportance, NORMAL_SCIENCE_IMPORTANCE_CAP)
-  return {
-    importance: capped,
-    capped:     capped < rawImportance,
-    reason:     capped < rawImportance
-      ? `Justification self-describes as normal science/incremental work — importance capped at ${NORMAL_SCIENCE_IMPORTANCE_CAP}`
-      : null,
-  }
-}
-
+/**
+ * Title/content-based detection (allowed — this is metadata/title, not justification).
+ */
 export function isSurveyOrReview(title: string, content: string): boolean {
   const text = `${title} ${content.slice(0, 300)}`
   return SURVEY_PATTERNS.some(p => p.test(text))
@@ -240,15 +174,14 @@ export function hasNewContributionOverride(title: string, content: string): bool
 }
 
 export function applySurveyNoveltyCap(
-  title:        string,
-  content:      string,
-  rawNovelty:   number,
+  title:      string,
+  content:    string,
+  rawNovelty: number,
 ): { novelty: number; capped: boolean; reason: string | null } {
   const isSurvey = isSurveyOrReview(title, content)
   if (!isSurvey) {
     return { novelty: rawNovelty, capped: false, reason: null }
   }
-
   const hasOverride = hasNewContributionOverride(title, content)
   if (hasOverride) {
     return {
@@ -257,15 +190,54 @@ export function applySurveyNoveltyCap(
       reason:  'Survey/review detected but introduces new architecture/protocol/standard — cap not applied',
     }
   }
-
   const capped = Math.min(rawNovelty, SURVEY_NOVELTY_CAP)
   return {
     novelty: capped,
     capped:  capped < rawNovelty,
     reason:  capped < rawNovelty
-      ? `Survey/Tutorial/Review detected — novelty capped at ${SURVEY_NOVELTY_CAP} (systematizes existing knowledge, does not create new technology)`
+      ? `Survey/Tutorial/Review detected (title/metadata) — novelty capped at ${SURVEY_NOVELTY_CAP}`
       : null,
   }
+}
+
+/**
+ * Applies importance cap based on STRUCTURED is_normal_science field —
+ * never parses engine_justification text. The LLM explicitly self-declares
+ * this as a boolean classification, separate from its free-text explanation.
+ */
+export function applyNormalScienceImportanceCap(
+  isNormalScience: boolean,
+  rawImportance:   number,
+): { importance: number; capped: boolean; reason: string | null } {
+  if (!isNormalScience) {
+    return { importance: rawImportance, capped: false, reason: null }
+  }
+  const capped = Math.min(rawImportance, NORMAL_SCIENCE_IMPORTANCE_CAP)
+  return {
+    importance: capped,
+    capped:     capped < rawImportance,
+    reason:     capped < rawImportance
+      ? `Classified as normal science (incremental/applied engineering) — importance capped at ${NORMAL_SCIENCE_IMPORTANCE_CAP}`
+      : null,
+  }
+}
+
+export type WeakSignalEventType =
+  | 'EMERGING_TREND'
+  | 'ECOSYSTEM_CONSOLIDATION'
+  | 'TECHNOLOGY_MATURITY'
+  | 'DIRECTION_CONFIRMATION'
+  | 'INDUSTRY_MOVEMENT'
+  | null
+
+/**
+ * Reads the STRUCTURED event_type field — never parses justification text.
+ */
+export function classifyWeakSignalEventType(
+  eventType: SISOutput['event_type'],
+): WeakSignalEventType {
+  if (eventType === 'DISCRETE_EVENT') return null
+  return eventType
 }
 
 export function computeSIS(
@@ -291,8 +263,8 @@ export function computeSIS(
   const noveltyCapResult = applySurveyNoveltyCap(title, content, raw.sis_novelty)
 
   // ── Deterministic Normal-Science importance cap ──────────────────────────
-  // Checks the LLM's OWN justification for self-disclosed normal-science language.
-  const importanceCapResult = applyNormalScienceImportanceCap(raw.engine_justification, raw.sis_importance)
+  // Uses structured is_normal_science field — never parses justification text.
+  const importanceCapResult = applyNormalScienceImportanceCap(raw.is_normal_science, raw.sis_importance)
 
   const sis: StrategicImportanceScore = {
     novelty:    noveltyCapResult.novelty,
@@ -304,8 +276,8 @@ export function computeSIS(
   sis.final = parseFloat(computeSISFinal(sis).toFixed(2))
 
   // ── Weak Signal event-type classification ────────────────────────────────
-  // Weak Signal is a distinct intelligence class — not merely a numeric band.
-  const weakSignalEventType = classifyWeakSignalEventType(raw.engine_justification)
+  // Uses structured event_type field — never parses justification text.
+  const weakSignalEventType = classifyWeakSignalEventType(raw.event_type)
 
   const human_relevance: HumanRelevanceFlags = {
     cto:                  raw.human_cto,
@@ -352,26 +324,21 @@ export function computeSIS(
     decision = 'WEAK_SIGNAL'
   }
 
-  // Weak Signal event types: these represent directional intelligence, not discrete
-  // capability change. They qualify as WEAK_SIGNAL even outside the normal SIS band —
-  // both promoting a DISCARD-range observation up, and preventing over-promotion to SIGNAL.
-  if (weakSignalEventType !== null) {
-    if (decision === 'DISCARD' && sis.final >= 2.5) {
-      // Directional evidence worth monitoring even at modest SIS
-      decision = 'WEAK_SIGNAL'
-    } else if (decision === 'SIGNAL') {
-      // Trend/consolidation/movement signals are inherently provisional —
-      // they describe direction, not a confirmed discrete event. Treat as Weak
-      // until corroborated by further observations.
-      decision = 'WEAK_SIGNAL'
-    }
+  // Weak Signal event types: PROMOTION ONLY, never demotion.
+  // These represent directional intelligence (trend/consolidation/movement) worth
+  // monitoring even when Strategic Importance alone would not clear the Weak Signal
+  // threshold. If an observation has already reached SIGNAL on its numeric merits,
+  // the event-type classification must NEVER pull it back down — that would punish
+  // genuinely strong observations for coincidentally matching a trend pattern.
+  if (weakSignalEventType !== null && decision === 'DISCARD' && sis.final >= 2.5) {
+    decision = 'WEAK_SIGNAL'
   }
 
   // Build transparent engine justification with all overrides disclosed
   const overrideNotes: string[] = []
   if (noveltyCapResult.capped)    overrideNotes.push(`NOVELTY CAP: ${noveltyCapResult.reason}`)
   if (importanceCapResult.capped) overrideNotes.push(`IMPORTANCE CAP: ${importanceCapResult.reason}`)
-  if (weakSignalEventType)        overrideNotes.push(`EVENT TYPE: classified as ${weakSignalEventType} — treated as directional Weak Signal`)
+  if (weakSignalEventType && decision === "WEAK_SIGNAL") overrideNotes.push(`EVENT TYPE: classified as ${weakSignalEventType} — promoted from DISCARD to Weak Signal as directional intelligence`)
 
   const finalJustification = overrideNotes.length > 0
     ? `${raw.engine_justification} [ENGINE OVERRIDES: ${overrideNotes.join(' | ')}]`
