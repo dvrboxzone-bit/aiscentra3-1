@@ -5,9 +5,9 @@
 **Date:** July 28, 2026
 
 This document defines the conditions under which Signal Engine V2 is considered
-production-ready. Once all criteria are met, the architecture is FROZEN under
-the Freeze Rule (Section 5). This document is the reference for all future
-acceptance testing of engine changes.
+production-ready, via a two-stage certification process: Feature Freeze (Stage 1)
+followed by Validation Pending (Stage 2). This document is the reference for
+all future acceptance testing of engine changes.
 
 ---
 
@@ -141,12 +141,15 @@ indirectly through `rule_trace` entries like `"classification:publication_type:s
 classification unambiguously — but a dedicated `publication_type TEXT` column
 would make querying and reporting more direct.
 
-**Decision:** Not a blocker for V2 freeze. `rule_trace` satisfies the audit
-requirement. A dedicated column MAY be added in v2.1 without violating the
-Freeze Rule, since it is additive (new column, no rule change) and purely
-for query convenience — it does not alter any decision logic.
+**Decision:** Deliberately NOT addressed in v2.0. `rule_trace` fully satisfies
+the audit requirement — the classification is unambiguously recoverable from
+the trace string. Adding a dedicated `publication_type` column would only
+improve query convenience; it has zero effect on decision correctness, engine
+behavior, or audit completeness. Deferring this to v2.1 is the correct call,
+not a compromise — it keeps v2.0 minimal and avoids bundling a non-functional
+convenience change into the frozen version.
 
-**Audit Acceptance status: PASSED** (with noted enhancement opportunity for v2.1)
+**Audit Acceptance status: PASSED** (dedicated column intentionally deferred to v2.1 as a query-convenience enhancement, not a correctness fix)
 
 ---
 
@@ -193,11 +196,37 @@ Effective upon acceptance of this document:
 | 1. Functional Acceptance | ✅ PASSED |
 | 2. Statistical Acceptance | ⏳ PENDING — requires 500–1000 observation mass test |
 | 3. Stability Acceptance | ✅ CONDITIONALLY PASSED (deterministic layer 100%, LLM layer has disclosed inherent limitation) |
-| 4. Audit Acceptance | ✅ PASSED (minor enhancement noted for v2.1) |
+| 4. Audit Acceptance | ✅ PASSED (dedicated column intentionally deferred to v2.1) |
 | 5. Freeze Rule | ✅ IN EFFECT as of this document |
 
-**Architecture V2 is functionally, structurally, and procedurally complete.**
-**Statistical validation (Section 2) is the only remaining gate before V2 is
-declared fully production-approved.** The next step is the mass testing phase:
-processing 500–1000 observations through simulation and computing the
-distribution and quality metrics defined above.
+---
+
+## Current Status: Two-Stage Certification
+
+### Stage 1 — Feature Freeze ✅ ACTIVE
+
+Architecture is complete. Pipeline, deterministic rules, rule trace, decision
+log, and simulation parity are all implemented and verified. **No new features
+may be added under v2.0.** Any further change to decision logic requires a
+version bump per the Freeze Rule (Section 5).
+
+### Stage 2 — Validation Pending ⏳ IN PROGRESS
+
+Statistical testing (Section 2) has not yet been completed. Distribution
+metrics (SIGNAL/WEAK_SIGNAL/ARCHIVE/DISCARD %) and quality metrics
+(Precision/Recall/False Positive/False Negative) against a human-labeled
+reference set are required before Production Freeze can be declared.
+
+**Production Freeze occurs only after Stage 2 passes.** Upon successful
+completion of Section 2 Statistical Acceptance, this document's status
+automatically updates to:
+
+> **Signal Engine V2 Certified.**
+
+Until that point, v2.0 is feature-frozen but not yet certified for full
+production reliance — it is live and operating, but its statistical behavior
+at scale has not yet been formally measured against target thresholds.
+
+**Next step:** mass testing phase — process 500–1000 observations through
+simulation and compute the distribution and quality metrics defined in
+Section 2.
