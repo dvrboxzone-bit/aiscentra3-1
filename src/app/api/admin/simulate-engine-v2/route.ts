@@ -37,7 +37,7 @@ export async function GET(): Promise<NextResponse> {
     .select('*, sources(name, type, trust_score)')
     .eq('processed', true)
     .order('collected_at', { ascending: false })
-    .limit(20)
+    .limit(5)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
