@@ -93,7 +93,7 @@ export async function getSignalStats(): Promise<{
 }
 
 export async function getFeaturedSignals(): Promise<Signal[]> {
-  return getSignals({ minScore: 70, limit: 3 })
+  return getSignals({ minScore: 60, limit: 3 })
 }
 
 export async function getSignalsByEntity(entityId: string): Promise<Signal[]> {
