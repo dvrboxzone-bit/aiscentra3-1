@@ -6,13 +6,26 @@ const BASE_URL = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
 export const dynamic = 'force-dynamic'
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  // Guard: createAdminClient throws if SUPABASE_SERVICE_ROLE_KEY is absent (build time)
+  if (!process.env['SUPABASE_SERVICE_ROLE_KEY']) {
+    return [
+      { url: BASE_URL,              lastModified: new Date(), changeFrequency: 'hourly' as const,  priority: 1.0 },
+      { url: `${BASE_URL}/signals`, lastModified: new Date(), changeFrequency: 'hourly' as const,  priority: 0.9 },
+      { url: `${BASE_URL}/events`,  lastModified: new Date(), changeFrequency: 'daily' as const,   priority: 0.8 },
+    ]
+  }
   const supabase = createAdminClient()
 
-  const [signals, events, reports] = await Promise.all([
-    supabase.from('signals').select('id, updated_at').eq('status', 'ACTIVE').limit(500),
-    supabase.from('events').select('id, updated_at').limit(500),
-    supabase.from('reports').select('id, updated_at').not('published_at', 'is', null).limit(500),
-  ])
+  let signals: { data: { id: string; updated_at: string }[] | null } = { data: [] }
+  let events:  { data: { id: string; updated_at: string }[] | null } = { data: [] }
+  let reports: { data: { id: string; updated_at: string }[] | null } = { data: [] }
+  try {
+    ;[signals, events, reports] = await Promise.all([
+      supabase.from('signals').select('id, updated_at').eq('status', 'ACTIVE').limit(500),
+      supabase.from('events').select('id, updated_at').limit(500),
+      supabase.from('reports').select('id, updated_at').not('published_at', 'is', null).limit(500),
+    ])
+  } catch { /* sitemap degrades gracefully at build time */ }
 
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: BASE_URL,                  lastModified: new Date(), changeFrequency: 'hourly',  priority: 1.0 },

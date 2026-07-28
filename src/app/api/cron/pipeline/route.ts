@@ -29,7 +29,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra3-1.vercel.app'
+  // Use production domain — NEXT_PUBLIC_APP_URL must be set to https://aiscentra.com in Vercel env
+  const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
   const log: string[] = []
 
   const headers = {

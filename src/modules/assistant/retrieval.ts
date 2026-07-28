@@ -38,57 +38,77 @@ export async function retrieveContext(userQuery: string): Promise<RetrievedConte
     }
   }
 
-  // Parallel retrieval across all three intelligence layers
-  const [signalsResult, eventsResult, reportsResult, recentResult] = await Promise.all([
-    // FTS search signals
-    supabase
-      .from('signals')
-      .select('id, title, description, category, signal_score, confidence_score, created_at')
-      .eq('status', 'ACTIVE')
-      .textSearch('title', query, { type: 'websearch', config: 'english' })
-      .order('signal_score', { ascending: false })
-      .limit(5),
+  // ── Detect category intent from query ──────────────────────────────────────
+  const CATEGORY_KEYWORDS: Record<string, string> = {
+    'model|llm|language model|gpt|claude|gemini|llama|mistral|benchmark.*model': 'MODELS',
+    'paper|arxiv|study|research|algorithm|benchmark(?!.*agent)': 'RESEARCH',
+    'fund|invest|raise|round|valuation|startup|acqui': 'FUNDING',
+    'regulation|law|policy|govern|eu ai act|gdpr|compliance|safety.*regulation': 'REGULATION',
+    'agent|agentic|autonomous|workflow|automat': 'AGENTS',
+    'infrastructure|cloud|gpu|compute|hardware|chip|datacenter': 'INFRASTRUCTURE',
+    'open.source|open.weight|apache|mit license': 'OPEN_SOURCE',
+    'company|acquisition|merger|microsoft|google|meta|openai|anthropic|partnership': 'COMPANIES',
+  }
+  let categoryFilter: string | null = null
+  const qLower = query.toLowerCase()
+  for (const [pattern, cat] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (new RegExp(pattern).test(qLower)) { categoryFilter = cat; break }
+  }
 
-    // FTS search events
+  // ── Total signal count for context metadata ───────────────────────────────
+  const { count: totalSignals } = await supabase
+    .from('signals').select('id', { count: 'exact', head: true }).eq('status', 'ACTIVE')
+
+  // ── FTS: description search, category-aware, limit 15 ────────────────────
+  let sigBase = supabase
+    .from('signals')
+    .select('id, title, description, category, signal_score, confidence_score, created_at')
+    .eq('status', 'ACTIVE')
+  if (categoryFilter) sigBase = (sigBase as any).eq('category', categoryFilter)
+
+  const [signalsFTS, eventsResult, reportsResult] = await Promise.all([
+    (sigBase as any)
+      .textSearch('description', query, { type: 'websearch', config: 'english' })
+      .order('signal_score', { ascending: false })
+      .limit(15),
     supabase
       .from('events')
       .select('id, title, summary, impact_summary, forecast, event_type, timeline_date')
       .textSearch('title', query, { type: 'websearch', config: 'english' })
       .order('impact_score', { ascending: false })
-      .limit(3),
-
-    // FTS search reports
+      .limit(5),
     supabase
       .from('reports')
       .select('id, title, summary, content, report_type, published_at')
       .not('published_at', 'is', null)
       .textSearch('title', query, { type: 'websearch', config: 'english' })
       .order('published_at', { ascending: false })
-      .limit(2),
+      .limit(3),
+  ])
 
-    // Fallback: recent high-score signals if FTS returns nothing
-    supabase
+  let signals = ((signalsFTS as any).data ?? []) as RetrievedContext['signals']
+  const events  = (eventsResult.data  ?? []) as RetrievedContext['events']
+  const reports = (reportsResult.data ?? []) as RetrievedContext['reports']
+
+  // ── Fallback: category-aware top signals by score ─────────────────────────
+  if (signals.length === 0) {
+    let fallback = supabase
       .from('signals')
       .select('id, title, description, category, signal_score, confidence_score, created_at')
       .eq('status', 'ACTIVE')
       .order('signal_score', { ascending: false })
-      .limit(3),
-  ])
-
-  let signals = (signalsResult.data ?? []) as RetrievedContext['signals']
-  const events  = (eventsResult.data  ?? []) as RetrievedContext['events']
-  const reports = (reportsResult.data ?? []) as RetrievedContext['reports']
-
-  // If FTS found nothing for signals, use recent high-score as baseline
-  if (signals.length === 0) {
-    signals = (recentResult.data ?? []) as RetrievedContext['signals']
+      .limit(10)
+    if (categoryFilter) fallback = (fallback as any).eq('category', categoryFilter)
+    const { data } = await (fallback as any)
+    signals = (data ?? []) as RetrievedContext['signals']
   }
 
+  const total = totalSignals ?? 0
   const hasContext = signals.length > 0 || events.length > 0 || reports.length > 0
 
   const contextSummary = hasContext
-    ? `Retrieved ${signals.length} signal(s), ${events.length} event(s), ${reports.length} report(s) from Observatory knowledge base.`
-    : 'No relevant Observatory intelligence found for this query.'
+    ? `Retrieved ${signals.length} signal(s) from ${total} total in Observatory. Events: ${events.length}. Reports: ${reports.length}.${categoryFilter ? ` Category filter: ${categoryFilter}.` : ''}`
+    : `No relevant Observatory intelligence found. Observatory contains ${total} total signals.`
 
   return { signals, events, reports, hasContext, contextSummary }
 }

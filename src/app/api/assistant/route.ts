@@ -13,7 +13,7 @@
  * 4. Never answer from general AI knowledge
  */
 import { retrieveContext, formatContextForPrompt } from '@/modules/assistant/retrieval'
-import { buildAssistantPrompt } from '@/modules/assistant/prompt'
+import { ASSISTANT_SYSTEM_PROMPT } from '@/modules/assistant/prompt'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30  // Assistant can take longer than pipeline functions
@@ -46,19 +46,19 @@ export async function POST(request: Request): Promise<Response> {
   const ctx = await retrieveContext(userMessage)
   const contextText = formatContextForPrompt(ctx)
 
-  // 2. Build messages array
-  const messages = [
+  // 2. Build messages — system prompt in correct role
+  type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
+  const messages: Msg[] = [
     {
-      role:    'user' as const,
-      content: buildAssistantPrompt(contextText, userMessage),
+      role:    'system',
+      content: `${ASSISTANT_SYSTEM_PROMPT}\n\n=== OBSERVATORY CONTEXT ===\n${contextText}\n=== END CONTEXT ===`,
     },
   ]
-
-  // Include conversation history (without system context to avoid duplication)
   if (body.history && body.history.length > 0) {
-    // Insert history before the current message
-    messages.splice(0, 0, ...(body.history.slice(-6) as typeof messages))  // Last 3 exchanges max
+    const hist = (body.history.slice(-6) as Msg[]).filter(m => m.role === 'user' || m.role === 'assistant')
+    messages.push(...hist)
   }
+  messages.push({ role: 'user', content: userMessage })
 
   // 3. Call Groq with streaming (OpenAI-compatible API)
   const groqApiKey = process.env['GROQ_API_KEY']
@@ -79,7 +79,7 @@ export async function POST(request: Request): Promise<Response> {
     body: JSON.stringify({
       model,
       messages,
-      max_tokens:  1000,
+      max_tokens:  2000,
       temperature: 0.3,
       stream:      true,
     }),
