@@ -1,0 +1,85 @@
+name: Postgres Migration Check — Knowledge Graph
+
+# Free GitHub Actions CI: validates
+# supabase/migrations/20260729000001_fix_knowledge_graph_unique_constraint.sql
+# against an ephemeral PostgreSQL 17 service container.
+#
+# No Supabase credentials, no repository secrets, no production access.
+# The service container is created and destroyed entirely within this job
+# and does not persist any data or incur any cost beyond standard GitHub
+# Actions minutes.
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/20260729000001_fix_knowledge_graph_unique_constraint.sql'
+      - 'scripts/ci/test-kg-unique-migration.sh'
+      - '.github/workflows/postgres-migration-check.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test-kg-migration:
+    name: Test Knowledge Graph unique constraint migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for PostgreSQL to accept connections
+        run: |
+          for i in $(seq 1 20); do
+            if pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER"; then
+              echo "PostgreSQL is ready."
+              exit 0
+            fi
+            echo "Waiting for PostgreSQL... ($i/20)"
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready in time."
+          exit 1
+
+      - name: Confirm PostgreSQL version
+        run: psql -c "SELECT version();"
+
+      - name: Run Knowledge Graph migration test scenarios
+        id: run_tests
+        run: |
+          set -o pipefail
+          bash scripts/ci/test-kg-unique-migration.sh 2>&1 | tee kg-migration-test.log
+        # Intentionally no continue-on-error and no `|| true` — a non-zero
+        # exit code from the test script must fail this step and the job.
+
+      - name: Upload full test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kg-migration-test-log
+          path: kg-migration-test.log
+          retention-days: 30
