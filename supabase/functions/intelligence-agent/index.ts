@@ -21,6 +21,12 @@ import {
   MockGraphProvider,
   MockMemoryProvider,
 } from './mock-providers'
+import {
+  SupabaseObservationProvider,
+  SupabaseSignalProvider,
+  SupabaseGraphProvider,
+  SupabaseMemoryProvider,
+} from './supabase-providers'
 import { routeTask } from './task-router'
 import type { AgentTask, AgentRunResult } from './types'
 import type { ReasoningEngine } from './interfaces'
@@ -38,22 +44,28 @@ export function buildMockRuntime(): AgentRuntime {
 }
 
 /**
- * Production runtime — identical wiring to buildMockRuntime() except for
- * `reasoningEngine`, which uses GroqReasoningEngine (real LLM calls via the
- * project's existing src/lib/ai abstraction) instead of MockReasoningEngine.
+ * Production runtime — real Observatory data via Supabase-backed providers,
+ * real reasoning via GroqReasoningEngine. Identical wiring shape to
+ * buildMockRuntime(); only the concrete provider classes differ.
  *
- * All providers other than reasoningEngine remain Mock* here because
- * SupabaseObservationProvider / SupabaseSignalProvider / SupabaseGraphProvider /
- * SupabaseMemoryProvider do not exist yet (out of scope for Phase 13 — this
- * phase only replaces the Reasoning Engine, per task instructions). Wiring
- * real data providers is a separate, future phase.
+ * Data flow:
+ *   User Task → Planner → Context Loader
+ *     ├── SupabaseObservationProvider (observations table)
+ *     ├── SupabaseSignalProvider      (signals table)
+ *     ├── SupabaseGraphProvider       (knowledge_graph_nodes, intelligence_graph, entity_registry)
+ *     └── SupabaseMemoryProvider      (empty — strategic_memory is Phase 2)
+ *   → Execution → GroqReasoningEngine (via ReasonTool) → Reflection → Report
+ *
+ * Groq remains the only Reasoning Engine — no second LLM, no Cloudflare AI.
+ * Signal Engine is read-only from this Runtime's perspective; nothing here
+ * writes to signals, observations, or any Signal Engine V2 table.
  */
 export function buildProductionRuntime(): AgentRuntime {
   return new AgentRuntime({
-    observationProvider: new MockObservationProvider(),
-    signalProvider:       new MockSignalProvider(),
-    graphProvider:        new MockGraphProvider(),
-    memoryProvider:       new MockMemoryProvider(),
+    observationProvider: new SupabaseObservationProvider(),
+    signalProvider:       new SupabaseSignalProvider(),
+    graphProvider:        new SupabaseGraphProvider(),
+    memoryProvider:       new SupabaseMemoryProvider(),
     reasoningEngine:      new GroqReasoningEngine(),
     safetyProvider:       new DefaultSafetyProvider(),
     logger:               new ConsoleAgentLogger(),
@@ -132,6 +144,7 @@ export { GroqReasoningEngine }      from './groq-reasoning-engine'
 export { DefaultSafetyProvider }    from './safety'
 export { ConsoleAgentLogger }       from './logger'
 export * from './mock-providers'
+export * from './supabase-providers'
 export * from './types'
 export * from './interfaces'
 export * from './config'
