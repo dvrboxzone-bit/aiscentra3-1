@@ -2,17 +2,16 @@
 -- Migration: 20260729000001_fix_knowledge_graph_unique_constraint
 -- Phase 2: Knowledge Foundation for Agent Intelligence
 --
--- STATUS: This file is a RETROACTIVE record. A UNIQUE constraint matching
--- this migration's target shape was found to already exist in production
--- (project fokoxewjfjvqahkidagb) before this file was ever committed or
--- reviewed through any PR/CI process. This file exists so the migration
--- history reflects that reality (Constitution Article 1.2), and so the
--- same constraint can be reproducibly created in any environment where it
--- does not yet exist.
+-- STATUS: This file documents and, where absent, creates a NOT DEFERRABLE
+-- UNIQUE constraint on public.knowledge_graph_nodes(node_id). It exists so
+-- this constraint can be reproducibly created in any environment lacking
+-- it, and so the migration history reflects the currently-verified state
+-- of production (Constitution Article 1.2).
 --
 -- VERIFIED FACTS (confirmed via direct, machine-executed read-only catalog
 -- queries against production, and via a PostgreSQL 17 CI run of this exact
--- migration file — see PR #1 for full query results and CI run details):
+-- migration file — see migration file and Draft PR #1 for the evidence
+-- summary, CI identifiers, and disclosed limitations):
 --   - public.knowledge_graph_nodes.node_id is a nullable uuid column.
 --   - A constraint named knowledge_graph_nodes_node_id_key currently exists
 --     in production with the exact shape this migration targets: UNIQUE on
@@ -30,9 +29,10 @@
 --     disclosed known limitation (Scenario 9 — see PR #1).
 --
 -- NOT ESTABLISHED BY CURRENT EVIDENCE (stated as such, not as fact):
---   - Which specific tool or method originally created the production
---     constraint, and at what exact time, is not established by any
---     artifact collected so far.
+--   - Whether the constraint currently present in production existed
+--     before this migration file was first committed or reviewed, and if
+--     so, which specific tool or method created it and at what exact time,
+--     is not established by any artifact collected so far.
 --   - Whether the constraint's absence caused any specific historical
 --     period of zero rows, and whether the current 6 rows were written by
 --     ingestToKnowledgeGraph() specifically (as opposed to some other
@@ -45,15 +45,17 @@
 -- constraint on node_id at table-creation time (migration 20260728000004
 -- only created a regular, non-unique index, idx_kgn_node_id). Signal
 -- Engine's ingestToKnowledgeGraph() (src/modules/signals/engine.ts) calls
--- .upsert({...}, { onConflict: 'node_id' }) on every observation processed
--- — PostgreSQL requires a UNIQUE (or exclusion) constraint on the conflict
--- target for this to succeed. Without one, such an upsert call fails at
--- the database level; the calling code wraps this in try/catch { return
--- null }, which would silently absorb that specific failure without
--- surfacing it. This migration adds the missing constraint so that
--- dependency is satisfied in any environment lacking it. No Signal Engine
--- code is modified by this migration — the fix is purely at the schema
--- level.
+-- .upsert({...}, { onConflict: 'node_id' }) on every observation processed.
+-- PostgreSQL's ON CONFLICT (node_id) clause requires a suitable NOT
+-- DEFERRABLE UNIQUE constraint or a suitable unique index covering
+-- exactly that column as its arbiter -- exclusion constraints are not
+-- supported as ON CONFLICT DO UPDATE arbiters. Without such a structure,
+-- this upsert call fails at the database level; the calling code wraps
+-- this in try/catch { return null }, which would silently absorb that
+-- specific failure without surfacing it. This migration intentionally
+-- creates a named NOT DEFERRABLE UNIQUE constraint satisfying that
+-- requirement in any environment lacking one. No Signal Engine code is
+-- modified by this migration — the fix is purely at the schema level.
 -- ============================================================
 
 -- Catalog-checked, idempotent application distinguishing five named-vs-shape
@@ -225,9 +227,10 @@ END $$;
 COMMENT ON CONSTRAINT knowledge_graph_nodes_node_id_key ON public.knowledge_graph_nodes IS
   'NOT DEFERRABLE UNIQUE constraint on node_id. Required so that
    ingestToKnowledgeGraph()''s upsert(onConflict:"node_id") call
-   (src/modules/signals/engine.ts) can use node_id as a valid ON CONFLICT
-   arbiter -- PostgreSQL does not permit a DEFERRABLE unique constraint to
-   serve in that role. Introduced by migration 20260729000001. See that
-   migration file and Draft PR #1 for verified evidence of this
-   constraint''s current shape and for what remains unverified about its
-   history.';
+   (src/modules/signals/engine.ts) has a suitable NOT DEFERRABLE UNIQUE
+   constraint or unique index to use node_id as its ON CONFLICT arbiter --
+   exclusion constraints are not supported in that role, and a DEFERRABLE
+   unique constraint cannot serve as one either. Documented and, where
+   absent, created by migration 20260729000001. See that migration file
+   and Draft PR #1 for the evidence summary, CI identifiers, and disclosed
+   limitations regarding this constraint''s current shape and history.';
