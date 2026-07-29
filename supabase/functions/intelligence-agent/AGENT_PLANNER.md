@@ -6,7 +6,14 @@
 
 The Planner is **fully deterministic**. It contains no LLM call, no
 probabilistic reasoning, and no external I/O. Given the same Task, it always
-produces the same ExecutionPlan.
+produces the same `steps` sequence — the same step kinds, in the same order,
+with the same `required`/`description`/`parameters` values.
+
+The one exception is `ExecutionPlan.createdAt`, which is set via
+`new Date().toISOString()` at plan-creation time. This means two calls to
+`createExecutionPlan()` with an identical `Task` produce `ExecutionPlan`
+objects that are equal in every field except `createdAt` — the plan is not
+byte-for-byte identical across calls, only its step sequence is.
 
 ## Two-Stage Process
 

@@ -24,8 +24,10 @@ Planner              (deterministic — produces ExecutionPlan from TaskType)
 Context Loader       (reads via ObservationProvider, SignalProvider,
                        GraphProvider, MemoryProvider interfaces)
   ↓
-Execution            (dispatches steps, checks Safety Layer, calls
-                       ReasoningEngine for REASON steps)
+Execution            (resolves each step to an ExecutionTool via
+                       ExecutionToolRegistry, checks Safety Layer, invokes
+                       the tool — REASON steps are handled by ReasonTool,
+                       which calls ReasoningEngine)
   ↓
 Reflection           (deterministic self-assessment of the run)
   ↓
@@ -37,7 +39,7 @@ Finish → AgentRunResult
 | File | Responsibility |
 |------|-----------------|
 | `types.ts` | All core types — Task, ExecutionPlan, AgentContext, ReasoningResult, etc. Zero dependencies. |
-| `interfaces.ts` | Provider contracts — ObservationProvider, SignalProvider, GraphProvider, MemoryProvider, ReasoningEngine, ExecutionTool, SafetyProvider, AgentLogger. |
+| `interfaces.ts` | Provider contracts — ObservationProvider, SignalProvider, GraphProvider, MemoryProvider, ReasoningEngine, ExecutionTool, ExecutionToolContext, ExecutionToolRegistry, SafetyProvider, AgentLogger. |
 | `config.ts` | Runtime configuration — load limits, timeouts, safety defaults. |
 | `logger.ts` | `ConsoleAgentLogger` — implements `AgentLogger`. |
 | `safety.ts` | `DefaultSafetyProvider` — deny-by-default for write actions. |
@@ -45,7 +47,8 @@ Finish → AgentRunResult
 | `planner.ts` | `createExecutionPlan()` — deterministic plan generation per TaskType. |
 | `context-loader.ts` | `ContextLoader` — assembles `AgentContext` via provider interfaces. |
 | `reasoning-engine.ts` | `MockReasoningEngine` — produces evidence-linked claims without any LLM call. |
-| `execution.ts` | `Execution` — runs plan steps through Safety Layer, dispatches REASON to ReasoningEngine. |
+| `execution.ts` | `Execution` — runs plan steps through Safety Layer, resolves each step to an `ExecutionTool` via `ExecutionToolRegistry` and invokes it. `REASON` steps are dispatched to `ReasonTool` (in `execution-tools.ts`), which in turn calls `ReasoningEngine` — `Execution` itself no longer calls `ReasoningEngine` directly. |
+| `execution-tools.ts` | `DefaultExecutionToolRegistry` + 7 `ExecutionTool` implementations (one per `ExecutionStepKind`) + `buildDefaultExecutionToolRegistry()` factory. |
 | `reflection.ts` | `Reflection` — deterministic post-run self-assessment. |
 | `runtime.ts` | `AgentRuntime` — orchestrates the full pipeline. |
 | `mock-providers.ts` | `Mock*Provider` implementations of every interface, in-memory data. |
@@ -53,12 +56,15 @@ Finish → AgentRunResult
 
 ## Dependency Inversion Guarantee
 
-`planner.ts`, `execution.ts`, `reflection.ts`, and `context-loader.ts` contain
-**zero references** to Supabase, Groq, `fetch()`, or any concrete
-infrastructure. They only import from `types.ts` and `interfaces.ts`.
+`planner.ts`, `execution.ts`, `execution-tools.ts`, `reflection.ts`, and
+`context-loader.ts` contain **zero references** to Supabase, Groq, `fetch()`,
+or any concrete infrastructure. They only import from `types.ts` and
+`interfaces.ts`.
 
 This is verified by code inspection: grep for `supabase`, `groq`, `fetch` in
-these four files returns no matches (excluding this documentation comment).
+these five files returns matches only inside JSDoc comments describing this
+Dependency Inversion guarantee itself (e.g. "never touches Supabase") — zero
+matches in any executable `import`, `require`, or function call.
 
 ## What Works on Mock Today
 

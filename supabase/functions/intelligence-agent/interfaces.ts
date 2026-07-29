@@ -72,8 +72,6 @@ export interface ReasoningEngine {
 }
 
 // ── Execution Tool ────────────────────────────────────────────────────────────
-// A single executable step handler. Execution.ts dispatches ExecutionStep
-// ── Execution Tool ────────────────────────────────────────────────────────────
 // One ExecutionTool per ExecutionStepKind. Execution.ts resolves the tool via
 // ExecutionToolRegistry and calls Tool.execute() — it contains NO switch/case
 // dispatch logic of its own. Adding a new ExecutionStepKind means adding a new

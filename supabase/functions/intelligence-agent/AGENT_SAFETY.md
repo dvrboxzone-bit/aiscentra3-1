@@ -88,10 +88,26 @@ been corrected. The system now enforces fail-closed behavior at **two
 independent layers**, verified by direct test:
 
 **Layer 1 — Safety.** `STEP_TO_ACTION` in `execution.ts` is typed as
-`Record<ExecutionStepKind, AgentAction>` — a *total* mapping. Any step kind
-without a corresponding entry produces `undefined`, which
-`DefaultSafetyProvider.checkAction()` explicitly denies via its "Unknown
-Actions" rule above (verified: `checkAction(undefined)` returns
+`Record<ExecutionStepKind, AgentAction>` — a *total* mapping. TypeScript's
+type checker enforces that every value in the `ExecutionStepKind` union has
+a corresponding entry; the code will not compile if any of the 7 current
+kinds (or any kind added in the future) is missing from this object. This
+means that, for any input that has genuinely passed through the type
+system, `STEP_TO_ACTION[step.kind]` cannot be `undefined` — this is a
+compile-time guarantee, not a runtime fallback.
+
+The `undefined`-producing scenario this layer defends against is not "a
+normally-typed `ExecutionStepKind` was forgotten" (the compiler prevents
+that outright) — it is **runtime data that bypasses or was never validated
+against the type system**: a `step.kind` value arriving from an external
+source (e.g. deserialized JSON, a manually constructed plan object, or a
+value forced through `as any`) that does not correspond to any real
+`ExecutionStepKind`. In that scenario, `STEP_TO_ACTION[step.kind]` evaluates
+to `undefined` at runtime despite TypeScript's static guarantee, because the
+guarantee only holds for code the compiler actually checked.
+`DefaultSafetyProvider.checkAction(undefined)` denies this explicitly via
+the "Unknown Actions" rule above (verified:
+`checkAction(undefined)` returns
 `{ allowed: false, reason: "Unknown action 'undefined' — not in any allow-list." }`).
 
 **Layer 2 — Tool Registry.** Even if a step's action IS recognized and

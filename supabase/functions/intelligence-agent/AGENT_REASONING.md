@@ -46,6 +46,16 @@ prompt). This is intentional architectural consistency — the Agent and the
 Assistant should never present inference as fact, and both should make gaps
 visible rather than paper over them with confident-sounding prose.
 
+**`HYPOTHESIS` is part of the type contract but not currently produced.**
+`MockReasoningEngine` — the only `ReasoningEngine` implementation that
+exists today — generates only `FACT`, `INFERENCE`, and `GAP` claims. No code
+path in the current codebase constructs a claim with `type: 'HYPOTHESIS'`.
+The value remains in the `ClaimType` union for forward compatibility: a
+future reasoning engine (e.g. one capable of genuine speculative synthesis
+across weakly-correlated signals) may need to emit `HYPOTHESIS`-tagged
+claims, and the type contract already accommodates that without requiring a
+change to `types.ts`, `execution.ts`, or any consumer of `ReasoningResult`.
+
 ## Confidence Aggregation
 
 `ReasoningResult.confidence` is the arithmetic mean of all claims' individual
