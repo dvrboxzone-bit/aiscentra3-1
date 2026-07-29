@@ -30,55 +30,81 @@
 -- constraint the application code already assumed existed.
 -- ============================================================
 
--- Catalog-checked, idempotent application distinguishing three named-vs-shape
--- scenarios explicitly rather than assuming schema+table+name+contype alone
--- is sufficient (an earlier revision of this migration did not verify the
--- exact column set — corrected here per REQUEST CHANGES review):
+-- Catalog-checked, idempotent application distinguishing five named-vs-shape
+-- scenarios explicitly rather than assuming schema+table+name+contype+column
+-- alone is sufficient (corrected across two REQUEST CHANGES review rounds):
 --
 --   1. A constraint named "knowledge_graph_nodes_node_id_key" already exists
 --      AND is a UNIQUE constraint on exactly the single column node_id
---      (not dropped) -> correct shape confirmed. RAISE NOTICE, no change.
+--      (not dropped) AND is NOT DEFERRABLE -> correct shape confirmed.
+--      RAISE NOTICE, no change.
 --
 --   2. A constraint named "knowledge_graph_nodes_node_id_key" already exists
 --      but does NOT match that exact shape (wrong contype, wrong column
---      count, wrong column, or the column is dropped) -> RAISE EXCEPTION.
---      Never silently accepted, never auto-corrected, never commented on.
+--      count, wrong column, dropped column, OR is DEFERRABLE) ->
+--      RAISE EXCEPTION. Never silently accepted, never auto-corrected,
+--      never commented on. A DEFERRABLE UNIQUE constraint cannot serve as
+--      an arbiter for INSERT ... ON CONFLICT (PostgreSQL does not permit
+--      deferrable constraints in that role), so it is treated as wrong
+--      shape even though contype/column/dropped all otherwise match.
 --
---   3. No constraint with the expected name exists, but a DIFFERENT UNIQUE
---      constraint already covers exactly node_id under another name ->
---      RAISE EXCEPTION requiring manual schema-history reconciliation.
---      Never silently treated as equivalent; never creates a second,
---      redundant constraint.
+--   3a. No constraint with the expected name exists, but a DIFFERENT
+--       NOT DEFERRABLE UNIQUE constraint already covers exactly node_id
+--       under another name -> RAISE EXCEPTION: a functionally equivalent
+--       constraint exists under a different name; manual schema-history
+--       reconciliation required. No second constraint created.
 --
---   4. Neither the named constraint nor an equivalent one exists -> the
---      constraint is created. No exception handler wraps this — a native
---      PostgreSQL error (e.g. duplicate non-null node_id values) propagates
---      unmodified if creation fails.
+--   3b. No constraint with the expected name exists, but a DIFFERENT
+--       DEFERRABLE UNIQUE constraint already covers exactly node_id under
+--       another name -> RAISE EXCEPTION: that constraint exists but cannot
+--       serve as an ON CONFLICT arbiter; manual reconciliation required
+--       before proceeding. No second constraint created.
+--
+--   4. Neither the named constraint nor any constraint on node_id exists
+--      -> the constraint is created, explicitly NOT DEFERRABLE. No
+--      exception handler wraps this — a native PostgreSQL error (e.g.
+--      duplicate non-null node_id values) propagates unmodified if
+--      creation fails.
+--
+-- Expected constraint shape (all five conditions required simultaneously):
+--   - type: UNIQUE
+--   - columns: exactly node_id
+--   - dropped column: false
+--   - deferrable: false
+--   -> suitable as an arbiter for INSERT ... ON CONFLICT('node_id'), which
+--      ingestToKnowledgeGraph() (src/modules/signals/engine.ts) requires.
+--   Note: contype/column/dropped alone do NOT constitute a fully-verified
+--   shape — condeferrable must also be confirmed false, since PostgreSQL
+--   does not allow a DEFERRABLE unique constraint to act as an ON CONFLICT
+--   arbiter even though it is otherwise a valid UNIQUE constraint.
 --
 -- COMMENT ON CONSTRAINT (below) is reached only if the DO block completes
 -- without raising an exception — i.e. only when the constraint is already
 -- confirmed correct-shape (scenario 1) or was just created with that exact
--- shape (scenario 4). It can never be applied to a same-named constraint
--- on a different column, because that case (scenario 2) always exits via
--- RAISE EXCEPTION before reaching this statement.
+-- shape (scenario 4). Every ambiguous or incorrect scenario (2, 3a, 3b)
+-- exits via RAISE EXCEPTION before reaching this statement.
 DO $$
 DECLARE
-  v_named_contype     "char";
-  v_named_ncols        int;
-  v_named_colname      text;
-  v_named_col_dropped  boolean;
-  v_named_exists       boolean := false;
-  v_named_is_expected  boolean := false;
-  v_other_conname      text;
+  v_named_contype      "char";
+  v_named_ncols         int;
+  v_named_colname       text;
+  v_named_col_dropped   boolean;
+  v_named_deferrable    boolean;
+  v_named_exists        boolean := false;
+  v_named_is_expected   boolean := false;
+  v_other_conname       text;
+  v_other_deferrable    boolean;
 BEGIN
   -- Look up the named constraint, if any, and its exact shape: type,
   -- number of columns, the single column's name (when there is exactly
-  -- one), and whether that column has been dropped.
+  -- one), whether that column has been dropped, and whether the
+  -- constraint itself is deferrable.
   SELECT c.contype,
          array_length(c.conkey, 1),
          a.attname,
-         a.attisdropped
-    INTO v_named_contype, v_named_ncols, v_named_colname, v_named_col_dropped
+         a.attisdropped,
+         c.condeferrable
+    INTO v_named_contype, v_named_ncols, v_named_colname, v_named_col_dropped, v_named_deferrable
   FROM pg_constraint c
   JOIN pg_class t      ON t.oid = c.conrelid
   JOIN pg_namespace n  ON n.oid = t.relnamespace
@@ -97,24 +123,33 @@ BEGIN
       v_named_contype = 'u'
       AND v_named_ncols = 1
       AND v_named_colname = 'node_id'
-      AND COALESCE(v_named_col_dropped, false) = false;
+      AND COALESCE(v_named_col_dropped, false) = false
+      AND v_named_deferrable = false;
 
     IF v_named_is_expected THEN
-      -- Scenario 1: correct shape already present.
+      -- Scenario 1: correct shape already present (UNIQUE, exactly
+      -- node_id, not dropped, NOT DEFERRABLE — valid ON CONFLICT arbiter).
       RAISE NOTICE
-        'knowledge_graph_nodes_node_id_key already exists on public.knowledge_graph_nodes(node_id) as a UNIQUE constraint — correct shape confirmed, no change made.';
+        'knowledge_graph_nodes_node_id_key already exists on public.knowledge_graph_nodes(node_id) as a NOT DEFERRABLE UNIQUE constraint — correct shape confirmed, no change made.';
     ELSE
       -- Scenario 2: a same-named constraint exists but does not match the
-      -- expected shape. Never silently accepted, never auto-corrected.
+      -- expected shape (including the case where it is DEFERRABLE, which
+      -- disqualifies it as an ON CONFLICT arbiter even though contype,
+      -- column, and dropped-state may otherwise be correct). Never
+      -- silently accepted, never auto-corrected.
       RAISE EXCEPTION
-        'A constraint named "knowledge_graph_nodes_node_id_key" exists on public.knowledge_graph_nodes but does NOT match the expected shape (UNIQUE on exactly node_id). Found: contype=%, column_count=%, column=%, column_dropped=%. Manual investigation is required before this migration can proceed.',
-        v_named_contype, v_named_ncols, v_named_colname, v_named_col_dropped;
+        'A constraint named "knowledge_graph_nodes_node_id_key" exists on public.knowledge_graph_nodes but does NOT match the expected shape (UNIQUE on exactly node_id, NOT DEFERRABLE). Found: contype=%, column_count=%, column=%, column_dropped=%, deferrable=%. Manual investigation is required before this migration can proceed.',
+        v_named_contype, v_named_ncols, v_named_colname, v_named_col_dropped, v_named_deferrable;
     END IF;
   ELSE
     -- No constraint with the expected name exists. Before creating one,
-    -- check whether a DIFFERENT UNIQUE constraint already covers exactly
-    -- node_id under another name — never assume equivalence silently.
-    SELECT c.conname INTO v_other_conname
+    -- check whether a DIFFERENT constraint already covers exactly node_id
+    -- under another name — never assume equivalence silently, and
+    -- distinguish a functionally-equivalent (NOT DEFERRABLE) constraint
+    -- from one that superficially matches but cannot serve as an ON
+    -- CONFLICT arbiter (DEFERRABLE).
+    SELECT c.conname, c.condeferrable
+      INTO v_other_conname, v_other_deferrable
     FROM pg_constraint c
     JOIN pg_class t      ON t.oid = c.conrelid
     JOIN pg_namespace n  ON n.oid = t.relnamespace
@@ -128,29 +163,45 @@ BEGIN
       AND a.attisdropped = false
     LIMIT 1;
 
-    IF v_other_conname IS NOT NULL THEN
-      -- Scenario 3: an equivalent constraint exists under a different name.
-      -- Stop and require a human decision rather than creating a second,
-      -- redundant constraint.
+    IF v_other_conname IS NOT NULL AND v_other_deferrable = false THEN
+      -- Scenario 3a: a functionally equivalent (NOT DEFERRABLE) UNIQUE
+      -- constraint exists under a different name. Stop and require a
+      -- human decision rather than creating a second, redundant constraint.
       RAISE EXCEPTION
-        'Equivalent UNIQUE constraint "%" already exists on public.knowledge_graph_nodes(node_id) under a different name. Manual schema-history reconciliation is required.',
+        'Functionally equivalent NOT DEFERRABLE UNIQUE constraint "%" already exists on public.knowledge_graph_nodes(node_id) under a different name. Manual schema-history reconciliation is required.',
+        v_other_conname;
+    ELSIF v_other_conname IS NOT NULL AND v_other_deferrable = true THEN
+      -- Scenario 3b: a UNIQUE constraint on node_id exists under a
+      -- different name, but it is DEFERRABLE and therefore cannot serve
+      -- as an ON CONFLICT arbiter. Stop rather than silently accepting it
+      -- or silently creating a second constraint.
+      RAISE EXCEPTION
+        'A UNIQUE constraint "%" exists on public.knowledge_graph_nodes(node_id) under a different name, but it is DEFERRABLE and therefore cannot be used as an arbiter for INSERT ... ON CONFLICT. Manual reconciliation is required before this migration can proceed.',
         v_other_conname;
     ELSE
-      -- Scenario 4: neither the named constraint nor an equivalent one
-      -- exists. No exception handler wraps this statement — a native
+      -- Scenario 4: no constraint on node_id exists at all, named or
+      -- otherwise. No exception handler wraps this statement — a native
       -- PostgreSQL error (e.g. duplicate non-null node_id values already
-      -- present) propagates unmodified if creation fails.
+      -- present) propagates unmodified if creation fails. Explicitly
+      -- NOT DEFERRABLE so the resulting constraint is guaranteed usable
+      -- as an ON CONFLICT arbiter (this is also PostgreSQL's default when
+      -- DEFERRABLE is omitted, but is stated explicitly here for clarity).
       ALTER TABLE public.knowledge_graph_nodes
-        ADD CONSTRAINT knowledge_graph_nodes_node_id_key UNIQUE (node_id);
+        ADD CONSTRAINT knowledge_graph_nodes_node_id_key
+        UNIQUE (node_id)
+        NOT DEFERRABLE;
       RAISE NOTICE
-        'Added UNIQUE constraint knowledge_graph_nodes_node_id_key on public.knowledge_graph_nodes(node_id).';
+        'Added NOT DEFERRABLE UNIQUE constraint knowledge_graph_nodes_node_id_key on public.knowledge_graph_nodes(node_id).';
     END IF;
   END IF;
 END $$;
 
 COMMENT ON CONSTRAINT knowledge_graph_nodes_node_id_key ON public.knowledge_graph_nodes IS
-  'Required for ingestToKnowledgeGraph()''s upsert(onConflict:"node_id") to function.
-   Was missing since table creation (migration 20260728000004) — root cause of the
-   Knowledge Graph remaining empty despite active ingestion code. Fixed in Phase 2.
-   Applied directly to production prior to Constitution v2.0 governance process
-   being in effect for this repository — see file header for full disclosure.';
+  'NOT DEFERRABLE UNIQUE constraint on node_id. Required for
+   ingestToKnowledgeGraph()''s upsert(onConflict:"node_id") to function --
+   PostgreSQL does not permit a DEFERRABLE unique constraint to serve as an
+   ON CONFLICT arbiter. Was missing since table creation (migration
+   20260728000004) — root cause of the Knowledge Graph remaining empty
+   despite active ingestion code. Fixed in Phase 2. Applied directly to
+   production prior to Constitution v2.0 governance process being in effect
+   for this repository — see file header for full disclosure.';
