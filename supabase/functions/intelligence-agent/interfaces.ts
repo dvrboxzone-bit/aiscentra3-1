@@ -21,6 +21,8 @@ import type {
   ExecutionStepResult,
   AgentAction,
   SafetyCheckResult,
+  AgentTask,
+  AgentContext,
 } from './types'
 
 // ── Observation Provider ──────────────────────────────────────────────────────
@@ -71,11 +73,31 @@ export interface ReasoningEngine {
 
 // ── Execution Tool ────────────────────────────────────────────────────────────
 // A single executable step handler. Execution.ts dispatches ExecutionStep
-// objects to the matching ExecutionTool based on `kind`.
+// ── Execution Tool ────────────────────────────────────────────────────────────
+// One ExecutionTool per ExecutionStepKind. Execution.ts resolves the tool via
+// ExecutionToolRegistry and calls Tool.execute() — it contains NO switch/case
+// dispatch logic of its own. Adding a new ExecutionStepKind means adding a new
+// ExecutionTool + registering it — Execution.ts itself is never modified
+// (Open/Closed Principle).
+
+export interface ExecutionToolContext {
+  task:    AgentTask
+  context: AgentContext
+}
 
 export interface ExecutionTool {
-  kind: ExecutionStep['kind']
-  run(step: ExecutionStep): Promise<ExecutionStepResult>
+  readonly kind: ExecutionStep['kind']
+  execute(step: ExecutionStep, ctx: ExecutionToolContext): Promise<unknown>
+}
+
+// ── Execution Tool Registry ───────────────────────────────────────────────────
+// Fail-closed lookup: getTool() throws UnknownExecutionStepKind if no tool is
+// registered for the requested kind. There is no default/fallback tool.
+
+export interface ExecutionToolRegistry {
+  register(tool: ExecutionTool): void
+  getTool(kind: ExecutionStep['kind']): ExecutionTool  // throws UnknownExecutionStepKind if absent
+  hasTool(kind: ExecutionStep['kind']): boolean
 }
 
 // ── Safety Layer ──────────────────────────────────────────────────────────────

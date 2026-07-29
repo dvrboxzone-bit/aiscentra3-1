@@ -1,33 +1,55 @@
 /**
  * AIscentra — Intelligence Agent Runtime: Execution
  *
- * Runs an ExecutionPlan against an already-loaded AgentContext. Every step
- * is checked against the SafetyProvider before running. Steps of kind REASON
- * invoke the ReasoningEngine; all LOAD_* steps are informational (their data
- * is already in context by the time Execution runs — Execution's job for
- * LOAD_* steps is to confirm the data landed, not to fetch it again).
+ * Fixes Phase 12 Audit Findings D-1 (Critical), D-2 (Major), D-3 (Major):
  *
- * Dependency Inversion: Execution knows nothing about Supabase. It only
- * knows about the ReasoningEngine and SafetyProvider interfaces.
+ * D-1 fix: STEP_TO_ACTION lookups that miss no longer default-allow.
+ *   Every step's AgentAction is now a required, total mapping — if a step
+ *   kind has no action mapping OR no registered tool, Execution throws
+ *   (via ExecutionToolRegistry.getTool(), which throws UnknownExecutionStepKind).
+ *   There is no fallback branch that resolves to { allowed: true }.
+ *
+ * D-2 mitigation: the fail-closed behavior no longer depends solely on the
+ *   WRITE_ACTIONS_REQUIRE_EXPLICIT_ALLOW config flag for its bypass-resistance —
+ *   an unmapped/unregistered step now fails via a thrown exception BEFORE
+ *   reaching the config-gated write-check branch at all.
+ *
+ * D-3 fix: report-formatting logic has moved to ReportExecutionTool
+ *   (execution-tools.ts). Execution.ts now does ONLY: resolve tool from
+ *   registry, check Safety, invoke tool, record timing/result. No
+ *   switch(step.kind), no report-content logic.
+ *
+ * Dependency Inversion: Execution knows nothing about Supabase or Groq.
+ * It depends only on ExecutionToolRegistry and SafetyProvider (interfaces).
  */
-import type { ReasoningEngine, SafetyProvider, AgentLogger } from './interfaces'
+import type { SafetyProvider, AgentLogger } from './interfaces'
 import type {
   AgentContext,
   AgentTask,
   ExecutionPlan,
   ExecutionResult,
   ExecutionStepResult,
+  ExecutionStep,
   AgentAction,
+  ReasoningResult,
 } from './types'
+import { UnknownExecutionStepKind } from './types'
+import { buildDefaultExecutionToolRegistry } from './execution-tools'
+import type { ExecutionToolRegistry } from './interfaces'
 
 export interface ExecutionDeps {
-  reasoningEngine: ReasoningEngine
+  reasoningEngine: import('./interfaces').ReasoningEngine
   safetyProvider:  SafetyProvider
   logger:          AgentLogger
+  toolRegistry?:   ExecutionToolRegistry  // optional override for testing/extension
 }
 
-// Maps ExecutionStep.kind to the AgentAction the Safety Layer should check.
-const STEP_TO_ACTION: Record<string, AgentAction> = {
+// Total mapping — every ExecutionStepKind MUST have an entry here.
+// If a new ExecutionStepKind is added to types.ts without adding an entry
+// here, TypeScript's exhaustiveness (via the Record<ExecutionStepKind, ...>
+// type) will fail to compile — this is now a compile-time guarantee, not a
+// runtime fallback.
+const STEP_TO_ACTION: Record<ExecutionStep['kind'], AgentAction> = {
   LOAD_OBSERVATIONS: 'READ_OBSERVATIONS',
   LOAD_SIGNALS:       'READ_SIGNALS',
   LOAD_GRAPH:         'READ_GRAPH',
@@ -38,81 +60,76 @@ const STEP_TO_ACTION: Record<string, AgentAction> = {
 }
 
 export class Execution {
-  constructor(private readonly deps: ExecutionDeps) {}
+  private readonly reasoningEngine: import('./interfaces').ReasoningEngine
+  private readonly safetyProvider:  SafetyProvider
+  private readonly logger:          AgentLogger
+  private readonly toolRegistry:    ExecutionToolRegistry
+  private lastReasoningResult:      ReasoningResult | null = null
+
+  constructor(deps: ExecutionDeps) {
+    this.reasoningEngine = deps.reasoningEngine
+    this.safetyProvider  = deps.safetyProvider
+    this.logger          = deps.logger
+    this.toolRegistry     = deps.toolRegistry ?? buildDefaultExecutionToolRegistry({
+      reasoningEngine:        deps.reasoningEngine,
+      getLastReasoningResult: () => this.lastReasoningResult,
+    })
+  }
 
   async run(task: AgentTask, plan: ExecutionPlan, context: AgentContext): Promise<ExecutionResult> {
-    const { reasoningEngine, safetyProvider, logger } = this.deps
     const startedAt = new Date().toISOString()
     const stepResults: ExecutionStepResult[] = []
-    let reasoning: ExecutionResult['reasoning'] = null
     let overallSuccess = true
+    this.lastReasoningResult = null
 
     for (const step of plan.steps) {
       const stepStart = Date.now()
-      const action = STEP_TO_ACTION[step.kind]
-
-      // ── Safety check before every step ────────────────────────────────────
-      const safetyCheck = action ? safetyProvider.checkAction(action) : { allowed: true, reason: null }
-      if (!safetyCheck.allowed) {
-        logger.error('SAFETY', `Step '${step.kind}' blocked: ${safetyCheck.reason}`)
-        stepResults.push({
-          step,
-          success:    false,
-          output:     null,
-          error:      safetyCheck.reason,
-          durationMs: Date.now() - stepStart,
-        })
-        if (step.required) overallSuccess = false
-        continue
-      }
 
       try {
-        let output: unknown = null
+        // ── Fail-closed action mapping ──────────────────────────────────────
+        // STEP_TO_ACTION is a total Record<ExecutionStepKind, AgentAction> —
+        // TypeScript guarantees every kind has an entry at compile time.
+        // No runtime fallback to a permissive default exists.
+        const action = STEP_TO_ACTION[step.kind]
 
-        switch (step.kind) {
-          case 'LOAD_OBSERVATIONS':
-            output = { count: context.observations.length }
-            break
-          case 'LOAD_SIGNALS':
-            output = { count: context.signals.length }
-            break
-          case 'LOAD_GRAPH':
-            output = { count: context.graphNodes.length }
-            break
-          case 'LOAD_MEMORY':
-            output = { count: context.memoryEntries.length }
-            break
-          case 'LOAD_ENTITY':
-            output = { count: context.entities.length }
-            break
-          case 'REASON':
-            reasoning = await reasoningEngine.reason({ task, context })
-            output = reasoning
-            break
-          case 'GENERATE_REPORT':
-            output = {
-              reportGenerated: reasoning !== null,
-              summary:         reasoning?.summary ?? 'No reasoning result available to generate a report from.',
-            }
-            break
+        // ── Safety check — always invoked, never skipped ────────────────────
+        const safetyCheck = this.safetyProvider.checkAction(action)
+        if (!safetyCheck.allowed) {
+          this.logger.error('SAFETY', `Step '${step.kind}' blocked: ${safetyCheck.reason}`)
+          stepResults.push({
+            step, success: false, output: null,
+            error: safetyCheck.reason, durationMs: Date.now() - stepStart,
+          })
+          if (step.required) overallSuccess = false
+          continue
+        }
+
+        // ── Resolve tool — fail-closed if unregistered ──────────────────────
+        // ExecutionToolRegistry.getTool() throws UnknownExecutionStepKind if
+        // no tool is registered for this kind. This propagates to the outer
+        // catch block below, which records it as a failed, non-silent step.
+        const tool = this.toolRegistry.getTool(step.kind)
+
+        // ── Invoke tool ──────────────────────────────────────────────────────
+        const output = await tool.execute(step, { task, context })
+
+        if (step.kind === 'REASON') {
+          this.lastReasoningResult = output as ReasoningResult
         }
 
         stepResults.push({
-          step,
-          success:    true,
-          output,
-          error:      null,
-          durationMs: Date.now() - stepStart,
+          step, success: true, output, error: null, durationMs: Date.now() - stepStart,
         })
-        logger.log('EXECUTION', `Step '${step.kind}' completed`, { durationMs: Date.now() - stepStart })
+        this.logger.log('EXECUTION', `Step '${step.kind}' completed`, { durationMs: Date.now() - stepStart })
 
       } catch (err) {
-        logger.error('EXECUTION', `Step '${step.kind}' failed`, err)
+        // UnknownExecutionStepKind lands here too — fail-closed, always
+        // recorded as a failure, never silently treated as success.
+        const isUnknownKind = err instanceof UnknownExecutionStepKind
+        this.logger.error('EXECUTION', `Step '${step.kind}' failed${isUnknownKind ? ' (unknown step kind — fail-closed)' : ''}`, err)
         stepResults.push({
-          step,
-          success:    false,
-          output:     null,
-          error:      err instanceof Error ? err.message : String(err),
+          step, success: false, output: null,
+          error: err instanceof Error ? err.message : String(err),
           durationMs: Date.now() - stepStart,
         })
         if (step.required) overallSuccess = false
@@ -120,13 +137,9 @@ export class Execution {
     }
 
     return {
-      taskId:      task.id,
-      planId:      plan.taskId,
-      stepResults,
-      reasoning,
-      success:     overallSuccess,
-      startedAt,
-      completedAt: new Date().toISOString(),
+      taskId: task.id, planId: plan.taskId, stepResults,
+      reasoning: this.lastReasoningResult, success: overallSuccess,
+      startedAt, completedAt: new Date().toISOString(),
     }
   }
 }

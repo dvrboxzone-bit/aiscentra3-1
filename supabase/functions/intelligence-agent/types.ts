@@ -197,3 +197,13 @@ export interface AgentRunResult {
   execution:  ExecutionResult
   reflection: AgentReflection
 }
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+// Fail-closed error types. Thrown, never silently swallowed into a default-allow.
+
+export class UnknownExecutionStepKind extends Error {
+  constructor(public readonly stepKind: string) {
+    super(`Unknown ExecutionStepKind: '${stepKind}'. No ExecutionTool is registered for this step. Execution refuses to proceed (fail-closed).`)
+    this.name = 'UnknownExecutionStepKind'
+  }
+}

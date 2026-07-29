@@ -78,3 +78,32 @@ occur given the current closed enum, but is handled defensively) is denied
 with an explicit "unknown action" reason. This is a deliberate fail-closed
 choice — an action the Safety Layer does not recognize is treated as
 forbidden, never as implicitly allowed.
+
+## Fail-Closed Guarantee for Unmapped or Unregistered Steps (Phase 12 fix)
+
+Prior to Phase 12, an `ExecutionStepKind` absent from the action-mapping table
+would silently default to `{ allowed: true }`, bypassing the Safety Layer
+entirely — a fail-open bug (Phase 12 Audit Finding D-1, Critical). This has
+been corrected. The system now enforces fail-closed behavior at **two
+independent layers**, verified by direct test:
+
+**Layer 1 — Safety.** `STEP_TO_ACTION` in `execution.ts` is typed as
+`Record<ExecutionStepKind, AgentAction>` — a *total* mapping. Any step kind
+without a corresponding entry produces `undefined`, which
+`DefaultSafetyProvider.checkAction()` explicitly denies via its "Unknown
+Actions" rule above (verified: `checkAction(undefined)` returns
+`{ allowed: false, reason: "Unknown action 'undefined' — not in any allow-list." }`).
+
+**Layer 2 — Tool Registry.** Even if a step's action IS recognized and
+allowed by Safety, `Execution` must still resolve an `ExecutionTool` from the
+`ExecutionToolRegistry` before it can run. `DefaultExecutionToolRegistry.getTool()`
+throws `UnknownExecutionStepKind` for any kind without a registered tool —
+there is no fallback tool and no silent no-op. This is verified: an empty
+registry with a known, Safety-allowed action (`LOAD_SIGNALS`) still causes
+the step to fail with an explicit thrown error, never a silent success.
+
+**Net effect:** an unrecognized or partially-wired `ExecutionStepKind` cannot
+reach execution through either path. Both the permission check and the tool
+resolution step fail closed independently — one alone would already prevent
+the Phase 12 Critical finding from recurring; having both means a regression
+in one layer is still caught by the other.
