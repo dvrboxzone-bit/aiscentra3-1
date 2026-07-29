@@ -2,32 +2,58 @@
 -- Migration: 20260729000001_fix_knowledge_graph_unique_constraint
 -- Phase 2: Knowledge Foundation for Agent Intelligence
 --
--- STATUS NOTE (disclosed, not hidden): This constraint was already applied
--- directly to production (project fokoxewjfjvqahkidagb) via Supabase MCP
--- execute_sql, BEFORE AISCENTRA_PROJECT_CONSTITUTION_v2.0 was loaded into
--- this session and before any backup/staging/PR process existed for this
--- repository. This file is a RETROACTIVE record of that change, committed
--- so the migration history accurately reflects the live schema (Constitution
--- Article 1.2: primary artifacts must match reality) — not a claim that the
--- change followed the now-required governance process, which it did not.
+-- STATUS: This file is a RETROACTIVE record. A UNIQUE constraint matching
+-- this migration's target shape was found to already exist in production
+-- (project fokoxewjfjvqahkidagb) before this file was ever committed or
+-- reviewed through any PR/CI process. This file exists so the migration
+-- history reflects that reality (Constitution Article 1.2), and so the
+-- same constraint can be reproducibly created in any environment where it
+-- does not yet exist.
 --
--- ROOT CAUSE FIX: knowledge_graph_nodes had no UNIQUE constraint on
--- node_id, only a regular (non-unique) index (idx_kgn_node_id).
--- Signal Engine's ingestToKnowledgeGraph() (src/modules/signals/engine.ts)
--- calls .upsert({...}, { onConflict: 'node_id' }) on every observation
--- processed — this REQUIRES a unique constraint on node_id to function.
--- Without one, the upsert fails at the database level. The calling code
--- wraps this in try/catch { return null } (silent failure by design, to
--- avoid blocking Signal creation on a non-critical side effect), which
--- meant the table remained empty (0 rows, confirmed via direct SQL
--- inspection) despite the ingestion code running on every observation
--- since Signal Engine V2 was deployed. This is a genuine bug, not "data
--- simply not yet populated," which is how it was previously characterized
--- in PROJECT_MASTER_DOCUMENTATION.md.
+-- VERIFIED FACTS (confirmed via direct, machine-executed read-only catalog
+-- queries against production, and via a PostgreSQL 17 CI run of this exact
+-- migration file — see PR #1 for full query results and CI run details):
+--   - public.knowledge_graph_nodes.node_id is a nullable uuid column.
+--   - A constraint named knowledge_graph_nodes_node_id_key currently exists
+--     in production with the exact shape this migration targets: UNIQUE on
+--     exactly node_id, NOT DEFERRABLE, backing index valid/ready/live/
+--     immediate — independently VERIFIED, not merely asserted.
+--   - No duplicate non-null node_id values exist in production.
+--   - Production currently contains 6 rows in this table.
+--   - No entry for migration version 20260729000001 exists in
+--     supabase_migrations.schema_migrations in production.
+--   - This exact migration file, executed against a PostgreSQL 17 service
+--     container in GitHub Actions CI, passed all 8 scored scenarios
+--     (clean-schema creation, idempotent repeat, three distinct
+--     wrong-shape/conflicting-constraint rejection scenarios, duplicate-data
+--     rejection, and ON CONFLICT arbiter compatibility) and surfaced one
+--     disclosed known limitation (Scenario 9 — see PR #1).
 --
--- This migration adds the missing constraint. No Signal Engine code is
--- modified — the fix is purely at the schema level, restoring the
--- constraint the application code already assumed existed.
+-- NOT ESTABLISHED BY CURRENT EVIDENCE (stated as such, not as fact):
+--   - Which specific tool or method originally created the production
+--     constraint, and at what exact time, is not established by any
+--     artifact collected so far.
+--   - Whether the constraint's absence caused any specific historical
+--     period of zero rows, and whether the current 6 rows were written by
+--     ingestToKnowledgeGraph() specifically (as opposed to some other
+--     path), is not established by any artifact collected so far. The code
+--     dependency described below is a verified property of the source code
+--     itself, not a verified causal history of the data.
+--
+-- CODE DEPENDENCY (verified by direct reading of source, independent of the
+-- historical questions above): knowledge_graph_nodes had no UNIQUE
+-- constraint on node_id at table-creation time (migration 20260728000004
+-- only created a regular, non-unique index, idx_kgn_node_id). Signal
+-- Engine's ingestToKnowledgeGraph() (src/modules/signals/engine.ts) calls
+-- .upsert({...}, { onConflict: 'node_id' }) on every observation processed
+-- — PostgreSQL requires a UNIQUE (or exclusion) constraint on the conflict
+-- target for this to succeed. Without one, such an upsert call fails at
+-- the database level; the calling code wraps this in try/catch { return
+-- null }, which would silently absorb that specific failure without
+-- surfacing it. This migration adds the missing constraint so that
+-- dependency is satisfied in any environment lacking it. No Signal Engine
+-- code is modified by this migration — the fix is purely at the schema
+-- level.
 -- ============================================================
 
 -- Catalog-checked, idempotent application distinguishing five named-vs-shape
@@ -197,11 +223,11 @@ BEGIN
 END $$;
 
 COMMENT ON CONSTRAINT knowledge_graph_nodes_node_id_key ON public.knowledge_graph_nodes IS
-  'NOT DEFERRABLE UNIQUE constraint on node_id. Required for
-   ingestToKnowledgeGraph()''s upsert(onConflict:"node_id") to function --
-   PostgreSQL does not permit a DEFERRABLE unique constraint to serve as an
-   ON CONFLICT arbiter. Was missing since table creation (migration
-   20260728000004) — root cause of the Knowledge Graph remaining empty
-   despite active ingestion code. Fixed in Phase 2. Applied directly to
-   production prior to Constitution v2.0 governance process being in effect
-   for this repository — see file header for full disclosure.';
+  'NOT DEFERRABLE UNIQUE constraint on node_id. Required so that
+   ingestToKnowledgeGraph()''s upsert(onConflict:"node_id") call
+   (src/modules/signals/engine.ts) can use node_id as a valid ON CONFLICT
+   arbiter -- PostgreSQL does not permit a DEFERRABLE unique constraint to
+   serve in that role. Introduced by migration 20260729000001. See that
+   migration file and Draft PR #1 for verified evidence of this
+   constraint''s current shape and for what remains unverified about its
+   history.';
