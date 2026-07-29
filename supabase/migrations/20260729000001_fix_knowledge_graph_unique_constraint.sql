@@ -30,66 +30,121 @@
 -- constraint the application code already assumed existed.
 -- ============================================================
 
--- Idempotent, catalog-checked application: verifies schema + table + exact
--- constraint name + constraint type (contype = 'u' for UNIQUE) + exact column
--- set before applying. Safe to run whether the constraint already exists
--- (e.g. applied directly to production prior to this migration being
--- committed) or does not yet exist (fresh/staging environments).
+-- Catalog-checked, idempotent application distinguishing three named-vs-shape
+-- scenarios explicitly rather than assuming schema+table+name+contype alone
+-- is sufficient (an earlier revision of this migration did not verify the
+-- exact column set — corrected here per REQUEST CHANGES review):
 --
--- Does NOT swallow errors: if the ADD CONSTRAINT statement fails for any
--- other reason (e.g. existing duplicate node_id values preventing a UNIQUE
--- constraint from being created), PostgreSQL's native error propagates
--- unmodified — there is no exception handler here to hide it.
+--   1. A constraint named "knowledge_graph_nodes_node_id_key" already exists
+--      AND is a UNIQUE constraint on exactly the single column node_id
+--      (not dropped) -> correct shape confirmed. RAISE NOTICE, no change.
 --
--- Does NOT silently treat a differently-named constraint on the same
--- column as equivalent: if one is found, a NOTICE is raised so the
--- discrepancy is visible in migration logs rather than assumed away.
+--   2. A constraint named "knowledge_graph_nodes_node_id_key" already exists
+--      but does NOT match that exact shape (wrong contype, wrong column
+--      count, wrong column, or the column is dropped) -> RAISE EXCEPTION.
+--      Never silently accepted, never auto-corrected, never commented on.
+--
+--   3. No constraint with the expected name exists, but a DIFFERENT UNIQUE
+--      constraint already covers exactly node_id under another name ->
+--      RAISE EXCEPTION requiring manual schema-history reconciliation.
+--      Never silently treated as equivalent; never creates a second,
+--      redundant constraint.
+--
+--   4. Neither the named constraint nor an equivalent one exists -> the
+--      constraint is created. No exception handler wraps this — a native
+--      PostgreSQL error (e.g. duplicate non-null node_id values) propagates
+--      unmodified if creation fails.
+--
+-- COMMENT ON CONSTRAINT (below) is reached only if the DO block completes
+-- without raising an exception — i.e. only when the constraint is already
+-- confirmed correct-shape (scenario 1) or was just created with that exact
+-- shape (scenario 4). It can never be applied to a same-named constraint
+-- on a different column, because that case (scenario 2) always exits via
+-- RAISE EXCEPTION before reaching this statement.
 DO $$
 DECLARE
-  exact_match_exists boolean;
-  other_unique_on_node_id text;
+  v_named_contype     "char";
+  v_named_ncols        int;
+  v_named_colname      text;
+  v_named_col_dropped  boolean;
+  v_named_exists       boolean := false;
+  v_named_is_expected  boolean := false;
+  v_other_conname      text;
 BEGIN
-  -- Exact match: same schema, table, constraint name, and type (UNIQUE).
-  SELECT EXISTS (
-    SELECT 1
-    FROM pg_constraint c
-    JOIN pg_class t      ON t.oid = c.conrelid
-    JOIN pg_namespace n  ON n.oid = t.relnamespace
-    WHERE n.nspname = 'public'
-      AND t.relname = 'knowledge_graph_nodes'
-      AND c.conname = 'knowledge_graph_nodes_node_id_key'
-      AND c.contype = 'u'
-  ) INTO exact_match_exists;
+  -- Look up the named constraint, if any, and its exact shape: type,
+  -- number of columns, the single column's name (when there is exactly
+  -- one), and whether that column has been dropped.
+  SELECT c.contype,
+         array_length(c.conkey, 1),
+         a.attname,
+         a.attisdropped
+    INTO v_named_contype, v_named_ncols, v_named_colname, v_named_col_dropped
+  FROM pg_constraint c
+  JOIN pg_class t      ON t.oid = c.conrelid
+  JOIN pg_namespace n  ON n.oid = t.relnamespace
+  LEFT JOIN pg_attribute a
+         ON a.attrelid = c.conrelid
+        AND a.attnum   = c.conkey[1]
+        AND array_length(c.conkey, 1) = 1
+  WHERE n.nspname = 'public'
+    AND t.relname = 'knowledge_graph_nodes'
+    AND c.conname = 'knowledge_graph_nodes_node_id_key';
 
-  IF exact_match_exists THEN
-    RAISE NOTICE
-      'knowledge_graph_nodes_node_id_key already exists on public.knowledge_graph_nodes — skipping, no change made.';
+  v_named_exists := FOUND;
+
+  IF v_named_exists THEN
+    v_named_is_expected :=
+      v_named_contype = 'u'
+      AND v_named_ncols = 1
+      AND v_named_colname = 'node_id'
+      AND COALESCE(v_named_col_dropped, false) = false;
+
+    IF v_named_is_expected THEN
+      -- Scenario 1: correct shape already present.
+      RAISE NOTICE
+        'knowledge_graph_nodes_node_id_key already exists on public.knowledge_graph_nodes(node_id) as a UNIQUE constraint — correct shape confirmed, no change made.';
+    ELSE
+      -- Scenario 2: a same-named constraint exists but does not match the
+      -- expected shape. Never silently accepted, never auto-corrected.
+      RAISE EXCEPTION
+        'A constraint named "knowledge_graph_nodes_node_id_key" exists on public.knowledge_graph_nodes but does NOT match the expected shape (UNIQUE on exactly node_id). Found: contype=%, column_count=%, column=%, column_dropped=%. Manual investigation is required before this migration can proceed.',
+        v_named_contype, v_named_ncols, v_named_colname, v_named_col_dropped;
+    END IF;
   ELSE
-    -- Surface (do not silently assume equivalence with) any other UNIQUE
-    -- constraint that already covers exactly the node_id column, under a
-    -- different name.
-    SELECT c.conname INTO other_unique_on_node_id
+    -- No constraint with the expected name exists. Before creating one,
+    -- check whether a DIFFERENT UNIQUE constraint already covers exactly
+    -- node_id under another name — never assume equivalence silently.
+    SELECT c.conname INTO v_other_conname
     FROM pg_constraint c
     JOIN pg_class t      ON t.oid = c.conrelid
     JOIN pg_namespace n  ON n.oid = t.relnamespace
-    JOIN pg_attribute a  ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+    JOIN pg_attribute a  ON a.attrelid = c.conrelid
+                        AND a.attnum   = c.conkey[1]
     WHERE n.nspname = 'public'
       AND t.relname = 'knowledge_graph_nodes'
       AND c.contype = 'u'
-      AND a.attname = 'node_id'
       AND array_length(c.conkey, 1) = 1
+      AND a.attname = 'node_id'
+      AND a.attisdropped = false
     LIMIT 1;
 
-    IF other_unique_on_node_id IS NOT NULL THEN
+    IF v_other_conname IS NOT NULL THEN
+      -- Scenario 3: an equivalent constraint exists under a different name.
+      -- Stop and require a human decision rather than creating a second,
+      -- redundant constraint.
+      RAISE EXCEPTION
+        'Equivalent UNIQUE constraint "%" already exists on public.knowledge_graph_nodes(node_id) under a different name. Manual schema-history reconciliation is required.',
+        v_other_conname;
+    ELSE
+      -- Scenario 4: neither the named constraint nor an equivalent one
+      -- exists. No exception handler wraps this statement — a native
+      -- PostgreSQL error (e.g. duplicate non-null node_id values already
+      -- present) propagates unmodified if creation fails.
+      ALTER TABLE public.knowledge_graph_nodes
+        ADD CONSTRAINT knowledge_graph_nodes_node_id_key UNIQUE (node_id);
       RAISE NOTICE
-        'A differently-named UNIQUE constraint (%) already covers node_id on public.knowledge_graph_nodes. Proceeding to add knowledge_graph_nodes_node_id_key as well — not assuming equivalence.',
-        other_unique_on_node_id;
+        'Added UNIQUE constraint knowledge_graph_nodes_node_id_key on public.knowledge_graph_nodes(node_id).';
     END IF;
-
-    -- Native PostgreSQL error (e.g. duplicate node_id values already present)
-    -- propagates as-is if this statement fails. No exception handler wraps it.
-    ALTER TABLE public.knowledge_graph_nodes
-      ADD CONSTRAINT knowledge_graph_nodes_node_id_key UNIQUE (node_id);
   END IF;
 END $$;
 
