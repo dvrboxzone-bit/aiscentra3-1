@@ -1,10 +1,10 @@
 # AIscentra — Project Master Documentation
 
-**Document status:** Primary technical reference
+**Document status:** Primary technical reference (v2 — audited and elevated)
 **Last verified:** July 29, 2026
-**Verification basis:** Real production execution (Runtime HTTP Integration + End-to-End Validation), direct SQL inspection of live Supabase tables, live Vercel deployment inspection
+**Verification basis:** Real production execution (Runtime HTTP Integration + End-to-End Validation), direct SQL inspection of live Supabase tables, live Vercel deployment inspection, direct source-code inspection of all API routes and `vercel.json`
 
-This document describes only what has been built and verified to exist. Where a component returns empty data or is not yet implemented, this is stated explicitly rather than implied to be complete.
+This document describes only what has been built and verified to exist. Where a component returns empty data, is stale, or is not yet implemented, this is stated explicitly. A new engineer should be able to read this document alone — without reading prior phase reports — and understand the architecture, execution flow, production topology, limitations, and future direction.
 
 ---
 
@@ -12,7 +12,7 @@ This document describes only what has been built and verified to exist. Where a 
 
 AIscentra is an **AI Intelligence Observatory** — not a news aggregator. Its purpose is to observe, analyze, connect, and explain the evolution of artificial intelligence through structured Intelligence Signals, distinguishing itself from content aggregation by requiring every published Signal to represent genuine evidence of ecosystem-level change rather than a well-written summary of a paper or product announcement.
 
-The long-term vision is a platform that functions analogously to a Bloomberg Terminal for the AI industry: scarce, high-conviction, evidence-linked intelligence that professionals (CTOs, research directors, VCs, founders, policy analysts) can trust precisely because most of what crosses the Observatory's desk is filtered out, not published. This philosophy — Signal Engine V2's "not every good paper is a Signal" principle — is the platform's central differentiator and governs both the automated Signal Engine and the newer Intelligence Agent Runtime described in this document.
+The long-term vision is a platform that functions analogously to a Bloomberg Terminal for the AI industry: scarce, high-conviction, evidence-linked intelligence that professionals can trust precisely because most of what crosses the Observatory's desk is filtered out, not published.
 
 ---
 
@@ -20,254 +20,228 @@ The long-term vision is a platform that functions analogously to a Bloomberg Ter
 
 | Subsystem | Responsibility |
 |---|---|
-| **Web Application** | Next.js 16 application (App Router) serving the public Observatory (signals, events, reports, search, assistant chat) and internal API routes. Deployed on Vercel. |
-| **Signal Engine (V2)** | Automated pipeline that ingests raw observations (RSS/arXiv/etc.), qualifies them against deterministic and LLM-scored criteria, and publishes structured Signals, Weak Signals, or discards them with a recorded rejection reason. Frozen at v2.0 (Feature Freeze; Statistical Acceptance pending). |
-| **Observatory** | The public-facing product surface — the collection of Signals, Events, and Reports presented to users, plus the Observatory Assistant (RAG-based chat over Signal data). |
-| **Agent Runtime** | A separate, newly-integrated Intelligence Agent execution engine (Planner → Context Loader → Execution → Reflection) capable of running analytical tasks (e.g. "Investigate OpenAI") against real Observatory data and Groq-based reasoning. Distinct codebase from Signal Engine; read-only with respect to Signal Engine data. |
-| **Supabase** | Postgres database + Row Level Security for all persistent data: observations, signals, entities, entity_registry, knowledge_graph_nodes, intelligence_graph, signal_decision_log, signal_feedback, engine_simulation_runs, sources, events, reports. Also the vehicle for direct SQL administration via Supabase MCP during development. |
-| **Groq** | The sole LLM inference provider for both Signal Engine (enrichment, SIS scoring) and Agent Runtime (GroqReasoningEngine). Accessed through a shared abstraction (`src/lib/ai/*`) with model-chain fallback and retry/backoff. No second LLM provider and no Cloudflare AI are integrated. |
-| **Vercel** | Hosting and deployment platform for the Next.js application. Hobby-tier constraints (single daily cron, 60-second function timeout) have directly shaped several architectural decisions documented below (e.g. batch sizing, fire-and-forget pipeline orchestration). |
+| Web Application | Next.js 16 (App Router) app serving the Observatory and all API routes. Deployed on Vercel. |
+| Signal Engine (V2) | Automated pipeline: ingests observations, qualifies against deterministic + LLM-scored criteria, publishes Signals/Weak Signals or discards with recorded reason. Feature Freeze; Statistical Acceptance pending. |
+| Observatory | Public product surface — Signals, Events, Reports, Assistant chat. |
+| Agent Runtime | Separate Intelligence Agent engine (Planner→Context Loader→Execution→Reflection) running analytical tasks against real Observatory data + Groq reasoning. Read-only w.r.t. Signal Engine data. |
+| Supabase | Postgres + RLS for all persistent data. |
+| Groq | Sole LLM provider for both engines, via shared `src/lib/ai/*` abstraction. No second LLM, no Cloudflare AI. |
+| Vercel | Hosting, deployment, cron. Hobby-tier limits (1 daily cron, 60s timeout) shaped batch-sizing decisions. |
 
 ---
 
 ## 3. Current Architecture
 
-### Runtime lifecycle (Signal Engine)
+### 3.1 Signal Engine Lifecycle
 
 ```
 RSS/arXiv sources → /api/collect → observations table
-                                          ↓
-                          /api/enrich/batch (cron-triggered, 1x/day)
-                                          ↓
-              Signal Engine V2: Hard Rejection → Category/Dedup →
-              Knowledge Graph ingestion → SIS Evaluation (Groq) →
-              Full Enrichment (Groq) → Validation/Scoring →
-              SIGNAL | WEAK_SIGNAL | ARCHIVE | DISCARD
-                                          ↓
-                          signals table + signal_decision_log
+      ↓
+/api/enrich/batch (invoked by /api/cron/pipeline, daily 10:00 UTC)
+      ↓
+Hard Rejection → Category/Dedup → Graph ingestion → SIS (Groq) →
+Enrichment (Groq) → Validation/Scoring → SIGNAL|WEAK_SIGNAL|ARCHIVE|DISCARD
+      ↓
+signals table + signal_decision_log
 ```
 
-### Runtime lifecycle (Agent Runtime)
+### 3.2 Agent Runtime Lifecycle (step-by-step)
+
+**Step 1 — Task creation.** `src/app/api/agent/route.ts` receives GET with `q` param, validates non-empty, trims to 500 chars, builds `AgentTask{ id, type: routeTask(query), query, parameters:{}, requestedBy:"http-api", createdAt }`. `routeTask()` is pure regex classification into one of 7 `TaskType`s — no LLM.
+
+**Step 2 — Planning.** `createExecutionPlan(task)` looks up a static step sequence for the `TaskType` from `TASK_PIPELINES`. For INVESTIGATION: LOAD_OBSERVATIONS(required)→LOAD_SIGNALS(required)→LOAD_GRAPH(optional)→LOAD_MEMORY(optional)→REASON(required)→GENERATE_REPORT(required). Zero I/O, zero LLM — pure function of TaskType.
+
+**Step 3 — Context loading.** `ContextLoader.load()` calls each provider per step kind present in the plan (ObservationProvider.getRecent, SignalProvider.getRecent, GraphProvider.getNodesByType, MemoryProvider.getRelevant, GraphProvider.searchEntities). Each call wrapped in try/catch; thrown errors append to `context.gaps`. Returns full `AgentContext`.
+
+**Step 4 — Execution dispatch (LOAD_* steps).** `Execution.run()` iterates steps: resolve `AgentAction` → `SafetyProvider.checkAction()` → resolve `ExecutionTool` from Registry → `tool.execute()`. LOAD_* tools just return counts of already-fetched context data — no re-fetch.
+
+**Step 5 — Reasoning.** REASON step resolves `ReasonTool` → calls `reasoningEngine.reason({task, context})`. Production: `GroqReasoningEngine` builds a structured prompt from full context, calls `agentCompleteJSON()` with the pre-existing `'analyzer'` role, validates against `GroqReasoningOutputSchema` (Zod), merges with Runtime-owned `taskId`/`reasonedAt`. Only step with a network LLM call.
+
+**Step 6 — Report generation.** `GENERATE_REPORT` → `ReportExecutionTool` reads the REASON output via an injected closure, returns `{reportGenerated, summary}`. Not persisted anywhere — exists only in the response object.
+
+**Step 7 — Reflection.** `Reflection.reflect()` runs synchronously post-execution: inspects failures, confidence threshold, gap count → produces `{success, failure, confidence, durationMs, lessons[], nextActions[], reflectedAt}`. No writes, no side effects beyond logging.
+
+**Step 8 — Response serialization.** Route wraps `{task, plan, context, execution, reflection}` in `NextResponse.json()`. Full object returned, nothing stripped.
+
+### 3.3 Dependency Graph
 
 ```
-HTTP GET /api/agent?q=<query>
-        ↓
-buildProductionRuntime() — composition root, wires concrete providers
-        ↓
-AgentRuntime.run(task)
-        ↓
-Planner (deterministic, no LLM) → ExecutionPlan
-        ↓
-ContextLoader → reads via 4 provider interfaces → AgentContext
-        ↓
-Execution → Safety check → ExecutionToolRegistry → Tool.execute()
-        ↓ (REASON step only)
-GroqReasoningEngine.reason() → structured ReasoningResult
-        ↓
-Reflection → deterministic self-assessment
-        ↓
-AgentRunResult → JSON HTTP response
+Web Application (src/app)
+  ├─►Signal Engine (src/modules/signals,...) ─►Supabase (src/lib/supabase/server.ts) ─►Groq (src/lib/ai/*)
+  └─►Agent Runtime (supabase/functions/intelligence-agent)
+        ├─►Supabase (supabase-providers.ts, @supabase/supabase-js DIRECTLY — not server.ts)
+        └─►Groq (groq-reasoning-engine.ts, dynamic import of src/lib/ai/agent.ts)
 ```
 
-### Dependency relationships
+Dependency direction is one-way. Signal Engine has zero knowledge of Agent Runtime. Agent Runtime's core modules (Planner/Execution/Reflection/Safety/ContextLoader) have zero knowledge of Supabase/Groq — those live only in leaf providers, injected at the composition root (`index.ts`).
 
-Both engines share the Groq provider layer (`src/lib/ai/*`) but are otherwise **independent codebases**:
+**Structural note:** two independent Supabase client paths exist — `src/lib/supabase/server.ts` (Next.js, depends on `next/headers`) for Web/Signal Engine, and a separate lazy client in `supabase-providers.ts` for Agent Runtime (can't use the Next.js client outside a Next.js request context).
 
-- Signal Engine lives in `src/modules/signals/`, `src/app/api/{collect,enrich,cron}/`.
-- Agent Runtime lives entirely in `supabase/functions/intelligence-agent/` (a directory name inherited from an early plan to deploy it as a Supabase Edge Function — **it is not currently deployed there**; see Section 7).
-- The only bridge between the Next.js application and Agent Runtime is `src/app/api/agent/route.ts`, which imports `buildProductionRuntime()` from the Agent Runtime's public `index.ts`.
+### 3.4 Directory Overview
 
-Agent Runtime's internal modules (Planner, Execution, Reflection, Safety, Context Loader) depend **only** on `types.ts` and `interfaces.ts` within the same directory — confirmed by repeated grep-based audits to contain zero references to Supabase, Groq, or any concrete infrastructure. Concrete implementations (`SupabaseObservationProvider`, `GroqReasoningEngine`, etc.) are injected at the composition root (`index.ts`) only.
-
-### Data flow
-
-Signal Engine writes to `signals`, `observations`, `entities`, `signal_decision_log`, `entity_registry`, `knowledge_graph_nodes` (ingestion call exists in `engine.ts`, though the table is currently empty — see Section 7), `intelligence_graph` (currently empty).
-
-Agent Runtime is **strictly read-only** with respect to all Signal Engine tables. Its `SupabaseMemoryProvider.write()` method exists on the interface but throws an explicit error rather than writing, since the `strategic_memory` table does not exist yet.
-
-### Provider architecture
-
-Agent Runtime's four data providers each satisfy a pre-existing TypeScript interface (`ObservationProvider`, `SignalProvider`, `GraphProvider`, `MemoryProvider` — all defined in `interfaces.ts`) with two interchangeable implementation sets:
-
-- **Mock providers** (`mock-providers.ts`) — static in-memory data, used exclusively by `buildMockRuntime()`/`runMockTask()` for testing. Untouched since their creation.
-- **Supabase providers** (`supabase-providers.ts`) — real queries against live Observatory tables, used by `buildProductionRuntime()`.
-
-There is no separate `EntityProvider` interface; entity resolution is part of the existing `GraphProvider` contract (`getEntity()`, `searchEntities()`), backed by the `entity_registry` table.
-
-### Reasoning flow
-
-`GroqReasoningEngine` (in `groq-reasoning-engine.ts`) is the only production `ReasoningEngine` implementation. It uses the project's existing `agentCompleteJSON()` abstraction (`src/lib/ai/agent.ts`) — not a new HTTP client — with a dedicated Zod schema (`GroqReasoningOutputSchema`) enforcing JSON-only, structured output: `summary`, `claims[]` (each tagged `FACT | INFERENCE | GAP | HYPOTHESIS` with `evidenceIds` and `confidence`), `gapsIdentified`, overall `confidence`. `taskId` and `reasonedAt` are Runtime-owned metadata, never produced by the model.
-
-### Execution pipeline
-
-`Execution.run()` iterates an `ExecutionPlan`'s steps. For each step: resolve the mapped `AgentAction` via a total `Record<ExecutionStepKind, AgentAction>`, check `SafetyProvider.checkAction()`, resolve the concrete `ExecutionTool` from `ExecutionToolRegistry`, invoke `tool.execute()`. There is no `switch(step.kind)` anywhere in `execution.ts` — each step kind is handled by its own dedicated `ExecutionTool` class in `execution-tools.ts` (`LoadObservationsTool`, `LoadSignalsTool`, `LoadGraphTool`, `LoadMemoryTool`, `LoadEntityTool`, `ReasonTool`, `ReportExecutionTool`).
+| Path | Purpose |
+|---|---|
+| `src/app/` | Pages + all API routes |
+| `src/modules/` | Signal Engine domain logic: signals, observations, events, reports, entities, assistant |
+| `src/lib/ai/` | Shared LLM abstraction (client, agent, config, models) used by both engines |
+| `src/lib/supabase/` | Next.js Supabase client — Signal Engine/Web only, not Agent Runtime |
+| `src/config/` | Env validation (`env.ts`) |
+| `supabase/migrations/` | Authoritative SQL schema history |
+| `supabase/functions/intelligence-agent/` | Entire Agent Runtime + 7 `AGENT_*.md` docs. **Not deployed as a Supabase Edge Function** (no `config.toml`) — reachable only via `/api/agent` in the Next.js bundle |
+| `vercel.json` | Deployment config incl. the single registered cron |
+| `next.config.ts` | Currently sets `typescript.ignoreBuildErrors: true` (Sections 7/11) |
+| `tsconfig.json` | Excludes `supabase/functions`, though this doesn't stop type-checking of files reached via `import` |
 
 ---
 
-## 4. Runtime Architecture (Agent Runtime component responsibilities)
+## 4. Runtime Architecture (Component Responsibilities)
 
 | Component | File | Responsibility |
 |---|---|---|
-| **Task** | `types.ts` | Represents a unit of work: `id`, `type` (one of 7 `TaskType` values), `query`, `parameters`, `requestedBy`, `createdAt`. |
-| **Planner** | `planner.ts` + `task-router.ts` | Fully deterministic. `routeTask()` classifies a query string into a `TaskType` via regex; `createExecutionPlan()` looks up a static per-`TaskType` step sequence. No LLM call. One known non-determinism: `ExecutionPlan.createdAt` uses `new Date().toISOString()`, so the step sequence is deterministic but the full plan object is not byte-identical across calls. |
-| **Context Loader** | `context-loader.ts` | Assembles `AgentContext` by calling the four provider interfaces according to which step kinds appear in the plan. Tracks explicit `gaps[]` for missing/failed data — mirrors Signal Engine's "state the gap, don't hide it" philosophy. Known behavior: an empty-but-successful provider result (e.g. empty `knowledge_graph_nodes`) does **not** currently produce a gap entry — only thrown errors do. `LOAD_MEMORY` is the one step that explicitly flags emptiness as a gap regardless of error status. |
-| **Providers** | `mock-providers.ts`, `supabase-providers.ts` | Satisfy `ObservationProvider`, `SignalProvider`, `GraphProvider`, `MemoryProvider`. Supabase providers fail closed — an explicit thrown error (not empty/fake data) when `NEXT_PUBLIC_SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` is missing. |
-| **Reasoning Engine** | `reasoning-engine.ts` (Mock), `groq-reasoning-engine.ts` (production) | Both satisfy the same `ReasoningEngine` interface (single method: `reason(input): Promise<ReasoningResult>`). Groq implementation uses the shared `agentCompleteJSON` abstraction with the pre-existing `'analyzer'` model role — no new `AgentRole` was added. |
-| **Execution** | `execution.ts` + `execution-tools.ts` | Dispatches plan steps through the Safety Layer and `ExecutionToolRegistry`. Contains no business logic of its own beyond safety-checking, tool resolution, and timing — report-formatting logic lives in `ReportExecutionTool`, not in `Execution` itself. |
-| **Reflection** | `reflection.ts` | Deterministic post-run self-assessment derived from `ExecutionResult`: `success`, `failure` reason, `confidence` (taken from the reasoning result), `durationMs`, `lessons[]`, `nextActions[]`. Confirmed to perform no state mutation and no writes — read-only analysis of the just-completed execution. |
-| **Report Generation** | `ReportExecutionTool` (in `execution-tools.ts`) | Formats the prior `REASON` step's output into `{ reportGenerated: boolean, summary: string }`. Does not persist anything — the "report" exists only within the returned `AgentRunResult`, not as a stored artifact. |
+| Task | `types.ts` | `id, type, query, parameters, requestedBy, createdAt` |
+| Planner | `planner.ts`+`task-router.ts` | Deterministic step-sequence lookup by TaskType. `ExecutionPlan.createdAt` is the one non-deterministic field. |
+| Context Loader | `context-loader.ts` | Assembles AgentContext via 4 provider interfaces. Empty-but-successful results not flagged as gaps except LOAD_MEMORY. |
+| Providers | `mock-providers.ts`, `supabase-providers.ts` | Satisfy ObservationProvider/SignalProvider/GraphProvider/MemoryProvider. Supabase providers fail closed on missing credentials. |
+| Reasoning Engine | `reasoning-engine.ts`(Mock), `groq-reasoning-engine.ts`(prod) | Single-method interface; Groq impl reuses `agentCompleteJSON` + `'analyzer'` role. |
+| Execution | `execution.ts`+`execution-tools.ts` | Dispatch via Safety+Registry. No business logic beyond dispatch/safety/timing. |
+| Reflection | `reflection.ts` | Deterministic self-assessment, read-only. |
+| Report Generation | `ReportExecutionTool` | Formats reasoning output; not persisted. |
 
-Safety Layer (`safety.ts`): deny-by-default for all write actions (`WRITE_MEMORY`, `WRITE_GRAPH`, `WRITE_SIGNAL`), read actions allowed by default, explicit allow-list required to enable any write. A previously-identified bypass (an unmapped step kind silently defaulting to `{allowed: true}`) was fixed — `STEP_TO_ACTION` is now a compiler-enforced total mapping, and `ExecutionToolRegistry.getTool()` throws `UnknownExecutionStepKind` for any unregistered kind, providing two independent fail-closed layers.
-
----
-
-## 5. End-to-End Pipeline — Verified Production Flow
-
-The following flow was executed for real on `https://aiscentra.com/api/agent?q=Investigate%20OpenAI` on July 29, 2026, and the complete JSON response was inspected.
-
-```
-HTTP Request                    ✅ OPERATIONAL — real GET request executed
-      ↓
-API Route                       ✅ OPERATIONAL — src/app/api/agent/route.ts
-      ↓
-AgentRuntime.run()               ✅ OPERATIONAL — returned complete AgentRunResult
-      ↓
-Planning                        ✅ OPERATIONAL — routed to INVESTIGATION, 6-step plan
-      ↓
-Context Loading                 ✅ OPERATIONAL — assembled AgentContext with real gaps tracking
-      ↓
-Observations                    ✅ OPERATIONAL, REAL DATA — 20 real arXiv observations returned
-      ↓
-Signals                         ✅ OPERATIONAL, REAL DATA — 15 real ACTIVE signals returned
-      ↓
-Knowledge Graph                 ⚠️ OPERATIONAL BUT EMPTY — query succeeds, returns 0 nodes
-                                    (knowledge_graph_nodes / intelligence_graph tables contain
-                                    no rows in production as of this writing)
-      ↓
-Strategic Memory                ⚠️ OPERATIONAL BUT EMPTY BY DESIGN — strategic_memory table
-                                    does not exist yet (Phase 2); provider returns [] intentionally,
-                                    matching documented Mock behavior
-      ↓
-Groq Reasoning                  ✅ OPERATIONAL — real Groq call confirmed (2124ms network latency
-                                    observed on the REASON step), returned structured summary,
-                                    3 claims (1 GAP, 2 INFERENCE), confidence 6
-      ↓
-Reflection                      ✅ OPERATIONAL — success:true, confidence:6, 1 lesson, 2 next actions
-      ↓
-Execution Result                ✅ OPERATIONAL — complete, all 6 steps recorded with durations
-      ↓
-HTTP Response                   ✅ OPERATIONAL — full JSON returned to client
-```
-
-**Honest note on reasoning quality observed in this test:** the model correctly identified that none of the loaded observations/signals directly mentioned "OpenAI" and tagged this as a `GAP` with `confidence: 0`, rather than fabricating a connection. This is the intended epistemic behavior, not a defect.
+Safety: deny-by-default writes, two independent fail-closed layers (total `STEP_TO_ACTION` mapping + `ExecutionToolRegistry` throw).
 
 ---
 
-## 6. Current Capabilities (Confirmed Working)
+## 5. API Surface (Complete)
 
-- **Signal Engine V2** — full 6-stage pipeline (hard rejection → category/dedup → SIS evaluation → enrichment → validation/scoring → publish), Feature Freeze active, Decision Log with full audit trail (`rule_trace` + `engine_justification`).
-- **Agent Runtime** — full pipeline compiles, passes strict TypeScript checks in isolation, and has been verified end-to-end via real production HTTP execution (Section 5).
-- **HTTP API** — `GET /api/agent?q=<query>` is live in production and returns real `AgentRunResult` objects.
-- **Context Loading** — assembles real Observatory data (observations + signals confirmed with live row counts); tracks gaps explicitly.
-- **Supabase Providers** — `SupabaseObservationProvider`, `SupabaseSignalProvider` confirmed returning real rows; `SupabaseGraphProvider` confirmed correctly returning empty results (not errors) against currently-empty graph tables; entity resolution via `entity_registry` confirmed against 15 seeded canonical entities.
-- **Groq Integration** — shared across Signal Engine and Agent Runtime; confirmed live in both systems (Signal Engine via `agentCompleteJSON`, Agent Runtime via `GroqReasoningEngine` in the same production test).
-- **Reflection** — confirmed producing accurate, evidence-based self-assessment in the live test (correctly flagged the 2 gaps present in that run).
-- **Report Generation** — confirmed producing a report-shaped object from the reasoning summary in the live test.
-- **Observatory Assistant** — RAG-based chat interface over Signal data (separate from Agent Runtime), category-aware retrieval, epistemic tagging ([SIGNAL]/[INFERENCE]/[GAP]).
-- **Signal Feed, Events, Reports pages** — public-facing Next.js pages reading from Signal Engine tables.
-
----
-
-## 7. Current Limitations (Verified)
-
-- **Knowledge Graph currently contains no production data.** `knowledge_graph_nodes` and `intelligence_graph` both returned 0 rows on direct SQL inspection (July 29, 2026). `GraphProvider`'s node/edge methods are functionally correct but will return empty results for any query until Signal Engine's graph-ingestion path is actually populating this data at scale.
-- **Strategic Memory is planned for Phase 2.** No `strategic_memory` table exists. `SupabaseMemoryProvider` returns `[]` for reads (matching Mock behavior) and throws explicitly on write attempts, rather than silently discarding data.
-- **Entity coverage is limited by current Observatory ingestion.** `entity_registry` (Signal Engine V2's canonical entity table) contains 15 seeded entities (OpenAI, Anthropic, Google DeepMind, etc.) as of this writing. The separate `entities` table (used by `SignalProvider.getByEntity()` for resolving `signals.entity_ids`) contains a larger but organically-grown set (80 rows observed) that is not the same canonical source as `entity_registry` — **these are two distinct entity tables serving two distinct providers**, a known structural detail rather than a bug (documented in the Phase-Runtime-Integration audit).
-- **Reasoning quality depends on available evidence.** Confirmed directly in the live test: when the query subject ("OpenAI") is not represented in the loaded observations/signals, the model correctly reports a gap rather than fabricating relevance — this is by design, but it means query results are only as good as current Observatory coverage of that topic.
-- **Agent Runtime is not deployed as a standalone Supabase Edge Function.** The directory `supabase/functions/intelligence-agent/` has no `supabase/config.toml` registration and is not deployed via Supabase's Edge Functions infrastructure. It is reachable in production **only** through the Next.js API route (`/api/agent`), which imports it directly into the Vercel-deployed application bundle.
-- **`next.config.ts` currently sets `typescript.ignoreBuildErrors: true`.** This was required to ship the `/api/agent` route without modifying Runtime files, because importing `buildProductionRuntime()` pulls `execution.ts` into Next.js's full type-check graph (TypeScript checks imported files regardless of `tsconfig.json`'s `exclude`), which surfaces one pre-existing unused-field warning in `execution.ts` under this project's `noUnusedLocals: true` setting. This is a project-wide, disclosed trade-off — see Technical Debt (Section 11) for the specific remediation.
-- **Signal Engine V2 Statistical Acceptance is not yet complete.** Per `SIGNAL_ENGINE_V2_ACCEPTANCE.md`, Functional and Audit Acceptance have passed; Statistical Acceptance (Precision/Recall/FP/FN against a human-labeled reference set of 500–1000 observations) is still pending.
-
----
-
-## 8. Production Validation
-
-| Validation | Method | Confirmed via real production execution? |
+### Agent Runtime
+| Endpoint | Method | Status |
 |---|---|---|
-| Runtime compilation | `tsc --noEmit --strict` against all Agent Runtime files | Yes — clean compile confirmed repeatedly across phases |
-| Provider validation (query correctness) | Direct SQL execution against live Supabase tables, compared field-by-field against provider query shapes | Yes — `observations`, `signals`, `entity_registry` confirmed with real row data |
-| HTTP Integration | `GET /api/agent?q=Investigate%20OpenAI` on `aiscentra.com` | **Yes — real HTTP request, real response, full JSON inspected** |
-| End-to-End execution | Same request as above | **Yes** — all 6 pipeline steps (`LOAD_OBSERVATIONS`, `LOAD_SIGNALS`, `LOAD_GRAPH`, `LOAD_MEMORY`, `REASON`, `GENERATE_REPORT`) completed with recorded `success: true` and per-step `durationMs` |
-| Groq reasoning | Same request | **Yes** — 2124ms network latency on the REASON step is direct evidence of a real outbound LLM call, not a mocked/instant response |
-| Reflection | Same request | **Yes** — `reflection.success: true`, accurate gap count, plausible confidence score derived from real claim data |
+| `/api/agent` | GET | Live, **no authentication** |
 
-**This is the first Agent Runtime phase where "production validation" means a real, externally-observable HTTP round-trip rather than isolated unit-level code inspection.** Earlier phases (11, 12, 13, Runtime Integration) validated compilation, interface conformance, and query correctness in isolation, but explicitly could not confirm a live end-to-end HTTP cycle due to the absence of a callable endpoint at that time — a gap that is now closed.
+### Signal Engine — Pipeline
+| Endpoint | Method | Status |
+|---|---|---|
+| `/api/collect` | POST | Live; invoked by pipeline |
+| `/api/enrich` | POST | Live; manual |
+| `/api/enrich/batch` | POST | Live; invoked by pipeline |
+| `/api/cron/pipeline` | GET | **Only cron registered in vercel.json**, daily 10:00 UTC |
+| `/api/cron/collect` | GET | Code exists, **NOT scheduled** — stale "every 4h" comment |
+| `/api/cron/enrich` | GET | Code exists, **NOT scheduled** — stale comment |
+| `/api/cron/events` | GET | Sub-call from pipeline only |
+| `/api/cron/momentum` | GET | **Dead from scheduling standpoint** — stale "daily 02:00" comment, not in vercel.json, not called by pipeline |
+| `/api/cron/reports` | GET | Sub-call from pipeline only |
+
+### Signal Engine — Admin
+| Endpoint | Method | Status |
+|---|---|---|
+| `/api/admin/simulate-engine-v2` | GET | Live, public |
+| `/api/events/promote` | POST | Live |
+| `/api/reports/generate` | POST | Live |
+| `/api/health` | GET | Live, public |
+
+### Observatory
+| Endpoint | Method | Status |
+|---|---|---|
+| `/api/assistant` | POST | Live, streaming SSE |
+
+---
+
+## 6. Configuration
+
+### Environment Variables (names only)
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GROQ_API_KEY`, `CRON_SECRET`, `ADMIN_EMAIL`, `OPENROUTER_API_KEY`(reserved, inactive), `OPENROUTER_MODEL`(reserved, inactive).
+
+`/api/agent` has no dedicated auth variable.
+
+### Production Services
+Vercel (hosting + single daily cron, 60s timeout), Supabase (Postgres, two client paths), Groq (sole LLM).
+
+### Deployment
+```
+GitHub main → Vercel Build (Turbopack) → Production
+  ├─ serves all HTTP traffic incl. /api/agent
+  └─ runs /api/cron/pipeline daily 10:00 UTC → fires collect/enrich-batch/events/reports
+```
+Agent Runtime ships inside the same build — not a separate service.
+
+---
+
+## 7. Failure Modes
+
+| Scenario | Behavior |
+|---|---|
+| Knowledge Graph empty | Returns `[]`, no error, **not flagged as gap** |
+| Strategic Memory missing | Returns `[]` by design; write() throws explicitly; **is flagged as gap** |
+| Entities not found | Returns `[]`, not flagged as gap |
+| Provider failure | Caught, logged, appended to gaps; other providers unaffected |
+| Groq failure | Retries via existing backoff, then throws; REASON step fails; overall success:false; Reflection reports specific failure |
+| DB credentials missing | Explicit thrown error, confirmed by test |
+| Unknown step kind | `UnknownExecutionStepKind` thrown, caught, recorded as failure |
+| Unauthorized write | Denied by default unless explicitly allow-listed |
+
+---
+
+## 8. State Matrix
+
+| Component | Exists | Production | Verified | Notes |
+|---|---|---|---|---|
+| Signal Engine V2 | Yes | Yes | Yes | Feature Freeze |
+| `signal_decision_log` | Yes | Yes | Yes | Full audit trail |
+| `entity_registry` | Yes | Yes | Yes | 15 seeded entities |
+| `entities` | Yes | Yes | Yes | 80 rows, distinct table |
+| `knowledge_graph_nodes` | Yes(schema) | Yes(empty) | Yes | 0 rows |
+| `intelligence_graph` | Yes(schema) | Yes(empty) | Yes | 0 rows |
+| `strategic_memory` | **No** | No | N/A | Phase 2 |
+| Planner/ContextLoader | Yes | Yes | Yes | |
+| ObservationProvider/SignalProvider (Supabase) | Yes | Yes | Yes | Real rows confirmed live |
+| GraphProvider (Supabase) | Yes | Yes | Yes | Correctly empty, not erroring |
+| MemoryProvider (Supabase) | Yes | Yes | Yes | `[]` + write-throw confirmed |
+| GroqReasoningEngine | Yes | Yes | Yes | 2124ms real latency observed |
+| Execution/Safety/Registry | Yes | Yes | Yes | Fail-closed confirmed |
+| Reflection | Yes | Yes | Yes | Confirmed accurate |
+| `/api/agent` | Yes | Yes | Yes | Real HTTP round-trip 2026-07-29 |
+| `/api/agent` auth | **No** | No | N/A | High debt |
+| Edge Function deployment | **No** | No | N/A | Bundled into Next.js instead |
+| `/api/cron/pipeline` | Yes | Yes, daily | Yes | Only registered cron |
+| Other cron schedules | Code only | **No** | N/A | Stale comments |
+| Multi-Agent/Auth/Quotas/Billing/Teams | No | No | N/A | Undesigned |
 
 ---
 
 ## 9. Development Principles
 
-- **Evidence First** — every Signal and every Agent Runtime claim must trace to specific evidence (an observation ID, a signal ID, a data source); inference is never presented as fact.
-- **No Fabricated Data** — confirmed in practice: when `SUPABASE_SERVICE_ROLE_KEY` is missing, providers throw rather than returning fake/empty-as-if-real data; when Groq's evidence for a topic doesn't exist, the reasoning engine reports a `GAP`, not a plausible-sounding fabrication.
-- **Fail Closed** — Safety Layer denies unknown actions and unregistered execution tools by default; Supabase providers fail explicitly rather than silently degrading.
-- **Dependency Injection** — Agent Runtime's core pipeline modules depend only on interfaces; concrete providers (Mock vs Supabase, Mock vs Groq reasoning) are wired exclusively at the composition root (`index.ts`).
-- **Single Responsibility** — Execution dispatches; individual `ExecutionTool` classes hold step-specific logic; report formatting lives in its own tool, not embedded in the dispatcher.
-- **Type Safety** — `strict: true`, `noUnusedLocals`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` all enabled project-wide; Zod schemas validate every LLM structured output before it enters application logic.
-- **Production Before Optimization** — the priority sequence in recent phases was explicitly: get a real HTTP round-trip working end-to-end before further refining reasoning quality, adding new providers, or expanding the Knowledge Graph.
-- **Observable Execution** — every `ExecutionStepResult` records `success`, `output`, `error`, and `durationMs`; `signal_decision_log` (Signal Engine) and the full `AgentRunResult` (Agent Runtime) make every decision's reasoning path inspectable after the fact.
-- **Explicit Error Handling** — errors are caught, classified, and surfaced (never silently swallowed); the Signal Engine's `rejection_code` taxonomy and Agent Runtime's `UnknownExecutionStepKind` exception are both examples of named, specific failure modes rather than generic catch-alls.
+Evidence First · No Fabricated Data · Fail Closed · Dependency Injection · Single Responsibility · Type Safety (`strict`, `noUnusedLocals`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · Production Before Optimization · Observable Execution (every step records success/output/error/durationMs) · Explicit Error Handling.
 
 ---
 
-## 10. Future Architecture (Not Yet Implemented — Planned)
+## 10. Future Architecture
 
-The following are described at the concept level only. No implementation exists for any of these today.
-
-- **Knowledge Graph Expansion** — populating `knowledge_graph_nodes` and `intelligence_graph` at meaningful scale so `GraphProvider` returns non-empty, useful results for Agent Runtime investigations.
-- **Strategic Memory** — the `strategic_memory` table and associated read/write logic, explicitly deferred as "Phase 2" throughout Signal Engine V2's design documents.
-- **Multi-Agent Collaboration** — no architecture exists yet for multiple Agent Runtime instances or task types to collaborate or hand off work to one another.
-- **User Workspace** — no per-user Agent Runtime task history, saved investigations, or personalization layer exists.
-- **Authentication** — Agent Runtime's `/api/agent` endpoint currently has no authentication/authorization gate of its own (unlike some Signal Engine admin endpoints, which use `CRON_SECRET`).
-- **Quotas** — no rate-limiting or usage-quota system exists for Agent Runtime invocations; each request currently triggers a real, unmetered Groq call.
-- **Billing** — no monetization layer touches Agent Runtime or Signal Engine at this time.
-- **Team Workspaces** — no multi-user/organization concept exists anywhere in the current codebase.
+| Subsystem | Why | Problem solved | Dependency first |
+|---|---|---|---|
+| Knowledge Graph Expansion | Tables empty | Entity-aware investigations | Signal Engine ingestion at scale |
+| Strategic Memory | No cross-investigation memory | Avoid "forgetting" | Schema + migration |
+| Multi-Agent Collaboration | No hand-off architecture | Decompose complex queries | Stable single-agent + orchestration layer |
+| User Workspace | No saved-investigation concept | Return to prior results | Authentication |
+| Authentication | No identity layer | Enables usage-based features | None — first dependency |
+| Quotas | No rate-limiting | Cost/abuse control | Authentication |
+| Billing | No monetization | Revenue | Quotas + Auth |
+| Team Workspaces | No org concept | Shared access | User Workspace + Auth |
 
 ---
 
 ## 11. Technical Debt
 
-### High Priority
+**High:** `ignoreBuildErrors:true` project-wide (fix: remove dead field in execution.ts, revert flag) · `/api/agent` no auth/rate-limit · 3 cron routes with stale schedule comments · Signal Engine Statistical Acceptance incomplete.
 
-- **`next.config.ts` sets `typescript.ignoreBuildErrors: true` project-wide.** This suppresses ALL TypeScript build-time errors across the entire application, not just the one known issue in `execution.ts`. Remediation: remove the single unused-field assignment in `execution.ts` (`this.reasoningEngine`, which is written in the constructor but never subsequently read via `this.`) and revert the config flag. This was explicitly deferred because the phase that discovered it prohibited modifying `execution.ts`.
-- **`/api/agent` has no authentication or rate limiting.** Any caller can trigger a real, billed Groq API call by hitting this URL. This is acceptable for internal validation but must be addressed before any public exposure.
-- **Signal Engine V2 Statistical Acceptance is incomplete.** Per `SIGNAL_ENGINE_V2_ACCEPTANCE.md`, the engine is Feature-Frozen but not yet "Certified" — Precision/Recall/False-Positive/False-Negative metrics against a labeled reference set have not been computed.
+**Medium:** Two entity tables unreconciled · Agent Runtime directory naming implies Deno deployment that doesn't exist · Context Loader doesn't flag empty-successful results as gaps (except LOAD_MEMORY) · Two independent Supabase client paths.
 
-### Medium Priority
-
-- **Two distinct "entity" tables (`entities` and `entity_registry`) serve two different Agent Runtime providers** (`SignalProvider` and `GraphProvider` respectively) without a unifying reconciliation layer. This is a known structural artifact, not yet a blocking bug, but risks confusion as both tables grow independently.
-- **Agent Runtime's directory name and internal comments still reference "Deno Edge Function" deployment**, which is not how the code is actually deployed (it is bundled into the Next.js/Vercel application instead). Documentation and possibly directory structure should eventually be reconciled with actual deployment reality.
-- **Context Loader does not flag empty-but-successful provider results as gaps** (only thrown errors produce a gap entry, except for the special-cased `LOAD_MEMORY` check). This means a genuinely empty Knowledge Graph is currently invisible in `context.gaps` — a user reading only the gaps list would not know graph data was attempted and came back empty.
-
-### Low Priority
-
-- **`ExecutionPlan.createdAt` is non-deterministic** (uses `new Date().toISOString()`), meaning two calls to `createExecutionPlan()` with the same input do not produce byte-identical output, despite the step sequence itself being fully deterministic. Documented in `AGENT_PLANNER.md`, not currently causing any functional issue.
-- **`ClaimType` includes `HYPOTHESIS`, which no current `ReasoningEngine` implementation produces.** Reserved for a future reasoning engine capable of genuine speculative synthesis; documented as intentionally unused for now in `AGENT_REASONING.md`.
+**Low:** `ExecutionPlan.createdAt` non-deterministic · `HYPOTHESIS` claim type unused by any engine.
 
 ---
 
 ## 12. Development Roadmap
 
-The following order reflects logical dependency, not committed timelines:
-
-1. **Knowledge Graph Expansion** — populate `knowledge_graph_nodes`/`intelligence_graph` so `GraphProvider` becomes substantively useful, not just correctly-empty.
-2. **Strategic Memory** — implement the `strategic_memory` table and wire `SupabaseMemoryProvider`'s read/write paths for real.
-3. **Observatory Expansion** — broaden Signal Engine's source ingestion so the Observatory (and by extension, Agent Runtime's evidence base) covers more of the topics users will actually query about.
-4. **Web UI Integration** — expose Agent Runtime task submission and result viewing through the Observatory's own frontend, rather than requiring direct API calls.
-5. **Authentication** — gate `/api/agent` (and any future Agent Runtime endpoints) behind real user identity.
-6. **Plans & Quotas** — introduce usage limits tied to authenticated identity before any public-facing exposure of Agent Runtime.
-7. **Billing** — monetization layer, contingent on the above being in place.
-8. **Beta Release** — controlled external access.
-9. **Production Release** — general availability.
+1. Knowledge Graph Expansion 2. Strategic Memory 3. Observatory Expansion 4. Web UI Integration 5. Authentication 6. Plans & Quotas 7. Billing 8. Beta Release 9. Production Release
 
 ---
 
@@ -275,16 +249,24 @@ The following order reflects logical dependency, not committed timelines:
 
 | Decision | Reason | Impact | Date |
 |---|---|---|---|
-| Signal Engine V2 pipeline redesigned around deterministic Qualification Gate + LLM-scored Strategic Importance Score (4 independent dimensions: Novelty, Importance, Urgency, Confidence) | Prior engine treated too many "good papers" as Signals; needed to separate strategic importance from paper quality | Signal volume dropped sharply, Signal quality (per manual review) improved | 2026-07-28 |
-| Weak Signals stored in `signals` table via `intelligence_type` column, not a separate table | Simpler schema, avoids duplicating signal-shaped data across two tables | All signal queries filter by `intelligence_type` rather than joining a second table | 2026-07-28 |
-| Human Relevance changed from a hard gate to a modifier on `sis_final` | A hard gate discarded high-importance signals purely for lacking an identifiable "who acts on this" role, contradicting the Strategic Importance principle that importance should dominate | Signals with very high SIS but zero human-relevance roles now demote to Weak Signal instead of being discarded outright | 2026-07-28 |
-| Survey/Tutorial/Review novelty cap and Normal-Science importance cap implemented as deterministic code rules reading structured LLM fields (`is_normal_science`, `event_type`), not by parsing free-text `engine_justification` | Parsing the model's own explanation text as a decision input created circular logic; `engine_justification` is meant to be a human-readable output, not machine-readable input | Decision logic is now fully auditable via `rule_trace`, independent of prose wording | 2026-07-28 |
-| Publication type classification (Survey/Benchmark/etc.) moved fully into deterministic Engine code, not requested from the LLM | LLM self-classification of format type created a new, unnecessary model dependency for something regex/title-based classification can do reliably | `publication-classifier.ts` created; LLM now only analyzes content, never classifies format | 2026-07-28 |
-| Signal Engine V2 declared "Feature Freeze" (not "fully certified") pending Statistical Acceptance | Avoids overstating readiness before Precision/Recall metrics exist against a labeled reference set | Any further change to thresholds/weights/patterns now requires a version bump (v2.1, v2.2, etc.) rather than silent in-place editing | 2026-07-28 |
-| Agent Runtime built with full Dependency Inversion from Phase 11 onward — Planner/Execution/Reflection/Safety/ContextLoader depend only on interfaces | Enables Mock and Production runtimes to coexist without duplicating pipeline logic, and allows swapping ReasoningEngine or any Provider without touching pipeline code | `buildMockRuntime()` and `buildProductionRuntime()` share 100% of pipeline code, differing only in injected concrete classes | 2026-07-28/29 |
-| Execution.ts's step dispatch refactored from `switch(step.kind)` to an `ExecutionToolRegistry` with one `ExecutionTool` class per step kind | A hardcoded switch violated Open/Closed Principle and, more critically, a missing `STEP_TO_ACTION` entry silently defaulted to `{allowed: true}` — a fail-open Safety bypass (Critical audit finding) | Two independent fail-closed layers now exist (Safety's unknown-action denial, Registry's `UnknownExecutionStepKind` throw); adding a new step kind requires a new Tool class, never editing `Execution.run()` | 2026-07-29 |
-| Deterministic rules (novelty/importance caps, event-type promotion) read structured LLM output fields, never `engine_justification` prose | Same circular-logic concern as the Signal Engine decision above, applied consistently to Agent Runtime's own SIS-adjacent logic where relevant | N/A directly to Agent Runtime (this principle originated in Signal Engine V2 but is treated as a project-wide standard) | 2026-07-28 |
-| GroqReasoningEngine implemented using the existing `agentCompleteJSON` abstraction and the pre-existing `'analyzer'` model role, rather than a new HTTP client or new model role | Explicit instruction to reuse existing AI abstraction; avoids duplicating retry/backoff/TPM-budget logic already proven in Signal Engine | Zero changes to `src/lib/ai/models.ts`; Groq remains the single LLM provider across both engines | 2026-07-29 |
-| Real Supabase-backed providers (`SupabaseObservationProvider`, etc.) implemented using `@supabase/supabase-js` directly rather than the Next.js-specific `src/lib/supabase/server.ts` | The Next.js client depends on `next/headers`, which is unusable from the Agent Runtime's originally-Deno-oriented directory | Supabase client is lazily constructed per-provider-call using plain env vars, matching the lazy-init pattern already used in `src/lib/ai/*` | 2026-07-29 |
-| `next.config.ts` set to `typescript.ignoreBuildErrors: true` to ship `/api/agent` without modifying any Runtime file | Importing `buildProductionRuntime()` pulls `execution.ts` into Next.js's full type-check graph regardless of `tsconfig.json`'s `exclude`, surfacing one pre-existing unused-field warning under `noUnusedLocals: true`; the phase explicitly forbade editing Runtime files | Whole-project TypeScript build-error gate is currently disabled — logged as High Priority technical debt (Section 11) pending a future phase authorized to make the one-line dead-code removal in `execution.ts` | 2026-07-29 |
-| `/api/agent` implemented as a GET endpoint (not POST) with a `q` query parameter | Matches the existing precedent of `/api/admin/simulate-engine-v2`, allowing direct browser/curl invocation without a request body for on-demand testing | Endpoint is trivially callable but currently has no authentication — logged as High Priority technical debt | 2026-07-29 |
+| SIS 4-dimension redesign | Too many "good papers" = Signals | Volume dropped, quality up | 2026-07-28 |
+| Weak Signals via `intelligence_type` column | Simpler schema | Single-table queries | 2026-07-28 |
+| Human Relevance: gate→modifier | Hard gate discarded high-SIS signals unfairly | High-SIS/zero-role → Weak not Discard | 2026-07-28 |
+| Caps read structured fields not `engine_justification` prose | Circular logic risk | Auditable via `rule_trace` | 2026-07-28 |
+| Publication classification → deterministic code | Unneeded LLM dependency | LLM only analyzes content | 2026-07-28 |
+| "Feature Freeze" not "Certified" | Avoid overstating readiness | Changes require version bump | 2026-07-28 |
+| Agent Runtime full Dependency Inversion | Mock/Prod coexistence | 100% shared pipeline code | 2026-07-28/29 |
+| `switch`→`ExecutionToolRegistry` | Missing mapping = silent Safety bypass (Critical) | Two independent fail-closed layers | 2026-07-29 |
+| GroqReasoningEngine reuses `agentCompleteJSON`+`'analyzer'` | Avoid new client/role | Zero changes to models.ts | 2026-07-29 |
+| Supabase providers use `@supabase/supabase-js` directly | Next.js client unusable here | Two client paths (Medium debt) | 2026-07-29 |
+| `ignoreBuildErrors:true` | Runtime files forbidden to edit | Build gate disabled (High debt) | 2026-07-29 |
+| `/api/agent` as GET+`q` param | Matches simulate-engine-v2 precedent | No auth yet (High debt) | 2026-07-29 |
+
+---
+
+## 14. Documentation Quality Self-Review
+
+**Resolved:** Runtime lifecycle expanded to full 8-step narrative · dependency direction + two-client-paths made explicit.
+**Assumptions removed:** all cron routes assumed scheduled (false — only pipeline is) · Context Loader gap-tracking assumed complete (false — errors only, not empty successes).
+**Added:** full API table (15 endpoints) · Configuration section · behavioral Failure Modes · single-table State Matrix.
+**Remaining gaps:** no load-testing docs · no migration-rollback process documented · Observatory Assistant's own retrieval architecture under-detailed · no Agent Runtime versioning scheme (Signal Engine has one, Agent Runtime doesn't).
