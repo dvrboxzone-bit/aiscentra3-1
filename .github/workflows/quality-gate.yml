@@ -67,19 +67,63 @@ jobs:
 
       - name: Dependency audit evidence (production only) — evidence only, not a gate
         if: always()
-        run: npm audit --omit=dev --json > audit-production.json || true
-        # NOTE: `|| true` here applies ONLY to this evidence-collection step,
-        # not to any quality gate step above. npm audit exits non-zero when
-        # vulnerabilities are found (expected, already-known, tracked
-        # separately) — this step's purpose is solely to produce the JSON
-        # artifact for review, not to pass/fail the build. This is the one
-        # explicitly-authorized exception per this task's own instructions
-        # ("audit exit codes захватить явно... audit step не называть
-        # Security Gate"), and is disclosed here, not hidden.
+        # No blanket `|| true`. npm audit's own non-zero exit code (caused
+        # by known, already-tracked vulnerabilities) is captured explicitly
+        # and surfaced as evidence, NOT swallowed. This step only tolerates
+        # that specific, expected non-zero exit -- it still fails the
+        # workflow on a genuine operational failure (network error,
+        # malformed JSON, a top-level `error` field, or missing `metadata`),
+        # since those indicate the audit did not actually run, which must
+        # not be silently treated as "no vulnerabilities found".
+        run: |
+          set +e
+          npm audit --omit=dev --json > audit-production.json
+          AUDIT_EXIT=$?
+          set -e
+
+          node <<'NODE'
+          const fs = require('fs')
+          const value = JSON.parse(fs.readFileSync('audit-production.json', 'utf8'))
+
+          if (value.error) {
+            console.error('npm audit returned an operational error:')
+            console.error(JSON.stringify(value.error, null, 2))
+            process.exit(1)
+          }
+
+          if (!value.metadata) {
+            console.error('npm audit JSON does not contain metadata')
+            process.exit(1)
+          }
+          NODE
+
+          echo "npm audit --omit=dev exit code: ${AUDIT_EXIT}"
 
       - name: Dependency audit evidence (full) — evidence only, not a gate
         if: always()
-        run: npm audit --json > audit-full.json || true
+        run: |
+          set +e
+          npm audit --json > audit-full.json
+          AUDIT_EXIT=$?
+          set -e
+
+          node <<'NODE'
+          const fs = require('fs')
+          const value = JSON.parse(fs.readFileSync('audit-full.json', 'utf8'))
+
+          if (value.error) {
+            console.error('npm audit returned an operational error:')
+            console.error(JSON.stringify(value.error, null, 2))
+            process.exit(1)
+          }
+
+          if (!value.metadata) {
+            console.error('npm audit JSON does not contain metadata')
+            process.exit(1)
+          }
+          NODE
+
+          echo "npm audit exit code: ${AUDIT_EXIT}"
 
       - name: Upload quality logs
         if: always()
