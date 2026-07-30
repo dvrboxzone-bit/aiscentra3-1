@@ -6,20 +6,35 @@
 # files match the given glob — this would make "no tests" indistinguishable
 # from "all tests passed", which is an explicitly forbidden outcome for
 # this Quality Gate. This wrapper verifies at least one *.test.ts file
-# actually exists and was passed to node --test before running, and
+# actually exists (across an explicit allow-list of test directories, not
+# a repo-wide glob) and was passed to node --test before running, and
 # additionally parses the TAP summary to confirm `# tests` count is > 0
 # after the run, failing loudly if either check comes up empty.
 # ============================================================
 
 set -Eeuo pipefail
 
-TEST_GLOB_DIR="supabase/functions/intelligence-agent/__tests__"
+# Allowed test directories. Each new test area added to the project should
+# be listed here explicitly — this is a deliberate allow-list, not a
+# repo-wide glob, so an unrelated *.test.ts file accidentally created
+# somewhere else in the tree does not silently get skipped OR silently
+# get picked up without review of this list.
+TEST_DIRS=(
+  "supabase/functions/intelligence-agent/__tests__"
+  "src/lib/security/__tests__"
+)
 
-# eslint-disable-next-line -- not JS, bash: find test files explicitly
-mapfile -t TEST_FILES < <(find "$TEST_GLOB_DIR" -name '*.test.ts' -type f 2>/dev/null)
+TEST_FILES=()
+for dir in "${TEST_DIRS[@]}"; do
+  if [[ -d "$dir" ]]; then
+    while IFS= read -r -d '' f; do
+      TEST_FILES+=("$f")
+    done < <(find "$dir" -name '*.test.ts' -type f -print0 2>/dev/null)
+  fi
+done
 
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
-  echo "FATAL: zero test files found under $TEST_GLOB_DIR. Zero-test success is forbidden — failing explicitly."
+  echo "FATAL: zero test files found under any of: ${TEST_DIRS[*]}. Zero-test success is forbidden — failing explicitly."
   exit 1
 fi
 

@@ -1,19 +1,41 @@
 /**
- * AIscentra — Observatory Assistant API
+ * AIscentra — Observatory Assistant API (Phase 1A: Emergency API Containment)
  *
  * POST /api/assistant
  * Body: { message: string, history?: { role: string, content: string }[] }
  *
  * Returns: streaming text response (Server-Sent Events)
  *
- * Pattern:
+ * ACCESS: production access is fully disabled pending authenticated
+ * sessions and quotas (a full user-auth system is explicitly out of scope
+ * for this containment phase). The route returns a safe 503 before any
+ * Observatory retrieval or Groq call — no Supabase query and no outbound
+ * AI request happens when access is denied. "preview-only" mode is only
+ * honored in a recognized non-production environment (production always
+ * forces disabled regardless of configuration).
+ *
+ * `retrieveContext` (src/modules/assistant/retrieval.ts) transitively
+ * imports src/lib/supabase/server.ts, which in turn imports
+ * src/config/env.ts — whose top-level `export const env = {...}` block
+ * eagerly throws if NEXT_PUBLIC_SUPABASE_URL is missing, merely by being
+ * imported. To ensure a disabled/denied request never triggers that (or
+ * any real Supabase/Groq call), retrieval and prompt-building are loaded
+ * via deps.loadRetrieval() ONLY after the access guard has already passed.
+ *
+ * DEPENDENCY INJECTION: createAssistantPostHandler(deps) is a factory, not
+ * a global-state route. Production wiring (POST, exported below) injects
+ * real lazy-loading dependencies and the real fetch(). Tests inject fakes
+ * with local counters and a stubbed streaming Response — no real network
+ * call, no test state living inside this module as a mutable export.
+ *
+ * Pattern (once access is allowed):
  * 1. Retrieve relevant context from Observatory (RAG)
  * 2. Build grounded prompt with context
- * 3. Stream response from OpenRouter
+ * 3. Stream response from Groq
  * 4. Never answer from general AI knowledge
  */
-import { retrieveContext, formatContextForPrompt } from '@/modules/assistant/retrieval'
-import { ASSISTANT_SYSTEM_PROMPT } from '@/modules/assistant/prompt'
+import { checkPublicAssistantAccess } from '@/lib/security/api-access'
+import type { RetrievedContext } from '@/modules/assistant/retrieval'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30 // Assistant can take longer than pipeline functions
@@ -23,149 +45,202 @@ interface MessageHistory {
   content: string
 }
 
-export async function POST(request: Request): Promise<Response> {
-  let body: { message?: string; history?: MessageHistory[] } = {}
-  try {
-    body = (await request.json()) as typeof body
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string }
 
-  const userMessage = body.message?.trim()
-  if (!userMessage || userMessage.length < 2) {
-    return new Response(JSON.stringify({ error: 'Message too short' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
+// ── Dependency injection contract ────────────────────────────────────────────
 
-  // 1. Retrieve Observatory context (RAG)
-  const ctx = await retrieveContext(userMessage)
-  const contextText = formatContextForPrompt(ctx)
+export interface RetrievalModule {
+  retrieveContext: (userQuery: string) => Promise<RetrievedContext>
+  formatContextForPrompt: (ctx: RetrievedContext) => string
+  ASSISTANT_SYSTEM_PROMPT: string
+}
 
-  // 2. Build messages — system prompt in correct role
-  type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
-  const messages: Msg[] = [
-    {
-      role: 'system',
-      content: `${ASSISTANT_SYSTEM_PROMPT}\n\n=== OBSERVATORY CONTEXT ===\n${contextText}\n=== END CONTEXT ===`,
-    },
-  ]
-  if (body.history && body.history.length > 0) {
-    const hist = (body.history.slice(-6) as Msg[]).filter(
-      (m) => m.role === 'user' || m.role === 'assistant',
+export interface AssistantDependencies {
+  /** Loads retrieval + prompt modules. In production this transitively imports Supabase — called only after the guard passes. */
+  loadRetrieval: () => Promise<RetrievalModule>
+  /** Performs the Groq chat-completions call. Wrapped so tests can supply a fake streaming Response without any real network call. */
+  fetchGroq: (args: { apiKey: string; model: string; messages: ChatMessage[] }) => Promise<Response>
+  /** Reads the Groq API key. Production reads process.env directly; tests can override to simulate a missing key. */
+  getGroqApiKey: () => string | undefined
+  /** Reads the preferred Groq model. Production reads process.env with a documented fallback. */
+  getGroqModel: () => string
+}
+
+const productionAssistantDependencies: AssistantDependencies = {
+  loadRetrieval: async () => {
+    const { retrieveContext, formatContextForPrompt } = await import(
+      '@/modules/assistant/retrieval'
     )
-    messages.push(...hist)
-  }
-  messages.push({ role: 'user', content: userMessage })
-
-  // 3. Call Groq with streaming (OpenAI-compatible API)
-  const groqApiKey = process.env['GROQ_API_KEY']
-  if (!groqApiKey) {
-    return new Response(JSON.stringify({ error: 'Assistant temporarily unavailable.' }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  const model = process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile'
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${groqApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      max_tokens: 2000,
-      temperature: 0.3,
-      stream: true,
+    const { ASSISTANT_SYSTEM_PROMPT } = await import('@/modules/assistant/prompt')
+    return { retrieveContext, formatContextForPrompt, ASSISTANT_SYSTEM_PROMPT }
+  },
+  fetchGroq: ({ apiKey, model, messages }) =>
+    fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: 2000,
+        temperature: 0.3,
+        stream: true,
+      }),
     }),
-  })
+  getGroqApiKey: () => process.env['GROQ_API_KEY'],
+  getGroqModel: () => process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile',
+}
 
-  if (!response.ok || !response.body) {
-    const error = await response.text()
-    console.error('[assistant] OpenRouter error:', response.status, error)
-    return new Response(
-      JSON.stringify({ error: 'Assistant temporarily unavailable. Please try again.' }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } },
-    )
-  }
+// ── Handler factory ────────────────────────────────────────────────────────────
 
-  // 4. Forward the SSE stream to the client
-  // Transform OpenRouter SSE format to simple text stream
-  const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
+export function createAssistantPostHandler(deps: AssistantDependencies) {
+  return async function POST(request: Request): Promise<Response> {
+    // ── Guard runs before ANY retrieval or Groq call — and before either is
+    //    even imported ───────────────────────────────────────────────────────
+    const guard = checkPublicAssistantAccess()
+    if (!guard.allowed) {
+      console.error(`[api/assistant] ${guard.internalReason}`)
+      return guard.response
+    }
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      // Add context metadata as first chunk
-      const meta = JSON.stringify({
-        type: 'meta',
-        context: {
-          signals: ctx.signals.length,
-          events: ctx.events.length,
-          reports: ctx.reports.length,
-        },
+    // ── Only now, after the guard passed, load retrieval (which transitively
+    //    imports Supabase) ─────────────────────────────────────────────────────
+    const { retrieveContext, formatContextForPrompt, ASSISTANT_SYSTEM_PROMPT } =
+      await deps.loadRetrieval()
+
+    let body: { message?: string; history?: MessageHistory[] } = {}
+    try {
+      body = (await request.json()) as typeof body
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
       })
-      controller.enqueue(encoder.encode(`data: ${meta}\n\n`))
+    }
 
-      const body = response.body
-      if (!body) {
-        throw new Error(
-          'Invariant violated: response.body is null inside the stream start() callback, despite the earlier response.ok/response.body check having passed.',
-        )
-      }
-      const reader = body.getReader()
+    const userMessage = body.message?.trim()
+    if (!userMessage || userMessage.length < 2) {
+      return new Response(JSON.stringify({ error: 'Message too short' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
+    // 1. Retrieve Observatory context (RAG)
+    const ctx = await retrieveContext(userMessage)
+    const contextText = formatContextForPrompt(ctx)
 
-          const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
+    // 2. Build messages — system prompt in correct role
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: `${ASSISTANT_SYSTEM_PROMPT}\n\n=== OBSERVATORY CONTEXT ===\n${contextText}\n=== END CONTEXT ===`,
+      },
+    ]
+    if (body.history && body.history.length > 0) {
+      const hist = (body.history.slice(-6) as ChatMessage[]).filter(
+        (m) => m.role === 'user' || m.role === 'assistant',
+      )
+      messages.push(...hist)
+    }
+    messages.push({ role: 'user', content: userMessage })
 
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            const data = line.slice(6)
-            if (data === '[DONE]') {
-              controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-              continue
-            }
+    // 3. Call Groq with streaming (OpenAI-compatible API)
+    const groqApiKey = deps.getGroqApiKey()
+    if (!groqApiKey) {
+      return new Response(JSON.stringify({ error: 'Assistant temporarily unavailable.' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
 
-            try {
-              const parsed = JSON.parse(data) as {
-                choices: { delta: { content?: string } }[]
+    const model = deps.getGroqModel()
+    const response = await deps.fetchGroq({ apiKey: groqApiKey, model, messages })
+
+    if (!response.ok || !response.body) {
+      const errorText = await response.text()
+      console.error('[assistant] Groq error:', response.status, errorText)
+      return new Response(
+        JSON.stringify({ error: 'Assistant temporarily unavailable. Please try again.' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+
+    // 4. Forward the SSE stream to the client
+    const encoder = new TextEncoder()
+    const decoder = new TextDecoder()
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const meta = JSON.stringify({
+          type: 'meta',
+          context: {
+            signals: ctx.signals.length,
+            events: ctx.events.length,
+            reports: ctx.reports.length,
+          },
+        })
+        controller.enqueue(encoder.encode(`data: ${meta}\n\n`))
+
+        const responseBody = response.body
+        if (!responseBody) {
+          throw new Error(
+            'Invariant violated: response.body is null inside the stream start() callback, despite the earlier response.ok/response.body check having passed.',
+          )
+        }
+        const reader = responseBody.getReader()
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const chunk = decoder.decode(value, { stream: true })
+            const lines = chunk.split('\n')
+
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue
+              const data = line.slice(6)
+              if (data === '[DONE]') {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+                continue
               }
-              const content = parsed.choices[0]?.delta?.content
-              if (content) {
-                const textChunk = JSON.stringify({ type: 'text', content })
-                controller.enqueue(encoder.encode(`data: ${textChunk}\n\n`))
+
+              try {
+                const parsed = JSON.parse(data) as {
+                  choices: { delta: { content?: string } }[]
+                }
+                const content = parsed.choices[0]?.delta?.content
+                if (content) {
+                  const textChunk = JSON.stringify({ type: 'text', content })
+                  controller.enqueue(encoder.encode(`data: ${textChunk}\n\n`))
+                }
+              } catch {
+                // Skip malformed chunks
               }
-            } catch {
-              // Skip malformed chunks
             }
           }
+        } catch (err) {
+          console.error('[assistant] Stream error:', err)
+        } finally {
+          controller.close()
+          reader.releaseLock()
         }
-      } catch (err) {
-        console.error('[assistant] Stream error:', err)
-      } finally {
-        controller.close()
-        reader.releaseLock()
-      }
-    },
-  })
+      },
+    })
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    },
-  })
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  }
 }
+
+// ── Production wiring ────────────────────────────────────────────────────────
+
+export const POST = createAssistantPostHandler(productionAssistantDependencies)
