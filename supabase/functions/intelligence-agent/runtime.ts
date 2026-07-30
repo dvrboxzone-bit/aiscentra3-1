@@ -21,23 +21,23 @@ import type { AgentTask, AgentRunResult } from './types'
 
 export interface AgentRuntimeDeps extends ContextLoaderDeps {
   reasoningEngine: ReasoningEngine
-  safetyProvider:  SafetyProvider
-  logger:          AgentLogger
+  safetyProvider: SafetyProvider
+  logger: AgentLogger
 }
 
 export class AgentRuntime {
   private readonly contextLoader: ContextLoader
-  private readonly execution:     Execution
-  private readonly reflection:    Reflection
-  private readonly logger:        AgentLogger
+  private readonly execution: Execution
+  private readonly reflection: Reflection
+  private readonly logger: AgentLogger
 
-  constructor(private readonly deps: AgentRuntimeDeps) {
+  constructor(deps: AgentRuntimeDeps) {
     this.logger = deps.logger
     this.contextLoader = new ContextLoader(deps)
-    this.execution      = new Execution({
+    this.execution = new Execution({
       reasoningEngine: deps.reasoningEngine,
-      safetyProvider:  deps.safetyProvider,
-      logger:          deps.logger,
+      safetyProvider: deps.safetyProvider,
+      logger: deps.logger,
     })
     this.reflection = new Reflection({ logger: deps.logger })
   }
@@ -47,14 +47,16 @@ export class AgentRuntime {
 
     // ── Planner ─────────────────────────────────────────────────────────────
     const plan = createExecutionPlan(task)
-    this.logger.log('PLANNER', `Plan created for task type ${plan.taskType}`, { steps: plan.steps.length })
+    this.logger.log('PLANNER', `Plan created for task type ${plan.taskType}`, {
+      steps: plan.steps.length,
+    })
 
     // ── Context Loader ────────────────────────────────────────────────────────
     const context = await this.contextLoader.load(task, plan)
     this.logger.log('CONTEXT_LOADER', 'Context assembled', {
       observations: context.observations.length,
-      signals:      context.signals.length,
-      gaps:         context.gaps.length,
+      signals: context.signals.length,
+      gaps: context.gaps.length,
     })
 
     // ── Execution (includes Reasoning dispatch) ──────────────────────────────
@@ -65,7 +67,7 @@ export class AgentRuntime {
     const reflection = this.reflection.reflect(execution)
 
     this.logger.log('TASK', `Task ${task.id} finished`, {
-      success:    reflection.success,
+      success: reflection.success,
       confidence: reflection.confidence,
       durationMs: reflection.durationMs,
     })

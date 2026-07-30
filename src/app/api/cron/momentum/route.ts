@@ -21,15 +21,15 @@ export const dynamic = 'force-dynamic'
 
 // Category expiration windows (days) — Signal Scoring Spec v1.0, Section 04.3
 const EXPIRATION_DAYS: Record<SignalCategory, number> = {
-  RESEARCH:       90,
-  MODELS:         60,
-  COMPANIES:      45,
+  RESEARCH: 90,
+  MODELS: 60,
+  COMPANIES: 45,
   INFRASTRUCTURE: 60,
-  OPEN_SOURCE:    45,
-  FUNDING:        30,
-  REGULATION:     120,
-  AGENTS:         45,
-  HARDWARE:       90,
+  OPEN_SOURCE: 45,
+  FUNDING: 30,
+  REGULATION: 120,
+  AGENTS: 45,
+  HARDWARE: 90,
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
@@ -45,8 +45,6 @@ export async function GET(request: Request): Promise<NextResponse> {
   const { data: signals, error } = await (supabase as any)
     .from('signals')
     .select('id, category, created_at, momentum_score, observation_ids, metadata')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    
     .eq('status', 'ACTIVE')
     .limit(200)
 
@@ -67,7 +65,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   for (const signal of signals) {
     const createdAt = new Date(signal.created_at as string).getTime()
     const daysSince = (now - createdAt) / 86400000
-    const category  = signal.category as SignalCategory
+    const category = signal.category as SignalCategory
 
     // Check age-based expiration
     const expirationDays = EXPIRATION_DAYS[category] ?? 60
@@ -76,10 +74,10 @@ export async function GET(request: Request): Promise<NextResponse> {
       await (supabase as any)
         .from('signals')
         .update({
-          status:            'EXPIRED',
+          status: 'EXPIRED',
           expiration_reason: `EXP-01: age ${daysSince.toFixed(0)} days exceeds ${expirationDays}-day window for ${category}`,
-          expired_at:        new Date().toISOString(),
-          updated_at:        new Date().toISOString(),
+          expired_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         })
         .eq('id', signal.id)
       expired++
@@ -92,10 +90,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     const momentumCalc = meta['momentum_calculation'] as Record<string, number> | undefined
 
     const newMomentum = computeMomentumScore({
-      newObservationsCount:   observationCount,
-      distinctSourceCount:    momentumCalc?.['distinct_source_count'] ?? 1,
-      crossCategoryRefCount:  momentumCalc?.['cross_category_ref_count'] ?? 0,
-      daysSinceCreation:      daysSince,
+      newObservationsCount: observationCount,
+      distinctSourceCount: momentumCalc?.['distinct_source_count'] ?? 1,
+      crossCategoryRefCount: momentumCalc?.['cross_category_ref_count'] ?? 0,
+      daysSinceCreation: daysSince,
     })
 
     // Check momentum-based expiration (< 5 for 7 days)
@@ -105,12 +103,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       await (supabase as any)
         .from('signals')
         .update({
-          momentum_score:            newMomentum,
-          momentum_last_calculated:  new Date().toISOString(),
-          status:                    'EXPIRED',
-          expiration_reason:         `EXP-02: momentum_score ${newMomentum} below threshold after ${daysSince.toFixed(0)} days`,
-          expired_at:                new Date().toISOString(),
-          updated_at:                new Date().toISOString(),
+          momentum_score: newMomentum,
+          momentum_last_calculated: new Date().toISOString(),
+          status: 'EXPIRED',
+          expiration_reason: `EXP-02: momentum_score ${newMomentum} below threshold after ${daysSince.toFixed(0)} days`,
+          expired_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         })
         .eq('id', signal.id)
       expired++
@@ -119,12 +117,12 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     // Update momentum score
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any)
+    await (supabase as any)
       .from('signals')
       .update({
-        momentum_score:           newMomentum,
+        momentum_score: newMomentum,
         momentum_last_calculated: new Date().toISOString(),
-        updated_at:               new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
       .eq('id', signal.id)
 

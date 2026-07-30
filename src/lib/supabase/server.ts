@@ -12,7 +12,7 @@ import { cookies } from 'next/headers'
 import { env, serverEnv } from '@/config/env'
 import type { Database } from './types'
 
-export async function createClient() {
+export async function createClient(): Promise<ReturnType<typeof createServerClient<Database>>> {
   const cookieStore = await cookies()
 
   return createServerClient<Database>(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
@@ -22,9 +22,7 @@ export async function createClient() {
       },
       setAll(cookiesToSet) {
         try {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options),
-          )
+          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options))
         } catch {
           // setAll called from a Server Component — safe to ignore
           // Middleware handles session refresh
@@ -41,7 +39,7 @@ export async function createClient() {
  * - Admin API routes with verified admin session
  * NEVER expose this client to the browser.
  */
-export function createAdminClient() {
+export function createAdminClient(): ReturnType<typeof createServerClient<Database>> {
   return createServerClient<Database>(env.SUPABASE_URL, serverEnv.SUPABASE_SERVICE_ROLE_KEY, {
     cookies: { getAll: () => [], setAll: () => {} },
     auth: { persistSession: false, autoRefreshToken: false },

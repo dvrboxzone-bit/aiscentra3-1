@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getReportById } from '@/modules/reports/queries'
 import { formatRelativeTime } from '@/lib/utils/format'
@@ -11,10 +12,10 @@ interface ReportPageProps {
 }
 
 const REPORT_TYPE_LABELS: Record<ReportType, string> = {
-  SIGNAL_BRIEF:   'Signal Brief',
+  SIGNAL_BRIEF: 'Signal Brief',
   EVENT_ANALYSIS: 'Event Analysis',
-  WEEKLY_REVIEW:  'Weekly Review',
-  TREND_REPORT:   'Trend Report',
+  WEEKLY_REVIEW: 'Weekly Review',
+  TREND_REPORT: 'Trend Report',
 }
 
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
@@ -41,10 +42,11 @@ export default async function ReportPage({ params }: ReportPageProps): Promise<R
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
-
       {/* Breadcrumb */}
       <nav className="mb-6 font-mono text-xs text-text-muted">
-        <a href="/reports" className="hover:text-text-secondary">Reports</a>
+        <Link href="/reports" className="hover:text-text-secondary">
+          Reports
+        </Link>
         <span className="mx-2 text-observatory-border">›</span>
         <span>{REPORT_TYPE_LABELS[report.report_type]}</span>
       </nav>
@@ -62,7 +64,7 @@ export default async function ReportPage({ params }: ReportPageProps): Promise<R
         </h1>
 
         {/* Summary block */}
-        <div className="border-l-2 border-observatory-border pl-4 mb-4">
+        <div className="mb-4 border-l-2 border-observatory-border pl-4">
           <p className="text-sm leading-relaxed text-text-secondary">{report.summary}</p>
         </div>
 
@@ -73,11 +75,15 @@ export default async function ReportPage({ params }: ReportPageProps): Promise<R
             </time>
           )}
           <span className="text-observatory-border">·</span>
-          <span>{report.signal_ids.length} signal{report.signal_ids.length !== 1 ? 's' : ''}</span>
+          <span>
+            {report.signal_ids.length} signal{report.signal_ids.length !== 1 ? 's' : ''}
+          </span>
           {report.event_ids.length > 0 && (
             <>
               <span className="text-observatory-border">·</span>
-              <span>{report.event_ids.length} event{report.event_ids.length !== 1 ? 's' : ''}</span>
+              <span>
+                {report.event_ids.length} event{report.event_ids.length !== 1 ? 's' : ''}
+              </span>
             </>
           )}
           <span className="text-observatory-border">·</span>
@@ -89,7 +95,10 @@ export default async function ReportPage({ params }: ReportPageProps): Promise<R
       <article className="space-y-5">
         {paragraphs.map((paragraph, index) => {
           // Detect epistemic markers and style accordingly
-          const isForecast    = paragraph.includes('[FORECAST]') || paragraph.startsWith('Expected:') || paragraph.startsWith('Watch for:')
+          const isForecast =
+            paragraph.includes('[FORECAST]') ||
+            paragraph.startsWith('Expected:') ||
+            paragraph.startsWith('Watch for:')
           const isInterpretive = paragraph.includes('[INTERPRETIVE]')
 
           return (
@@ -97,10 +106,10 @@ export default async function ReportPage({ params }: ReportPageProps): Promise<R
               key={index}
               className={`text-sm leading-relaxed ${
                 isForecast
-                  ? 'text-text-muted italic border-l border-observatory-border pl-4'
+                  ? 'border-l border-observatory-border pl-4 italic text-text-muted'
                   : isInterpretive
-                  ? 'text-text-secondary'
-                  : 'text-text-secondary'
+                    ? 'text-text-secondary'
+                    : 'text-text-secondary'
               }`}
             >
               {paragraph
@@ -120,21 +129,21 @@ export default async function ReportPage({ params }: ReportPageProps): Promise<R
           <p className="font-mono text-xs text-text-muted">
             AIscentra Intelligence Observatory — {REPORT_TYPE_LABELS[report.report_type]}
           </p>
-          <a
+          <Link
             href="/reports"
             className="font-mono text-xs tracking-wider text-text-muted transition-colors hover:text-text-secondary"
           >
             ← ALL REPORTS
-          </a>
+          </Link>
         </div>
 
         {/* Epistemic disclaimer */}
         <div className="mt-4 border border-observatory-border bg-observatory-surface p-4">
-          <p className="font-mono text-xs text-text-muted mb-1">EPISTEMIC NOTE</p>
-          <p className="text-xs text-text-muted leading-relaxed">
-            This report distinguishes factual observations from interpretive assessments and forecasts.
-            Forecasts are Observatory analytical assessments, not factual claims.
-            All intelligence is generated from verified Observatory signals and events.
+          <p className="mb-1 font-mono text-xs text-text-muted">EPISTEMIC NOTE</p>
+          <p className="text-xs leading-relaxed text-text-muted">
+            This report distinguishes factual observations from interpretive assessments and
+            forecasts. Forecasts are Observatory analytical assessments, not factual claims. All
+            intelligence is generated from verified Observatory signals and events.
           </p>
         </div>
       </footer>

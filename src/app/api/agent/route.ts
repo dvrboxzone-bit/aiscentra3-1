@@ -26,12 +26,16 @@
  * existing /api/admin/simulate-engine-v2 pattern already used in this project
  * for on-demand diagnostic invocation.
  */
-import { NextRequest, NextResponse } from 'next/server'
-import { buildProductionRuntime, routeTask } from '../../../../supabase/functions/intelligence-agent/index'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+import {
+  buildProductionRuntime,
+  routeTask,
+} from '../../../../supabase/functions/intelligence-agent/index'
 import type { AgentTask } from '../../../../supabase/functions/intelligence-agent/index'
 
 export const maxDuration = 60
-export const dynamic     = 'force-dynamic'
+export const dynamic = 'force-dynamic'
 
 const MAX_QUERY_LENGTH = 500
 
@@ -42,7 +46,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // ── Validate input ──────────────────────────────────────────────────────────
   if (!rawQuery || typeof rawQuery !== 'string' || rawQuery.trim().length === 0) {
     return NextResponse.json(
-      { error: 'Missing or empty required query parameter "q". Example: /api/agent?q=Investigate%20OpenAI' },
+      {
+        error:
+          'Missing or empty required query parameter "q". Example: /api/agent?q=Investigate%20OpenAI',
+      },
       { status: 400 },
     )
   }
@@ -51,12 +58,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   // ── Build task (mirrors the shape used by index.ts's own runTask()) ─────────
   const task: AgentTask = {
-    id:          `task-${Date.now()}`,
-    type:        routeTask(query),
+    id: `task-${Date.now()}`,
+    type: routeTask(query),
     query,
-    parameters:  {},
+    parameters: {},
     requestedBy: 'http-api',
-    createdAt:   new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   }
 
   // ── Invoke the EXISTING Agent Runtime — zero modification to Runtime code ───

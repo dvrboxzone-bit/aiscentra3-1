@@ -13,10 +13,11 @@
  *   - /api/cron/momentum    → maxDuration 60s (Momentum update)
  *   - /api/cron/reports     → maxDuration 60s (Report Engine, daily)
  */
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
 
 export const maxDuration = 30
-export const dynamic     = 'force-dynamic'
+export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authHeader = request.headers.get('authorization')
@@ -34,41 +35,45 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const log: string[] = []
 
   const headers = {
-    'Content-Type':  'application/json',
+    'Content-Type': 'application/json',
     'x-cron-secret': cronSecret,
   }
 
   // Step 1: Collect
   fetch(`${appUrl}/api/collect`, {
-    method: 'POST', headers, body: JSON.stringify({}),
+    method: 'POST',
+    headers,
+    body: JSON.stringify({}),
   }).catch((e: unknown) => console.error('[pipeline] collect:', e))
   log.push('collect: fired')
 
   // Step 2: Wait for collect to write observations
-  await new Promise(r => setTimeout(r, 15_000))
+  await new Promise((r) => setTimeout(r, 15_000))
 
   // Step 3: Enrich batch (Signal Engine)
   fetch(`${appUrl}/api/enrich/batch`, {
-    method: 'POST', headers, body: JSON.stringify({}),
+    method: 'POST',
+    headers,
+    body: JSON.stringify({}),
   }).catch((e: unknown) => console.error('[pipeline] enrich/batch:', e))
   log.push('enrich/batch: fired')
 
   // Step 4: Event Engine (processes promoted signals)
   fetch(`${appUrl}/api/cron/events`, {
     method: 'GET',
-    headers: { 'authorization': `Bearer ${cronSecret}` },
+    headers: { authorization: `Bearer ${cronSecret}` },
   }).catch((e: unknown) => console.error('[pipeline] events:', e))
   log.push('events: fired')
 
   // Step 5: Reports (daily brief)
   fetch(`${appUrl}/api/cron/reports`, {
     method: 'GET',
-    headers: { 'authorization': `Bearer ${cronSecret}` },
+    headers: { authorization: `Bearer ${cronSecret}` },
   }).catch((e: unknown) => console.error('[pipeline] reports:', e))
   log.push('reports: fired')
 
   return NextResponse.json({
-    status:    'pipeline_fired',
+    status: 'pipeline_fired',
     timestamp: new Date().toISOString(),
     log,
   })

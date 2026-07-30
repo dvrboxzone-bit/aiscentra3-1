@@ -22,7 +22,7 @@
  * Dependency Inversion: Execution knows nothing about Supabase or Groq.
  * It depends only on ExecutionToolRegistry and SafetyProvider (interfaces).
  */
-import type { SafetyProvider, AgentLogger } from './interfaces'
+import type { SafetyProvider, AgentLogger, ReasoningEngine } from './interfaces'
 import type {
   AgentContext,
   AgentTask,
@@ -38,10 +38,10 @@ import { buildDefaultExecutionToolRegistry } from './execution-tools'
 import type { ExecutionToolRegistry } from './interfaces'
 
 export interface ExecutionDeps {
-  reasoningEngine: import('./interfaces').ReasoningEngine
-  safetyProvider:  SafetyProvider
-  logger:          AgentLogger
-  toolRegistry?:   ExecutionToolRegistry  // optional override for testing/extension
+  reasoningEngine: ReasoningEngine
+  safetyProvider: SafetyProvider
+  logger: AgentLogger
+  toolRegistry?: ExecutionToolRegistry // optional override for testing/extension
 }
 
 // Total mapping — every ExecutionStepKind MUST have an entry here.
@@ -51,29 +51,29 @@ export interface ExecutionDeps {
 // runtime fallback.
 const STEP_TO_ACTION: Record<ExecutionStep['kind'], AgentAction> = {
   LOAD_OBSERVATIONS: 'READ_OBSERVATIONS',
-  LOAD_SIGNALS:       'READ_SIGNALS',
-  LOAD_GRAPH:         'READ_GRAPH',
-  LOAD_MEMORY:        'READ_MEMORY',
-  LOAD_ENTITY:        'READ_ENTITY',
-  REASON:             'CALL_TOOL',
-  GENERATE_REPORT:    'GENERATE_REPORT',
+  LOAD_SIGNALS: 'READ_SIGNALS',
+  LOAD_GRAPH: 'READ_GRAPH',
+  LOAD_MEMORY: 'READ_MEMORY',
+  LOAD_ENTITY: 'READ_ENTITY',
+  REASON: 'CALL_TOOL',
+  GENERATE_REPORT: 'GENERATE_REPORT',
 }
 
 export class Execution {
-  private readonly reasoningEngine: import('./interfaces').ReasoningEngine
-  private readonly safetyProvider:  SafetyProvider
-  private readonly logger:          AgentLogger
-  private readonly toolRegistry:    ExecutionToolRegistry
-  private lastReasoningResult:      ReasoningResult | null = null
+  private readonly safetyProvider: SafetyProvider
+  private readonly logger: AgentLogger
+  private readonly toolRegistry: ExecutionToolRegistry
+  private lastReasoningResult: ReasoningResult | null = null
 
   constructor(deps: ExecutionDeps) {
-    this.reasoningEngine = deps.reasoningEngine
-    this.safetyProvider  = deps.safetyProvider
-    this.logger          = deps.logger
-    this.toolRegistry     = deps.toolRegistry ?? buildDefaultExecutionToolRegistry({
-      reasoningEngine:        deps.reasoningEngine,
-      getLastReasoningResult: () => this.lastReasoningResult,
-    })
+    this.safetyProvider = deps.safetyProvider
+    this.logger = deps.logger
+    this.toolRegistry =
+      deps.toolRegistry ??
+      buildDefaultExecutionToolRegistry({
+        reasoningEngine: deps.reasoningEngine,
+        getLastReasoningResult: () => this.lastReasoningResult,
+      })
   }
 
   async run(task: AgentTask, plan: ExecutionPlan, context: AgentContext): Promise<ExecutionResult> {
@@ -97,8 +97,11 @@ export class Execution {
         if (!safetyCheck.allowed) {
           this.logger.error('SAFETY', `Step '${step.kind}' blocked: ${safetyCheck.reason}`)
           stepResults.push({
-            step, success: false, output: null,
-            error: safetyCheck.reason, durationMs: Date.now() - stepStart,
+            step,
+            success: false,
+            output: null,
+            error: safetyCheck.reason,
+            durationMs: Date.now() - stepStart,
           })
           if (step.required) overallSuccess = false
           continue
@@ -118,17 +121,28 @@ export class Execution {
         }
 
         stepResults.push({
-          step, success: true, output, error: null, durationMs: Date.now() - stepStart,
+          step,
+          success: true,
+          output,
+          error: null,
+          durationMs: Date.now() - stepStart,
         })
-        this.logger.log('EXECUTION', `Step '${step.kind}' completed`, { durationMs: Date.now() - stepStart })
-
+        this.logger.log('EXECUTION', `Step '${step.kind}' completed`, {
+          durationMs: Date.now() - stepStart,
+        })
       } catch (err) {
         // UnknownExecutionStepKind lands here too — fail-closed, always
         // recorded as a failure, never silently treated as success.
         const isUnknownKind = err instanceof UnknownExecutionStepKind
-        this.logger.error('EXECUTION', `Step '${step.kind}' failed${isUnknownKind ? ' (unknown step kind — fail-closed)' : ''}`, err)
+        this.logger.error(
+          'EXECUTION',
+          `Step '${step.kind}' failed${isUnknownKind ? ' (unknown step kind — fail-closed)' : ''}`,
+          err,
+        )
         stepResults.push({
-          step, success: false, output: null,
+          step,
+          success: false,
+          output: null,
           error: err instanceof Error ? err.message : String(err),
           durationMs: Date.now() - stepStart,
         })
@@ -137,9 +151,13 @@ export class Execution {
     }
 
     return {
-      taskId: task.id, planId: plan.taskId, stepResults,
-      reasoning: this.lastReasoningResult, success: overallSuccess,
-      startedAt, completedAt: new Date().toISOString(),
+      taskId: task.id,
+      planId: plan.taskId,
+      stepResults,
+      reasoning: this.lastReasoningResult,
+      success: overallSuccess,
+      startedAt,
+      completedAt: new Date().toISOString(),
     }
   }
 }

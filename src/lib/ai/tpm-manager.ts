@@ -18,26 +18,26 @@
 // ── TPM limits per model ──────────────────────────────────────────────────────
 
 const TPM_LIMITS: Record<string, number> = {
-  'llama-3.1-8b-instant':   6_000,
+  'llama-3.1-8b-instant': 6_000,
   'llama-3.3-70b-versatile': 12_000,
-  'default':                 6_000,   // conservative fallback
+  default: 6_000, // conservative fallback
 }
 
-const SAFETY_MARGIN = 0.85  // use only 85% of limit to avoid edge cases
+const SAFETY_MARGIN = 0.85 // use only 85% of limit to avoid edge cases
 
 // ── Token window tracking ─────────────────────────────────────────────────────
 
 interface TokenEntry {
-  timestamp: number   // ms
-  tokens:    number
+  timestamp: number // ms
+  tokens: number
 }
 
 const tokenWindows = new Map<string, TokenEntry[]>()
 
 function getWindowedTokens(model: string): number {
-  const now     = Date.now()
-  const cutoff  = now - 60_000  // 60 second rolling window
-  const entries = (tokenWindows.get(model) ?? []).filter(e => e.timestamp > cutoff)
+  const now = Date.now()
+  const cutoff = now - 60_000 // 60 second rolling window
+  const entries = (tokenWindows.get(model) ?? []).filter((e) => e.timestamp > cutoff)
   tokenWindows.set(model, entries)
   return entries.reduce((sum, e) => sum + e.tokens, 0)
 }
@@ -50,8 +50,8 @@ function recordTokens(model: string, tokens: number): void {
 
 function getOldestEntry(model: string): TokenEntry | undefined {
   const entries = tokenWindows.get(model) ?? []
-  return entries.reduce((oldest, e) =>
-    !oldest || e.timestamp < oldest.timestamp ? e : oldest,
+  return entries.reduce(
+    (oldest, e) => (!oldest || e.timestamp < oldest.timestamp ? e : oldest),
     undefined as TokenEntry | undefined,
   )
 }
@@ -59,25 +59,29 @@ function getOldestEntry(model: string): TokenEntry | undefined {
 // ── Budget check ──────────────────────────────────────────────────────────────
 
 export interface BudgetCheckResult {
-  allowed:        boolean
-  usedTokens:     number
-  limitTokens:    number
-  remainingTokens:number
-  waitMs:         number   // how long to wait if not allowed
+  allowed: boolean
+  usedTokens: number
+  limitTokens: number
+  remainingTokens: number
+  waitMs: number // how long to wait if not allowed
 }
 
 export function checkTPMBudget(model: string, estimatedTokens: number): BudgetCheckResult {
-  const limit     = (TPM_LIMITS[model] ?? TPM_LIMITS['default']!) * SAFETY_MARGIN
-  const used      = getWindowedTokens(model)
+  const defaultLimit = TPM_LIMITS['default']
+  if (defaultLimit === undefined) {
+    throw new Error("Invariant violated: TPM_LIMITS is missing its required 'default' entry.")
+  }
+  const limit = (TPM_LIMITS[model] ?? defaultLimit) * SAFETY_MARGIN
+  const used = getWindowedTokens(model)
   const remaining = Math.max(0, limit - used)
-  const allowed   = estimatedTokens <= remaining
+  const allowed = estimatedTokens <= remaining
 
   let waitMs = 0
   if (!allowed) {
     // Wait until oldest entry expires from window
     const oldest = getOldestEntry(model)
     if (oldest) {
-      waitMs = Math.max(0, (oldest.timestamp + 60_000) - Date.now()) + 500
+      waitMs = Math.max(0, oldest.timestamp + 60_000 - Date.now()) + 500
     } else {
       waitMs = 5_000
     }
@@ -85,8 +89,8 @@ export function checkTPMBudget(model: string, estimatedTokens: number): BudgetCh
 
   return {
     allowed,
-    usedTokens:      Math.round(used),
-    limitTokens:     Math.round(limit),
+    usedTokens: Math.round(used),
+    limitTokens: Math.round(limit),
     remainingTokens: Math.round(remaining),
     waitMs,
   }
@@ -95,9 +99,9 @@ export function checkTPMBudget(model: string, estimatedTokens: number): BudgetCh
 // ── Wait for budget ───────────────────────────────────────────────────────────
 
 export async function waitForTPMBudget(
-  model:           string,
+  model: string,
   estimatedTokens: number,
-  maxWaitMs:       number = 120_000,
+  maxWaitMs: number = 120_000,
 ): Promise<void> {
   const start = Date.now()
 
@@ -110,8 +114,10 @@ export async function waitForTPMBudget(
       return
     }
 
-    console.info(`[tpm-manager] TPM budget: ${check.usedTokens}/${check.limitTokens} used. Waiting ${check.waitMs}ms for ${model}`)
-    await new Promise(r => setTimeout(r, check.waitMs))
+    console.info(
+      `[tpm-manager] TPM budget: ${check.usedTokens}/${check.limitTokens} used. Waiting ${check.waitMs}ms for ${model}`,
+    )
+    await new Promise((r) => setTimeout(r, check.waitMs))
   }
 }
 
@@ -126,14 +132,13 @@ export function recordActualTokens(model: string, inputTokens: number, outputTok
 
 const modelQueues = new Map<string, Promise<void>>()
 
-export async function withModelQueue<T>(
-  model:   string,
-  fn:      () => Promise<T>,
-): Promise<T> {
+export async function withModelQueue<T>(model: string, fn: () => Promise<T>): Promise<T> {
   const prev = modelQueues.get(model) ?? Promise.resolve()
 
   let resolve!: () => void
-  const next = new Promise<void>(r => { resolve = r })
+  const next = new Promise<void>((r) => {
+    resolve = r
+  })
   modelQueues.set(model, next)
 
   await prev

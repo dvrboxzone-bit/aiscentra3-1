@@ -13,8 +13,13 @@
  *   3. Register it via registry.register(new YourTool())
  * Execution.ts itself is never modified — Open/Closed Principle upheld.
  */
-import type { ExecutionTool, ExecutionToolContext, ExecutionToolRegistry } from './interfaces'
-import type { ExecutionStep } from './types'
+import type {
+  ExecutionTool,
+  ExecutionToolContext,
+  ExecutionToolRegistry,
+  ReasoningEngine,
+} from './interfaces'
+import type { ExecutionStep, ReasoningResult } from './types'
 import { UnknownExecutionStepKind } from './types'
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -98,7 +103,7 @@ export class LoadEntityTool implements ExecutionTool {
 export class ReasonTool implements ExecutionTool {
   readonly kind = 'REASON' as const
 
-  constructor(private readonly reasoningEngine: import('./interfaces').ReasoningEngine) {}
+  constructor(private readonly reasoningEngine: ReasoningEngine) {}
 
   async execute(_step: ExecutionStep, ctx: ExecutionToolContext): Promise<unknown> {
     return this.reasoningEngine.reason({ task: ctx.task, context: ctx.context })
@@ -117,15 +122,13 @@ export class ReasonTool implements ExecutionTool {
 export class ReportExecutionTool implements ExecutionTool {
   readonly kind = 'GENERATE_REPORT' as const
 
-  constructor(
-    private readonly getLastReasoningResult: () => import('./types').ReasoningResult | null,
-  ) {}
+  constructor(private readonly getLastReasoningResult: () => ReasoningResult | null) {}
 
   async execute(_step: ExecutionStep, _ctx: ExecutionToolContext): Promise<unknown> {
     const reasoning = this.getLastReasoningResult()
     return {
       reportGenerated: reasoning !== null,
-      summary:         reasoning?.summary ?? 'No reasoning result available to generate a report from.',
+      summary: reasoning?.summary ?? 'No reasoning result available to generate a report from.',
     }
   }
 }
@@ -136,8 +139,8 @@ export class ReportExecutionTool implements ExecutionTool {
 // so this factory takes them as parameters rather than hardcoding them.
 
 export function buildDefaultExecutionToolRegistry(deps: {
-  reasoningEngine:        import('./interfaces').ReasoningEngine
-  getLastReasoningResult: () => import('./types').ReasoningResult | null
+  reasoningEngine: ReasoningEngine
+  getLastReasoningResult: () => ReasoningResult | null
 }): ExecutionToolRegistry {
   const registry = new DefaultExecutionToolRegistry()
 
