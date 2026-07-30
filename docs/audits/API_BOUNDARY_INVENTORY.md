@@ -230,10 +230,11 @@ Not previously documented in Phase 1A (which covered `/api/agent`,
 **NOT fixed by Phase 1A, confirmed still open by this audit:**
 
 - No route has a real caller-facing HTTP rate limit (15 of 15)
-- No cost-sensitive route has a budget/cost guard (14 of 15, literal
-  `"missing"`; the remaining cost-sensitive route,
-  `/api/enrich/batch`, also has no real budget guard despite a more
-  descriptive field value before this revision's normalization)
+- No cost-sensitive route has a budget/cost guard.
+  14 of 15 total routes have the literal `budgetGuard: "missing"`.
+  The sole non-missing entry is `/api/health`, whose value is `n/a`
+  because it is not cost-sensitive. All 11 cost-sensitive routes have
+  a missing budget guard.
 - 11 routes use a duplicated, non-constant-time `CRON_SECRET` check
   instead of the shared guard module
 - 5 routes leak raw `error.message` content to callers
