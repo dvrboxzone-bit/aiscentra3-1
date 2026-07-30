@@ -1,0 +1,111 @@
+name: Quality Gate
+
+# Restores the minimum mandatory CI baseline for pull requests into main:
+# npm ci, changed-files format check, lint, type-check, tests, build.
+# Runs on a free GitHub-hosted runner. No production secrets, no Supabase/
+# Vercel access, no paid resources.
+#
+# Security note: npm audit steps below are EVIDENCE ONLY. This workflow
+# does NOT declare a Security Gate PASS/FAIL and does NOT run
+# `npm audit fix`. Known advisories are tracked and remediated as a
+# separate, dedicated task after independent review.
+
+on:
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality Gate (format, lint, type-check, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout (full history for merge-base computation)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch explicitly (do not rely on unconfirmed origin/<base> presence)
+        # actions/checkout with fetch-depth:0 fetches full history of the
+        # checked-out ref, but does not guarantee other branches (e.g. the
+        # PR's base branch) exist as local remote-tracking refs. Fetching
+        # the base branch explicitly here makes the merge-base computation
+        # in format-changed.sh provably correct rather than assumed.
+        # github.base_ref is only populated for pull_request events; falls
+        # back to 'main' for workflow_dispatch (manual runs).
+        run: git fetch origin "${{ github.base_ref || 'main' }}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Changed-files format check
+        run: bash scripts/ci/format-changed.sh "origin/${{ github.base_ref || 'main' }}"
+
+      - name: Lint (full project)
+        run: npm run lint
+
+      - name: TypeScript type-check
+        run: npm run type-check
+
+      - name: Automated tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+          ADMIN_EMAIL: admin@placeholder.invalid
+
+      - name: Dependency audit evidence (production only) — evidence only, not a gate
+        if: always()
+        run: npm audit --omit=dev --json > audit-production.json || true
+        # NOTE: `|| true` here applies ONLY to this evidence-collection step,
+        # not to any quality gate step above. npm audit exits non-zero when
+        # vulnerabilities are found (expected, already-known, tracked
+        # separately) — this step's purpose is solely to produce the JSON
+        # artifact for review, not to pass/fail the build. This is the one
+        # explicitly-authorized exception per this task's own instructions
+        # ("audit exit codes захватить явно... audit step не называть
+        # Security Gate"), and is disclosed here, not hidden.
+
+      - name: Dependency audit evidence (full) — evidence only, not a gate
+        if: always()
+        run: npm audit --json > audit-full.json || true
+
+      - name: Upload quality logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-logs
+          path: |
+            audit-production.json
+            audit-full.json
+          retention-days: 30
+
+      - name: Upload production audit JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-production
+          path: audit-production.json
+          retention-days: 30
+
+      - name: Upload full audit JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-full
+          path: audit-full.json
+          retention-days: 30
