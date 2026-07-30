@@ -57,6 +57,14 @@ jobs:
       - name: Automated tests
         run: npm test
 
+      - name: API boundary inventory check
+        # Verifies docs/audits/api-boundary-inventory.json is complete and
+        # internally consistent against the actual src/app/api tree. Does
+        # NOT constitute a Security Gate PASS -- rateLimit:"missing" and
+        # budgetGuard:"missing" are honestly-registered debt, not a
+        # passing control. See docs/audits/API_BOUNDARY_INVENTORY.md.
+        run: npm run check:api-inventory
+
       - name: Production build
         run: npm run build
         env:

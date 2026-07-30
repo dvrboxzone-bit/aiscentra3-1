@@ -1,0 +1,257 @@
+# API Boundary Inventory — Phase 1B
+
+**Baseline SHA:** `4e0597b1d5f4920eb01e7fa226bb32061adc5390`
+**Machine-readable source of truth:** [`api-boundary-inventory.json`](./api-boundary-inventory.json)
+**Audit method:** direct reading of every `route.ts` file's source code and its import graph — not automated extraction, not inferred from naming conventions.
+
+This is an **audit and enforcement-baseline document**. It records what
+exists today. It does not implement rate limiting, quotas, or budget
+guards — those are explicitly out of scope for this PR (see Restrictions
+below).
+
+## Scope note: what is machine-checked vs. manually audited
+
+`npm run check:api-inventory` verifies that this inventory is
+**structurally complete, path/file/method aligned, and summary-consistent;
+security-property fields remain manually audited unless an explicit
+machine consistency rule is listed.** Concretely:
+
+**Machine-checked** (see `scripts/ci/lib/api-inventory.ts`):
+
+- every `route.ts` file under `src/app/api` is registered, and every
+  registered entry's file still exists
+- `path` is exactly the value derived from `file` (`PATH_FILE_MISMATCH`
+  otherwise)
+- declared `methods` match the actual exported HTTP method handlers,
+  using a fail-closed extractor (`UNSUPPORTED_ROUTE_SYNTAX` on any export
+  form it does not recognize, never a false empty list)
+- no duplicate `path` or `file`
+- every route has exactly one valid `category` (Zod enum)
+- every required field is present and non-empty
+- privileged categories (`admin`/`cron`/`internal-machine`) have a
+  non-`"none"` `guard` value
+- AI-calling routes have non-empty `rateLimit`/`budgetGuard`/`productionState`
+- `aiCall` boolean agrees with `aiCallMode` (`aiCall === (aiCallMode !== "none")`)
+- any route with `aiCallMode` other than `"none"` has `costSensitive: true`
+  and `externalNetworkCall: true` (`AI_ROUTE_NOT_COST_SENSITIVE` /
+  `AI_ROUTE_NOT_EXTERNAL_NETWORK` otherwise)
+- the JSON's `summary` block exactly matches a fresh recomputation from
+  `routes` (`SUMMARY_MISMATCH` otherwise)
+- this document's machine-owned summary block (between the
+  `API_INVENTORY_SUMMARY_START`/`END` markers below) exactly matches the
+  block generated from the JSON (`MARKDOWN_SUMMARY_MISMATCH` otherwise)
+
+**NOT machine-checked — determined by manual reading of source code and
+import graphs, and never re-verified automatically:**
+
+- the actual import graph of any route
+- actual AI call presence (`aiCall`, `aiCallMode`) and its true directness
+- actual service-role client usage (`serviceRole`)
+- actual database read/write operations (`databaseRead`/`databaseWrite`)
+- actual raw-error-message exposure (`rawErrorExposureRisk`)
+- actual constant-time vs. non-constant-time secret comparison
+  (`weakSharedSecret`)
+- actual route orchestration and reachability (e.g. which cron routes are
+  registered in `vercel.json` vs. merely present as files)
+
+The checker enforces that these manually-determined fields are internally
+_consistent with each other_ (e.g. "AI implies cost-sensitive"). It has no
+way to execute a route or trace its real network calls, and does not
+claim to.
+
+---
+
+## Machine-computed summary
+
+<!-- API_INVENTORY_SUMMARY_START -->
+
+| Metric                                              | Value |
+| --------------------------------------------------- | ----: |
+| Total routes                                        |    15 |
+| Category: `public-read`                             |     2 |
+| Category: `authenticated-user`                      |     0 |
+| Category: `admin`                                   |     1 |
+| Category: `cron`                                    |    11 |
+| Category: `internal-machine`                        |     1 |
+| Category: `disabled`                                |     0 |
+| Direct AI-calling routes                            |     7 |
+| Indirect AI-triggering routes                       |     4 |
+| Service-role routes                                 |    12 |
+| Database-read routes                                |    14 |
+| Database-write routes                               |     7 |
+| Literal rateLimit="missing" count                   |    13 |
+| Routes without a real caller-facing HTTP rate limit |    15 |
+| Literal budgetGuard="missing" count                 |    14 |
+| Cost-sensitive routes                               |    11 |
+| External-network-call routes                        |    13 |
+| Weak shared-secret (non-constant-time) routes       |    11 |
+| Confirmed raw-error-exposure routes                 |     5 |
+| Risk: P0                                            |     0 |
+| Risk: P1                                            |    13 |
+| Risk: P2                                            |     2 |
+| Risk: P3                                            |     0 |
+
+<!-- API_INVENTORY_SUMMARY_END -->
+
+**This block is machine-owned.** It is generated by
+`buildMarkdownSummaryBlock()` directly from the JSON inventory's
+recomputed summary. Editing a number here by hand, without regenerating
+it from the JSON, causes `npm run check:api-inventory` to fail with
+`MARKDOWN_SUMMARY_MISMATCH`.
+
+**Two distinct rate-limit metrics, not to be confused:**
+
+- "Literal `rateLimit="missing"` count" (13) counts only entries whose
+  free-text `rateLimit` field is the exact literal string `"missing"`.
+  Two entries (`/api/enrich/batch`, `/api/events/promote`) have a
+  longer, more specific descriptive string instead (internal AI-call
+  pacing, and a domain-specific per-category cap, respectively) — neither
+  is a real per-caller HTTP rate limit, which is why both metrics differ.
+- "Routes without a real caller-facing HTTP rate limit" (15 — **all**
+  routes) is the `hasCallerFacingRateLimit` boolean field, inverted. No
+  route in this repository has an actual per-caller HTTP request rate
+  limiter of any kind; the two "softer" mechanisms above do not count as
+  one.
+
+---
+
+## Risk rubric
+
+### P0
+
+Immediately exploitable production risk **without a valid privileged
+credential**, or a confirmed active risk of irreversible data/cost
+damage. A route is **not** P0 merely because it uses `===` instead of a
+constant-time comparison, is missing a `try/catch` around
+`request.json()`, or has a hypothetical compromise scenario that still
+requires a valid secret to reach. If a route is marked P0, this document
+must state the specific, confirmed exploit path that requires no valid
+secret.
+
+### P1
+
+Secret/auth-gated, but a high-effect route with AI cost exposure,
+service-role access, or production writes, combined with insufficient
+rate/budget controls.
+
+### P2
+
+Limited leakage, a validation/reliability defect, an orphaned route, or
+less severe operational debt.
+
+### P3
+
+Low risk, documentation, or consistency debt.
+
+**Recomputed risk labels (this revision):** applying this rubric strictly
+removes every P0 previously assigned in this inventory. `/api/enrich/batch`
+and `/api/reports/generate` were previously labeled P0 on the basis of
+their weak (non-constant-time) secret comparison and, for
+`/api/reports/generate`, a missing `try/catch` around `request.json()`.
+Neither condition provides an exploit path that bypasses the
+`CRON_SECRET` requirement itself — both remain fully gated by a shared
+secret an attacker would still need to know or guess. Per the rubric
+above, this does not meet the P0 bar; both are now P1 (high AI-cost
+exposure, service-role, and production writes, with insufficient
+rate/budget controls — exactly the P1 definition). **No route in this
+inventory currently qualifies as P0** under this stricter rubric; this is
+reported as-is, not adjusted to preserve a prior narrative.
+
+---
+
+## Full route table
+
+| Path                            | Methods   | Category         | Guard                                        | AI mode  | Service-role | DB write | Weak secret | Risk |
+| ------------------------------- | --------- | ---------------- | -------------------------------------------- | -------- | :----------: | :------: | :---------: | :--: |
+| `/api/admin/simulate-engine-v2` | GET, POST | admin            | `checkAdminAccess`                           | direct   |      ✅      |    ✅    |      —      |  P1  |
+| `/api/agent`                    | GET, POST | internal-machine | `checkInternalAccess`                        | direct   |      ✅      |    —     |      —      |  P1  |
+| `/api/assistant`                | POST      | public-read      | `checkPublicAssistantAccess`                 | direct   |      —       |    —     |      —      |  P1  |
+| `/api/collect`                  | POST      | cron             | local `isAuthorized()`                       | none     |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/cron/collect`             | GET       | cron             | inline check                                 | none     |      ✅      |    —     |     ✅      |  P2  |
+| `/api/cron/enrich`              | GET       | cron             | inline check                                 | indirect |      ✅      |    —     |     ✅      |  P1  |
+| `/api/cron/events`              | GET       | cron             | inline check                                 | indirect |      —       |    —     |     ✅      |  P1  |
+| `/api/cron/momentum`            | GET       | cron             | inline check                                 | none     |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/cron/pipeline`            | GET       | cron             | inline check (fail-closed on missing secret) | indirect |      —       |    —     |     ✅      |  P1  |
+| `/api/cron/reports`             | GET       | cron             | inline check                                 | indirect |      ✅      |    —     |     ✅      |  P1  |
+| `/api/enrich/batch`             | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/enrich`                   | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/events/promote`           | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/health`                   | GET       | public-read      | none (intentional)                           | none     |      ✅      |    —     |      —      |  P2  |
+| `/api/reports/generate`         | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+
+## AI call mode definitions
+
+- **`none`** — the route makes no AI provider call, directly or via any
+  sub-request it fires.
+- **`direct`** — the route itself calls an AI provider (e.g. via
+  `agentCompleteJSON`/`agentComplete`).
+- **`indirect`** — the route fires a fire-and-forget sub-request to
+  another route that has `aiCallMode: direct` (or `indirect`,
+  transitively), without calling an AI provider itself.
+- **`direct-and-indirect`** — both of the above (no route in this
+  repository currently has this mode).
+
+`externalNetworkCall` means any non-database outbound network call,
+direct or transitive, including an AI provider call and an internal HTTP
+sub-request (e.g. `/api/cron/pipeline` firing `/api/collect`).
+`costSensitive=true` means a single invocation of the route can, directly
+or indirectly, trigger a paid AI/provider workload. A route with any
+non-`"none"` `aiCallMode` is therefore always both `costSensitive: true`
+and `externalNetworkCall: true` — enforced structurally by the checker
+(`AI_ROUTE_NOT_COST_SENSITIVE`, `AI_ROUTE_NOT_EXTERNAL_NETWORK`).
+
+## Weak shared-secret routes (11)
+
+`/api/collect`, `/api/cron/collect`, `/api/cron/enrich`,
+`/api/cron/events`, `/api/cron/momentum`, `/api/cron/pipeline`,
+`/api/cron/reports`, `/api/enrich/batch`, `/api/enrich`,
+`/api/events/promote`, `/api/reports/generate` — each implements its own
+local, duplicated `CRON_SECRET` check using a non-constant-time (`===`)
+string comparison, rather than the centralized, constant-time
+`src/lib/security/api-access.ts` module established in Phase 1A. Not
+fixed in this PR (audit only — see Restrictions).
+
+## Confirmed raw-error-exposure routes (5)
+
+`/api/collect`, `/api/cron/collect`, `/api/cron/enrich`,
+`/api/cron/momentum`, `/api/health` — each returns a raw Supabase
+`error.message` directly to the caller on a database-error code path.
+Not previously documented in Phase 1A (which covered `/api/agent`,
+`/api/admin/simulate-engine-v2`, and `/api/assistant` only).
+
+## Phase 1A vs. remaining Phase 1 scope
+
+**Already fixed (Phase 1A, PR #3, merged):**
+
+- `/api/agent`, `/api/admin/simulate-engine-v2`, `/api/assistant` — guard
+  before privileged import, constant-time comparison, redacted errors,
+  fail-closed environment matrix.
+
+**NOT fixed by Phase 1A, confirmed still open by this audit:**
+
+- No route has a real caller-facing HTTP rate limit (15 of 15)
+- No cost-sensitive route has a budget/cost guard.
+  14 of 15 total routes have the literal `budgetGuard: "missing"`.
+  The sole non-missing entry is `/api/health`, whose value is `n/a`
+  because it is not cost-sensitive. All 11 cost-sensitive routes have
+  a missing budget guard.
+- 11 routes use a duplicated, non-constant-time `CRON_SECRET` check
+  instead of the shared guard module
+- 5 routes leak raw `error.message` content to callers
+- `/api/reports/generate` lacks a malformed-JSON guard present on its
+  siblings
+- 3 cron routes (`/api/cron/collect`, `/api/cron/enrich`,
+  `/api/cron/momentum`) remain unregistered/orphaned relative to
+  `vercel.json`'s single actual cron entry
+
+This document does not claim any of the above are fixed. They are
+findings only, registered for follow-up PRs.
+
+---
+
+## Restrictions
+
+This PR does not change any production route handler's logic or
+behavior. It adds only: the inventory JSON, this report, the checker
+script and its tests, and a CI step. No merge, deploy, Vercel environment
+change, Supabase write, or migration was performed as part of this task.
