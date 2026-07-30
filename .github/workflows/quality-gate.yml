@@ -12,7 +12,6 @@ name: Quality Gate
 
 on:
   pull_request:
-  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -35,9 +34,7 @@ jobs:
         # PR's base branch) exist as local remote-tracking refs. Fetching
         # the base branch explicitly here makes the merge-base computation
         # in format-changed.sh provably correct rather than assumed.
-        # github.base_ref is only populated for pull_request events; falls
-        # back to 'main' for workflow_dispatch (manual runs).
-        run: git fetch origin "${{ github.base_ref || 'main' }}"
+        run: git fetch origin "${{ github.base_ref }}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -49,7 +46,7 @@ jobs:
         run: npm ci
 
       - name: Changed-files format check
-        run: bash scripts/ci/format-changed.sh "origin/${{ github.base_ref || 'main' }}"
+        run: bash scripts/ci/format-changed.sh "origin/${{ github.base_ref }}"
 
       - name: Lint (full project)
         run: npm run lint
