@@ -13,6 +13,7 @@
     "format:check": "prettier --check .",
     "format:changed:check": "bash scripts/ci/format-changed.sh",
     "test": "bash scripts/ci/run-tests.sh",
+    "check:api-inventory": "node --import tsx scripts/ci/check-api-inventory.ts",
     "validate": "npm run type-check && npm run lint && npm run format:check"
   },
   "dependencies": {
