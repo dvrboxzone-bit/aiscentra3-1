@@ -5,15 +5,22 @@
  * npm run check:api-inventory
  *
  * Validates docs/audits/api-boundary-inventory.json against the actual
- * repository state under src/app/api. Exits non-zero on any finding.
+ * repository state under src/app/api, and validates the Markdown report's
+ * machine-owned summary block against the JSON. Exits non-zero on any
+ * finding.
  *
  * This check does NOT declare a Security Gate PASS. rateLimit:"missing"
  * and budgetGuard:"missing" are explicitly permitted values at this phase
  * -- they represent honestly-registered technical debt, not a passing
- * security control. This script only verifies the inventory itself is
- * complete, internally consistent, and accurately reflects the current
- * routes -- nothing about the presence of an inventory entry implies the
- * underlying route is actually protected.
+ * security control. This script verifies the inventory is structurally
+ * complete, path/file/method aligned, and summary-consistent. It does NOT
+ * verify that the security-property fields themselves (aiCall,
+ * serviceRole, databaseRead/Write, rawErrorExposureRisk,
+ * weakSharedSecret, etc.) accurately describe the route's real runtime
+ * behavior -- those remain manually audited (see
+ * docs/audits/API_BOUNDARY_INVENTORY.md), and this check only verifies
+ * they are internally consistent with each other, never against actual
+ * execution.
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -21,6 +28,7 @@ import { validateInventory } from './lib/api-inventory'
 
 const REPO_ROOT = resolve(__dirname, '..', '..')
 const INVENTORY_PATH = resolve(REPO_ROOT, 'docs', 'audits', 'api-boundary-inventory.json')
+const MARKDOWN_PATH = resolve(REPO_ROOT, 'docs', 'audits', 'API_BOUNDARY_INVENTORY.md')
 
 function main(): number {
   let raw: unknown
@@ -33,21 +41,23 @@ function main(): number {
     return 1
   }
 
-  const result = validateInventory(REPO_ROOT, raw)
+  let markdownText: string
+  try {
+    markdownText = readFileSync(MARKDOWN_PATH, 'utf8')
+  } catch (err) {
+    console.error(`FATAL: could not read ${MARKDOWN_PATH}`)
+    console.error(err instanceof Error ? err.message : String(err))
+    return 1
+  }
+
+  const result = validateInventory(REPO_ROOT, raw, 'src/app/api', markdownText)
 
   if (result.ok) {
-    console.log(
-      `PASS: API boundary inventory is complete and internally consistent (${INVENTORY_PATH}).`,
-    )
-    console.log(
-      'NOTE: this check does NOT constitute a Security Gate PASS. It verifies the inventory',
-    )
-    console.log(
-      'itself, not that every route is actually rate-limited or budget-guarded -- see the',
-    )
-    console.log(
-      "inventory's own rateLimit/budgetGuard fields for honestly-registered remaining debt.",
-    )
+    console.log(`PASS: API boundary inventory is ${INVENTORY_PATH}`)
+    console.log('structurally complete, path/file/method aligned, and summary-consistent;')
+    console.log('security-property fields remain manually audited unless an explicit')
+    console.log('machine consistency rule is listed.')
+    console.log('This does NOT constitute a Security Gate PASS.')
     return 0
   }
 
