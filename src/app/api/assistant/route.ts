@@ -16,10 +16,10 @@ import { retrieveContext, formatContextForPrompt } from '@/modules/assistant/ret
 import { ASSISTANT_SYSTEM_PROMPT } from '@/modules/assistant/prompt'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 30  // Assistant can take longer than pipeline functions
+export const maxDuration = 30 // Assistant can take longer than pipeline functions
 
 interface MessageHistory {
-  role:    'user' | 'assistant'
+  role: 'user' | 'assistant'
   content: string
 }
 
@@ -50,12 +50,14 @@ export async function POST(request: Request): Promise<Response> {
   type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
   const messages: Msg[] = [
     {
-      role:    'system',
+      role: 'system',
       content: `${ASSISTANT_SYSTEM_PROMPT}\n\n=== OBSERVATORY CONTEXT ===\n${contextText}\n=== END CONTEXT ===`,
     },
   ]
   if (body.history && body.history.length > 0) {
-    const hist = (body.history.slice(-6) as Msg[]).filter(m => m.role === 'user' || m.role === 'assistant')
+    const hist = (body.history.slice(-6) as Msg[]).filter(
+      (m) => m.role === 'user' || m.role === 'assistant',
+    )
     messages.push(...hist)
   }
   messages.push({ role: 'user', content: userMessage })
@@ -63,25 +65,25 @@ export async function POST(request: Request): Promise<Response> {
   // 3. Call Groq with streaming (OpenAI-compatible API)
   const groqApiKey = process.env['GROQ_API_KEY']
   if (!groqApiKey) {
-    return new Response(
-      JSON.stringify({ error: 'Assistant temporarily unavailable.' }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } },
-    )
+    return new Response(JSON.stringify({ error: 'Assistant temporarily unavailable.' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   const model = process.env['AI_PRIMARY_MODEL'] ?? 'llama-3.3-70b-versatile'
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method:  'POST',
+    method: 'POST',
     headers: {
-      'Authorization': `Bearer ${groqApiKey}`,
-      'Content-Type':  'application/json',
+      Authorization: `Bearer ${groqApiKey}`,
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       model,
       messages,
-      max_tokens:  2000,
+      max_tokens: 2000,
       temperature: 0.3,
-      stream:      true,
+      stream: true,
     }),
   })
 
@@ -106,13 +108,19 @@ export async function POST(request: Request): Promise<Response> {
         type: 'meta',
         context: {
           signals: ctx.signals.length,
-          events:  ctx.events.length,
+          events: ctx.events.length,
           reports: ctx.reports.length,
         },
       })
       controller.enqueue(encoder.encode(`data: ${meta}\n\n`))
 
-      const reader = response.body!.getReader()
+      const body = response.body
+      if (!body) {
+        throw new Error(
+          'Invariant violated: response.body is null inside the stream start() callback, despite the earlier response.ok/response.body check having passed.',
+        )
+      }
+      const reader = body.getReader()
 
       try {
         while (true) {
@@ -155,9 +163,9 @@ export async function POST(request: Request): Promise<Response> {
 
   return new Response(stream, {
     headers: {
-      'Content-Type':  'text/event-stream',
+      'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection':    'keep-alive',
+      Connection: 'keep-alive',
     },
   })
 }

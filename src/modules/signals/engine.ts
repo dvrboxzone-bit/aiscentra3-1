@@ -17,34 +17,26 @@
  * Every Signal carries engine_version for retrospective analysis.
  */
 import { agentCompleteJSON } from '@/lib/ai/agent'
-import { AIProviderError }   from '@/lib/ai/client'
+import { AIProviderError } from '@/lib/ai/client'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EnrichmentOutputSchema,
   ENRICHMENT_SYSTEM_PROMPT,
   buildEnrichmentPrompt,
 } from './enrichment-prompt'
-import {
-  SISOutputSchema,
-  SIS_SYSTEM_PROMPT,
-  buildSISPrompt,
-  computeSIS,
-} from './strategic-score'
-import {
-  checkHardRejection,
-  V2_THRESHOLDS,
-} from './pre-qualification'
+import { SISOutputSchema, SIS_SYSTEM_PROMPT, buildSISPrompt, computeSIS } from './strategic-score'
+import { checkHardRejection, V2_THRESHOLDS } from './pre-qualification'
 import { computeAllScores, computeMomentumScore, validateFactors } from './scoring'
 import { validateSignal } from './validation'
 import { checkDuplicate, getRecentSignalTitles } from './deduplication'
 import type { ObservationRow } from '@/modules/observations/queries'
+import type { SignalCategory } from '@/types/database'
 
 // ── Engine version ────────────────────────────────────────────────────────────
 
 const ENGINE_VERSION = 'v2.0'
 
 // ── Category Pre-Assignment (V1 compatible) ───────────────────────────────────
-
 
 // ── Result type ───────────────────────────────────────────────────────────────
 
@@ -61,55 +53,53 @@ export interface SignalEngineResult {
     | 'rejected_low_score'
     | 'archived_observation'
     | 'error'
-  signalId?:     string | undefined
-  reason?:       string | undefined
-  scores?:       { signal_score: number; confidence_score: number; momentum_score: number } | undefined
-  sis_final?:    number | undefined
+  signalId?: string | undefined
+  reason?: string | undefined
+  scores?: { signal_score: number; confidence_score: number; momentum_score: number } | undefined
+  sis_final?: number | undefined
 }
 
 // ── Decision Log writer ───────────────────────────────────────────────────────
 
 async function writeDecisionLog(params: {
-  supabase:             ReturnType<typeof createAdminClient>
-  signal_id:            string | null
-  observation_id:       string
-  decision:             string
-  rejection_code?:      string | null | undefined
-  rejection_reason?:    string | null | undefined
+  supabase: ReturnType<typeof createAdminClient>
+  signal_id: string | null
+  observation_id: string
+  decision: string
+  rejection_code?: string | null | undefined
+  rejection_reason?: string | null | undefined
   engine_justification: string
   qualification_score?: number | null
-  sis_novelty?:         number | null
-  sis_importance?:      number | null
-  sis_urgency?:         number | null
-  sis_confidence?:      number | null
-  sis_final?:           number | null
+  sis_novelty?: number | null
+  sis_importance?: number | null
+  sis_urgency?: number | null
+  sis_confidence?: number | null
+  sis_final?: number | null
   human_relevance_breakdown?: Record<string, unknown>
-  anti_hype_score?:     number | null
-  rule_trace?:          string[]
+  anti_hype_score?: number | null
+  rule_trace?: string[]
 }): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (params.supabase as any)
-      .from('signal_decision_log')
-      .insert({
-        signal_id:                 params.signal_id,
-        observation_id:            params.observation_id,
-        decision:                  params.decision,
-        rejection_code:            params.rejection_code ?? null,
-        rejection_reason:          params.rejection_reason ?? null,
-        engine_justification:      params.engine_justification,
-        qualification_score:       params.qualification_score ?? null,
-        sis_novelty:               params.sis_novelty ?? null,
-        sis_importance:            params.sis_importance ?? null,
-        sis_urgency:               params.sis_urgency ?? null,
-        sis_confidence:            params.sis_confidence ?? null,
-        sis_final:                 params.sis_final ?? null,
-        human_relevance_breakdown: params.human_relevance_breakdown ?? {},
-        anti_hype_score:           params.anti_hype_score ?? null,
-        rule_trace:                params.rule_trace ?? [],
-        thresholds_snapshot:       V2_THRESHOLDS,
-        engine_version:            ENGINE_VERSION,
-      })
+    await (params.supabase as any).from('signal_decision_log').insert({
+      signal_id: params.signal_id,
+      observation_id: params.observation_id,
+      decision: params.decision,
+      rejection_code: params.rejection_code ?? null,
+      rejection_reason: params.rejection_reason ?? null,
+      engine_justification: params.engine_justification,
+      qualification_score: params.qualification_score ?? null,
+      sis_novelty: params.sis_novelty ?? null,
+      sis_importance: params.sis_importance ?? null,
+      sis_urgency: params.sis_urgency ?? null,
+      sis_confidence: params.sis_confidence ?? null,
+      sis_final: params.sis_final ?? null,
+      human_relevance_breakdown: params.human_relevance_breakdown ?? {},
+      anti_hype_score: params.anti_hype_score ?? null,
+      rule_trace: params.rule_trace ?? [],
+      thresholds_snapshot: V2_THRESHOLDS,
+      engine_version: ENGINE_VERSION,
+    })
   } catch (err) {
     console.error('[engine] decision_log write failed:', err)
     // Non-blocking — never fail Signal creation due to log write failure
@@ -119,22 +109,25 @@ async function writeDecisionLog(params: {
 // ── Knowledge Graph ingestion ─────────────────────────────────────────────────
 
 async function ingestToKnowledgeGraph(
-  supabase:      ReturnType<typeof createAdminClient>,
+  supabase: ReturnType<typeof createAdminClient>,
   observationId: string,
-  title:         string,
-  category:      string,
+  title: string,
+  category: string,
 ): Promise<string | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabase as any)
       .from('knowledge_graph_nodes')
-      .upsert({
-        node_type:      'observation',
-        node_id:        observationId,
-        label:          title.slice(0, 200),
-        properties:     { category },
-        engine_version: ENGINE_VERSION,
-      }, { onConflict: 'node_id', ignoreDuplicates: false })
+      .upsert(
+        {
+          node_type: 'observation',
+          node_id: observationId,
+          label: title.slice(0, 200),
+          properties: { category },
+          engine_version: ENGINE_VERSION,
+        },
+        { onConflict: 'node_id', ignoreDuplicates: false },
+      )
       .select('id')
       .single()
     return (data as { id: string } | null)?.id ?? null
@@ -146,20 +139,20 @@ async function ingestToKnowledgeGraph(
 // ── Source authority override ─────────────────────────────────────────────────
 
 const SOURCE_AUTHORITY: Record<string, number> = {
-  'company_blog': 10,
-  'research':     7,
-  'technical':    6,
-  'news':         5,
-  'community':    3,
+  company_blog: 10,
+  research: 7,
+  technical: 6,
+  news: 5,
+  community: 3,
 }
 
 // ── Main Engine Function ──────────────────────────────────────────────────────
 
 export async function processObservation(
-  observation:     ObservationRow,
+  observation: ObservationRow,
   sourceTrustScore: number,
-  sourceName:      string,
-  sourceType:      string = '',
+  sourceName: string,
+  sourceType: string = '',
 ): Promise<SignalEngineResult> {
   const supabase = createAdminClient()
 
@@ -168,66 +161,75 @@ export async function processObservation(
   if (hardRejection.rejected) {
     // Update observation with rejection
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any).from('observations').update({
-      qualification_result: 'DISCARD',
-      rejection_code:       hardRejection.code,
-      rejection_reason:     hardRejection.reason,
-      engine_version:       ENGINE_VERSION,
-    }).eq('id', observation.id)
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'DISCARD',
+        rejection_code: hardRejection.code,
+        rejection_reason: hardRejection.reason,
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
 
     await writeDecisionLog({
       supabase,
-      signal_id:            null,
-      observation_id:       observation.id,
-      decision:             'DISCARD',
-      rejection_code:       hardRejection.code,
-      rejection_reason:     hardRejection.reason,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'DISCARD',
+      rejection_code: hardRejection.code,
+      rejection_reason: hardRejection.reason,
       engine_justification: `Hard rejection rule ${hardRejection.code} matched: ${hardRejection.reason}`,
     })
 
     return {
       observationId: observation.id,
-      outcome:       'rejected_hard_rule',
-      reason:        `${hardRejection.code}: ${hardRejection.reason}`,
+      outcome: 'rejected_hard_rule',
+      reason: `${hardRejection.code}: ${hardRejection.reason}`,
     }
   }
 
   function preAssignCategory(title: string, content: string): string {
-  const CATS = [
-    { cat: 'REGULATION',     kw: ['regulation', 'policy', 'law', 'compliance', 'government'] },
-    { cat: 'FUNDING',        kw: ['funding', 'raises', 'series', 'investment', 'venture'] },
-    { cat: 'MODELS',         kw: ['model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 'weights'] },
-    { cat: 'AGENTS',         kw: ['agent', 'autonomous', 'agentic', 'multi-agent'] },
-    { cat: 'INFRASTRUCTURE', kw: ['api', 'cloud', 'infrastructure', 'compute', 'platform'] },
-    { cat: 'HARDWARE',       kw: ['chip', 'gpu', 'tpu', 'nvidia', 'semiconductor'] },
-    { cat: 'OPEN_SOURCE',    kw: ['open source', 'open-source', 'weights released', 'apache', 'mit license'] },
-    { cat: 'COMPANIES',      kw: ['acqui', 'partnership', 'ceo', 'strategy', 'launch', 'announces'] },
-  ]
-  const text = (title + ' ' + content.slice(0, 500)).toLowerCase()
-  for (const { cat, kw } of CATS) {
-    if (kw.some(k => text.includes(k))) return cat
+    const CATS = [
+      { cat: 'REGULATION', kw: ['regulation', 'policy', 'law', 'compliance', 'government'] },
+      { cat: 'FUNDING', kw: ['funding', 'raises', 'series', 'investment', 'venture'] },
+      { cat: 'MODELS', kw: ['model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 'weights'] },
+      { cat: 'AGENTS', kw: ['agent', 'autonomous', 'agentic', 'multi-agent'] },
+      { cat: 'INFRASTRUCTURE', kw: ['api', 'cloud', 'infrastructure', 'compute', 'platform'] },
+      { cat: 'HARDWARE', kw: ['chip', 'gpu', 'tpu', 'nvidia', 'semiconductor'] },
+      {
+        cat: 'OPEN_SOURCE',
+        kw: ['open source', 'open-source', 'weights released', 'apache', 'mit license'],
+      },
+      { cat: 'COMPANIES', kw: ['acqui', 'partnership', 'ceo', 'strategy', 'launch', 'announces'] },
+    ]
+    const text = (title + ' ' + content.slice(0, 500)).toLowerCase()
+    for (const { cat, kw } of CATS) {
+      if (kw.some((k) => text.includes(k))) return cat
+    }
+    return 'RESEARCH'
   }
-  return 'RESEARCH'
-}
 
-// ── Stage 2: Category + Deduplication ────────────────────────────────────
-  const candidateCategory = preAssignCategory(observation.title, observation.content) as import("@/types/database").SignalCategory
+  // ── Stage 2: Category + Deduplication ────────────────────────────────────
+  const candidateCategory = preAssignCategory(
+    observation.title,
+    observation.content,
+  ) as SignalCategory
 
   const dupCheck = await checkDuplicate(observation.title, candidateCategory)
   if (dupCheck.isDuplicate) {
     await writeDecisionLog({
       supabase,
-      signal_id:            null,
-      observation_id:       observation.id,
-      decision:             'DISCARD',
-      rejection_code:       'R-11',
-      rejection_reason:     dupCheck.reason,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'DISCARD',
+      rejection_code: 'R-11',
+      rejection_reason: dupCheck.reason,
       engine_justification: `Duplicate detected before enrichment: ${dupCheck.reason}`,
     })
     return {
       observationId: observation.id,
-      outcome:       'rejected_duplicate',
-      reason:        dupCheck.reason,
+      outcome: 'rejected_duplicate',
+      reason: dupCheck.reason,
     }
   }
 
@@ -244,12 +246,19 @@ export async function processObservation(
       'classifier',
       [
         { role: 'system', content: SIS_SYSTEM_PROMPT },
-        { role: 'user',   content: buildSISPrompt(observation.title, observation.content, sourceName, sourceType) },
+        {
+          role: 'user',
+          content: buildSISPrompt(observation.title, observation.content, sourceName, sourceType),
+        },
       ],
       SISOutputSchema,
       { temperature: 0, maxTokens: 400 },
     )
-    sisResult = computeSIS(sisRaw as Parameters<typeof computeSIS>[0], observation.title, observation.content)
+    sisResult = computeSIS(
+      sisRaw as Parameters<typeof computeSIS>[0],
+      observation.title,
+      observation.content,
+    )
   } catch (err) {
     // Re-throw rate limit — batch handler will retry
     if (err instanceof AIProviderError && err.statusCode === 429) throw err
@@ -260,46 +269,49 @@ export async function processObservation(
   // Apply SIS decision if available
   if (sisResult && sisResult.decision === 'DISCARD') {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any).from('observations').update({
-      qualification_result: 'DISCARD',
-      rejection_code:       'R-09',
-      rejection_reason:     `Low SIS: final=${sisResult.sis.final.toFixed(2)}, roles=${sisResult.human_relevance.roles_yes_count}`,
-      qualification_score:  sisResult.sis.final,
-      engine_version:       ENGINE_VERSION,
-    }).eq('id', observation.id)
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'DISCARD',
+        rejection_code: 'R-09',
+        rejection_reason: `Low SIS: final=${sisResult.sis.final.toFixed(2)}, roles=${sisResult.human_relevance.roles_yes_count}`,
+        qualification_score: sisResult.sis.final,
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
 
     await writeDecisionLog({
       supabase,
-      signal_id:                null,
-      observation_id:           observation.id,
-      decision:                 'DISCARD',
-      rejection_code:           'R-09',
-      rejection_reason:         `SIS_FINAL=${sisResult.sis.final.toFixed(2)} below threshold ${V2_THRESHOLDS.SIS_WEAK_MIN}`,
-      engine_justification:     sisResult.engine_justification,
-      sis_novelty:              sisResult.sis.novelty,
-      sis_importance:           sisResult.sis.importance,
-      sis_urgency:              sisResult.sis.urgency,
-      sis_confidence:           sisResult.sis.confidence,
-      sis_final:                sisResult.sis.final,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'DISCARD',
+      rejection_code: 'R-09',
+      rejection_reason: `SIS_FINAL=${sisResult.sis.final.toFixed(2)} below threshold ${V2_THRESHOLDS.SIS_WEAK_MIN}`,
+      engine_justification: sisResult.engine_justification,
+      sis_novelty: sisResult.sis.novelty,
+      sis_importance: sisResult.sis.importance,
+      sis_urgency: sisResult.sis.urgency,
+      sis_confidence: sisResult.sis.confidence,
+      sis_final: sisResult.sis.final,
       human_relevance_breakdown: sisResult.human_relevance as unknown as Record<string, unknown>,
-      anti_hype_score:          sisResult.anti_hype_score,
-      rule_trace:               sisResult.rule_trace,
+      anti_hype_score: sisResult.anti_hype_score,
+      rule_trace: sisResult.rule_trace,
     })
 
     return {
       observationId: observation.id,
-      outcome:       'rejected_low_sis',
-      reason:        `SIS_FINAL=${sisResult.sis.final.toFixed(2)} — insufficient strategic importance`,
-      sis_final:     sisResult.sis.final,
+      outcome: 'rejected_low_sis',
+      reason: `SIS_FINAL=${sisResult.sis.final.toFixed(2)} — insufficient strategic importance`,
+      sis_final: sisResult.sis.final,
     }
   }
 
   // ── Stage 4: Full AI Enrichment ───────────────────────────────────────────
   const recentTitles = await getRecentSignalTitles(candidateCategory, 10)
   const prompt = buildEnrichmentPrompt({
-    title:              observation.title,
-    content:            observation.content,
-    sourceUrl:          (observation.metadata['feed_url'] as string | undefined) ?? '',
+    title: observation.title,
+    content: observation.content,
+    sourceUrl: (observation.metadata['feed_url'] as string | undefined) ?? '',
     sourceName,
     sourceTrustScore,
     candidateCategory,
@@ -312,7 +324,7 @@ export async function processObservation(
       'parser',
       [
         { role: 'system', content: ENRICHMENT_SYSTEM_PROMPT },
-        { role: 'user',   content: prompt },
+        { role: 'user', content: prompt },
       ],
       EnrichmentOutputSchema,
       { temperature: 0.2, maxTokens: 1024 },
@@ -325,15 +337,19 @@ export async function processObservation(
 
   // Reject marketing
   if (enriched.is_marketing) {
-    return { observationId: observation.id, outcome: 'rejected_marketing', reason: 'marketing_content_detected' }
+    return {
+      observationId: observation.id,
+      outcome: 'rejected_marketing',
+      reason: 'marketing_content_detected',
+    }
   }
 
   // Reject duplicate flagged by agent
   if (enriched.is_duplicate) {
     return {
       observationId: observation.id,
-      outcome:       'rejected_duplicate',
-      reason:        `duplicate_flagged_by_agent: ${enriched.duplicate_note ?? ''}`,
+      outcome: 'rejected_duplicate',
+      reason: `duplicate_flagged_by_agent: ${enriched.duplicate_note ?? ''}`,
     }
   }
 
@@ -344,16 +360,16 @@ export async function processObservation(
   }
 
   const factors = {
-    impact_factor:              toInt(enriched.impact_factor),
-    actor_factor:               toInt(enriched.actor_factor),
-    novelty_factor:             toInt(enriched.novelty_factor),
-    verifiability_factor:       toInt(enriched.verifiability_factor),
-    strategic_factor:           toInt(enriched.strategic_factor),
-    authority_factor:           toInt(enriched.authority_factor),
-    corroboration_factor:       toInt(enriched.corroboration_factor),
-    specificity_factor:         toInt(enriched.specificity_factor),
+    impact_factor: toInt(enriched.impact_factor),
+    actor_factor: toInt(enriched.actor_factor),
+    novelty_factor: toInt(enriched.novelty_factor),
+    verifiability_factor: toInt(enriched.verifiability_factor),
+    strategic_factor: toInt(enriched.strategic_factor),
+    authority_factor: toInt(enriched.authority_factor),
+    corroboration_factor: toInt(enriched.corroboration_factor),
+    specificity_factor: toInt(enriched.specificity_factor),
     category_confidence_factor: toInt(enriched.category_confidence_factor),
-    consistency_factor:         7,
+    consistency_factor: 7,
   }
 
   // Override authority_factor from source type
@@ -362,20 +378,32 @@ export async function processObservation(
 
   const factorErrors = validateFactors(factors)
   if (factorErrors.length > 0) {
-    return { observationId: observation.id, outcome: 'error', reason: `Factor validation: ${factorErrors.join(', ')}` }
+    return {
+      observationId: observation.id,
+      outcome: 'error',
+      reason: `Factor validation: ${factorErrors.join(', ')}`,
+    }
   }
 
   const { signal_score, confidence_score } = computeAllScores(factors)
-  const momentum_score = computeMomentumScore({ newObservationsCount: 1, distinctSourceCount: 1, crossCategoryRefCount: 0, daysSinceCreation: 0 })
+  const momentum_score = computeMomentumScore({
+    newObservationsCount: 1,
+    distinctSourceCount: 1,
+    crossCategoryRefCount: 0,
+    daysSinceCreation: 0,
+  })
 
   const validation = validateSignal({
-    title:           enriched.title,
-    description:     enriched.description,
+    title: enriched.title,
+    description: enriched.description,
     signal_score,
     confidence_score,
-    category:        enriched.category,
+    category: enriched.category,
     observation_ids: [observation.id],
-    entities:        (enriched.entities ?? []).map(e => ({ name: e.name, type: (e.type as string) ?? 'TECHNOLOGY' })),
+    entities: (enriched.entities ?? []).map((e) => ({
+      name: e.name,
+      type: (e.type as string) ?? 'TECHNOLOGY',
+    })),
   })
 
   if (!validation.valid) {
@@ -385,23 +413,28 @@ export async function processObservation(
 
   // ── Stage 6: Determine Signal vs Weak Signal ──────────────────────────────
   // Weak Signal: SIS between 4.0-5.9, or SIS unavailable but score < 55
-  const isWeakSignal = sisResult
-    ? sisResult.decision === 'WEAK_SIGNAL'
-    : signal_score < 55
+  const isWeakSignal = sisResult ? sisResult.decision === 'WEAK_SIGNAL' : signal_score < 55
 
   const signalStatus = isWeakSignal ? 'WEAK' : 'ACTIVE'
   const intelligenceType = isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL'
 
   // ── Entity resolution + upsert ────────────────────────────────────────────
   const entityIds: string[] = []
-  for (const entity of (enriched.entities ?? [])) {
-    const canonicalName = entity.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  for (const entity of enriched.entities ?? []) {
+    const canonicalName = entity.name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: entityRecord } = await (supabase as any)
       .from('entities')
-      .upsert({ name: entity.name, canonical_name: canonicalName, entity_type: entity.type },
-        { onConflict: 'canonical_name', ignoreDuplicates: false })
-      .select('id').single()
+      .upsert(
+        { name: entity.name, canonical_name: canonicalName, entity_type: entity.type },
+        { onConflict: 'canonical_name', ignoreDuplicates: false },
+      )
+      .select('id')
+      .single()
     if (entityRecord?.id) entityIds.push(entityRecord.id as string)
   }
 
@@ -410,10 +443,10 @@ export async function processObservation(
   const { data: signal, error: signalError } = await (supabase as any)
     .from('signals')
     .insert({
-      title:       enriched.title,
+      title: enriched.title,
       description: enriched.description,
-      category:    enriched.category,
-      status:      signalStatus,
+      category: enriched.category,
+      status: signalStatus,
 
       // V1 factors
       ...factors,
@@ -425,11 +458,11 @@ export async function processObservation(
       intelligence_type: intelligenceType,
 
       // V2: SIS dimensions
-      sis_novelty:    sisResult?.sis.novelty    ?? null,
+      sis_novelty: sisResult?.sis.novelty ?? null,
       sis_importance: sisResult?.sis.importance ?? null,
-      sis_urgency:    sisResult?.sis.urgency    ?? null,
+      sis_urgency: sisResult?.sis.urgency ?? null,
       sis_confidence: sisResult?.sis.confidence ?? null,
-      sis_final:      sisResult?.sis.final      ?? null,
+      sis_final: sisResult?.sis.final ?? null,
 
       // V2: Human relevance
       human_relevance_flags: sisResult?.human_relevance ?? {},
@@ -442,23 +475,23 @@ export async function processObservation(
       relevance_horizon: sisResult?.relevance_horizon ?? null,
 
       // V2: Lifecycle
-      lifecycle_state:  'ACTIVE',
-      engine_version:   ENGINE_VERSION,
+      lifecycle_state: 'ACTIVE',
+      engine_version: ENGINE_VERSION,
 
       // V1: Lifecycle
-      validation_flags:         validation.flags,
-      manual_override:          false,
-      observation_ids:          [observation.id],
-      entity_ids:               entityIds,
+      validation_flags: validation.flags,
+      manual_override: false,
+      observation_ids: [observation.id],
+      entity_ids: entityIds,
       momentum_last_calculated: new Date().toISOString(),
 
       metadata: {
-        enriched_at:           new Date().toISOString(),
+        enriched_at: new Date().toISOString(),
         novelty_prior_example: enriched.novelty_prior_example ?? null,
-        engine_version:        ENGINE_VERSION,
+        engine_version: ENGINE_VERSION,
         momentum_calculation: {
-          new_observations_count:   1,
-          distinct_source_count:    1,
+          new_observations_count: 1,
+          distinct_source_count: 1,
           cross_category_ref_count: 0,
         },
         audit_log: [],
@@ -471,7 +504,7 @@ export async function processObservation(
     return {
       observationId: observation.id,
       outcome: 'error',
-      reason:  `Signal insert failed: ${signalError?.message ?? 'unknown'}`,
+      reason: `Signal insert failed: ${signalError?.message ?? 'unknown'}`,
     }
   }
 
@@ -480,34 +513,38 @@ export async function processObservation(
   // ── Write Decision Log ────────────────────────────────────────────────────
   await writeDecisionLog({
     supabase,
-    signal_id:            signalId,
-    observation_id:       observation.id,
-    decision:             isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL',
-    engine_justification: sisResult?.engine_justification ??
+    signal_id: signalId,
+    observation_id: observation.id,
+    decision: isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL',
+    engine_justification:
+      sisResult?.engine_justification ??
       `Signal created via V1 scoring. signal_score=${signal_score}, confidence=${confidence_score}. SIS evaluation unavailable.`,
-    sis_novelty:               sisResult?.sis.novelty    ?? null,
-    sis_importance:            sisResult?.sis.importance ?? null,
-    sis_urgency:               sisResult?.sis.urgency    ?? null,
-    sis_confidence:            sisResult?.sis.confidence ?? null,
-    sis_final:                 sisResult?.sis.final      ?? null,
+    sis_novelty: sisResult?.sis.novelty ?? null,
+    sis_importance: sisResult?.sis.importance ?? null,
+    sis_urgency: sisResult?.sis.urgency ?? null,
+    sis_confidence: sisResult?.sis.confidence ?? null,
+    sis_final: sisResult?.sis.final ?? null,
     human_relevance_breakdown: sisResult?.human_relevance as unknown as Record<string, unknown>,
-    anti_hype_score:           sisResult?.anti_hype_score ?? null,
-    rule_trace:                sisResult?.rule_trace ?? [],
+    anti_hype_score: sisResult?.anti_hype_score ?? null,
+    rule_trace: sisResult?.rule_trace ?? [],
   })
 
   // ── Update observation ────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (supabase as any).from('observations').update({
-    qualification_result: isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL',
-    qualification_score:  sisResult?.sis.final ?? signal_score,
-    engine_version:       ENGINE_VERSION,
-  }).eq('id', observation.id)
+  await (supabase as any)
+    .from('observations')
+    .update({
+      qualification_result: isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL',
+      qualification_score: sisResult?.sis.final ?? signal_score,
+      engine_version: ENGINE_VERSION,
+    })
+    .eq('id', observation.id)
 
   return {
     observationId: observation.id,
-    outcome:       isWeakSignal ? 'weak_signal_created' : 'signal_created',
+    outcome: isWeakSignal ? 'weak_signal_created' : 'signal_created',
     signalId,
-    scores:        { signal_score, confidence_score, momentum_score },
-    sis_final:     sisResult?.sis.final ?? undefined,
+    scores: { signal_score, confidence_score, momentum_score },
+    sis_final: sisResult?.sis.final ?? undefined,
   }
 }

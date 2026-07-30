@@ -15,24 +15,35 @@ import { createClient } from '@/lib/supabase/server'
 import type { Signal, Event, Report } from '@/types/database'
 
 export interface RetrievedContext {
-  signals: Pick<Signal, 'id' | 'title' | 'description' | 'category' | 'signal_score' | 'confidence_score' | 'created_at'>[]
-  events:  Pick<Event,  'id' | 'title' | 'summary' | 'impact_summary' | 'forecast' | 'event_type' | 'timeline_date'>[]
+  signals: Pick<
+    Signal,
+    'id' | 'title' | 'description' | 'category' | 'signal_score' | 'confidence_score' | 'created_at'
+  >[]
+  events: Pick<
+    Event,
+    'id' | 'title' | 'summary' | 'impact_summary' | 'forecast' | 'event_type' | 'timeline_date'
+  >[]
   reports: Pick<Report, 'id' | 'title' | 'summary' | 'content' | 'report_type' | 'published_at'>[]
   hasContext: boolean
   contextSummary: string
 }
 
 function sanitise(q: string): string {
-  return q.trim().replace(/[<>'";\\]/g, '').slice(0, 200)
+  return q
+    .trim()
+    .replace(/[<>'";\\]/g, '')
+    .slice(0, 200)
 }
 
 export async function retrieveContext(userQuery: string): Promise<RetrievedContext> {
   const supabase = await createClient()
-  const query    = sanitise(userQuery)
+  const query = sanitise(userQuery)
 
   if (query.length < 2) {
     return {
-      signals: [], events: [], reports: [],
+      signals: [],
+      events: [],
+      reports: [],
       hasContext: false,
       contextSummary: 'Query too short to retrieve context.',
     }
@@ -52,22 +63,27 @@ export async function retrieveContext(userQuery: string): Promise<RetrievedConte
   let categoryFilter: string | null = null
   const qLower = query.toLowerCase()
   for (const [pattern, cat] of Object.entries(CATEGORY_KEYWORDS)) {
-    if (new RegExp(pattern).test(qLower)) { categoryFilter = cat; break }
+    if (new RegExp(pattern).test(qLower)) {
+      categoryFilter = cat
+      break
+    }
   }
 
   // ── Total signal count for context metadata ───────────────────────────────
   const { count: totalSignals } = await supabase
-    .from('signals').select('id', { count: 'exact', head: true }).eq('status', 'ACTIVE')
+    .from('signals')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'ACTIVE')
 
   // ── FTS: description search, category-aware, limit 15 ────────────────────
-  let sigBase = supabase
+  const sigBaseQuery = supabase
     .from('signals')
     .select('id, title, description, category, signal_score, confidence_score, created_at')
     .eq('status', 'ACTIVE')
-  if (categoryFilter) sigBase = (sigBase as any).eq('category', categoryFilter)
+  const sigBase = categoryFilter ? sigBaseQuery.eq('category', categoryFilter) : sigBaseQuery
 
   const [signalsFTS, eventsResult, reportsResult] = await Promise.all([
-    (sigBase as any)
+    sigBase
       .textSearch('description', query, { type: 'websearch', config: 'english' })
       .order('signal_score', { ascending: false })
       .limit(15),
@@ -86,20 +102,20 @@ export async function retrieveContext(userQuery: string): Promise<RetrievedConte
       .limit(3),
   ])
 
-  let signals = ((signalsFTS as any).data ?? []) as RetrievedContext['signals']
-  const events  = (eventsResult.data  ?? []) as RetrievedContext['events']
+  let signals = (signalsFTS.data ?? []) as RetrievedContext['signals']
+  const events = (eventsResult.data ?? []) as RetrievedContext['events']
   const reports = (reportsResult.data ?? []) as RetrievedContext['reports']
 
   // ── Fallback: category-aware top signals by score ─────────────────────────
   if (signals.length === 0) {
-    let fallback = supabase
+    const fallbackQuery = supabase
       .from('signals')
       .select('id, title, description, category, signal_score, confidence_score, created_at')
       .eq('status', 'ACTIVE')
       .order('signal_score', { ascending: false })
       .limit(10)
-    if (categoryFilter) fallback = (fallback as any).eq('category', categoryFilter)
-    const { data } = await (fallback as any)
+    const fallback = categoryFilter ? fallbackQuery.eq('category', categoryFilter) : fallbackQuery
+    const { data } = await fallback
     signals = (data ?? []) as RetrievedContext['signals']
   }
 
@@ -127,9 +143,9 @@ export function formatContextForPrompt(ctx: RetrievedContext): string {
     for (const s of ctx.signals) {
       parts.push(
         `[SIGNAL] ${s.title}\n` +
-        `Category: ${s.category} | Score: ${s.signal_score}/100 | Confidence: ${s.confidence_score}%\n` +
-        `Date: ${s.created_at.slice(0, 10)}\n` +
-        `${s.description}\n`,
+          `Category: ${s.category} | Score: ${s.signal_score}/100 | Confidence: ${s.confidence_score}%\n` +
+          `Date: ${s.created_at.slice(0, 10)}\n` +
+          `${s.description}\n`,
       )
     }
   }
@@ -139,10 +155,10 @@ export function formatContextForPrompt(ctx: RetrievedContext): string {
     for (const e of ctx.events) {
       parts.push(
         `[EVENT] ${e.title}\n` +
-        `Type: ${e.event_type} | Timeline: ${e.timeline_date}\n` +
-        `Summary: ${e.summary}\n` +
-        `Impact: ${e.impact_summary}\n` +
-        `Forecast: ${e.forecast}\n`,
+          `Type: ${e.event_type} | Timeline: ${e.timeline_date}\n` +
+          `Summary: ${e.summary}\n` +
+          `Impact: ${e.impact_summary}\n` +
+          `Forecast: ${e.forecast}\n`,
       )
     }
   }
@@ -152,9 +168,9 @@ export function formatContextForPrompt(ctx: RetrievedContext): string {
     for (const r of ctx.reports) {
       parts.push(
         `[REPORT: ${r.report_type}] ${r.title}\n` +
-        `Published: ${(r.published_at ?? '').slice(0, 10)}\n` +
-        `${r.summary}\n` +
-        `${r.content.slice(0, 800)}\n`,
+          `Published: ${(r.published_at ?? '').slice(0, 10)}\n` +
+          `${r.summary}\n` +
+          `${r.content.slice(0, 800)}\n`,
       )
     }
   }

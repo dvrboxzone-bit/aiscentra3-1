@@ -18,7 +18,6 @@ import type {
   ReasoningInput,
   ReasoningResult,
   ExecutionStep,
-  ExecutionStepResult,
   AgentAction,
   SafetyCheckResult,
   AgentTask,
@@ -79,7 +78,7 @@ export interface ReasoningEngine {
 // (Open/Closed Principle).
 
 export interface ExecutionToolContext {
-  task:    AgentTask
+  task: AgentTask
   context: AgentContext
 }
 
@@ -94,7 +93,7 @@ export interface ExecutionTool {
 
 export interface ExecutionToolRegistry {
   register(tool: ExecutionTool): void
-  getTool(kind: ExecutionStep['kind']): ExecutionTool  // throws UnknownExecutionStepKind if absent
+  getTool(kind: ExecutionStep['kind']): ExecutionTool // throws UnknownExecutionStepKind if absent
   hasTool(kind: ExecutionStep['kind']): boolean
 }
 

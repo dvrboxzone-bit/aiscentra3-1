@@ -1,25 +1,36 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { SignalCard } from '@/components/signals/signal-card'
 import { getSignals } from '@/modules/signals/queries'
 import type { SignalCategory } from '@/types/database'
 
 export const metadata: Metadata = {
   title: 'Signals',
-  description: 'Live AI ecosystem signal feed. Browse, filter and explore scored intelligence signals.',
+  description:
+    'Live AI ecosystem signal feed. Browse, filter and explore scored intelligence signals.',
 }
 
 export const revalidate = 3600
 
 const CATEGORIES: SignalCategory[] = [
-  'RESEARCH', 'MODELS', 'COMPANIES', 'INFRASTRUCTURE',
-  'OPEN_SOURCE', 'FUNDING', 'REGULATION', 'AGENTS', 'HARDWARE',
+  'RESEARCH',
+  'MODELS',
+  'COMPANIES',
+  'INFRASTRUCTURE',
+  'OPEN_SOURCE',
+  'FUNDING',
+  'REGULATION',
+  'AGENTS',
+  'HARDWARE',
 ]
 
 interface SignalsPageProps {
   searchParams: Promise<{ category?: string }>
 }
 
-export default async function SignalsPage({ searchParams }: SignalsPageProps): Promise<React.JSX.Element> {
+export default async function SignalsPage({
+  searchParams,
+}: SignalsPageProps): Promise<React.JSX.Element> {
   const params = await searchParams
   const activeCategory = params.category as SignalCategory | undefined
 
@@ -41,7 +52,7 @@ export default async function SignalsPage({ searchParams }: SignalsPageProps): P
 
       {/* Category filter */}
       <div className="flex flex-wrap gap-2 border-b border-observatory-border px-6 py-4">
-        <a
+        <Link
           href="/signals"
           className={`px-3 py-1 font-mono text-xs tracking-wider transition-colors ${
             !activeCategory
@@ -50,7 +61,7 @@ export default async function SignalsPage({ searchParams }: SignalsPageProps): P
           }`}
         >
           ALL
-        </a>
+        </Link>
         {CATEGORIES.map((cat) => (
           <a
             key={cat}
@@ -78,9 +89,7 @@ export default async function SignalsPage({ searchParams }: SignalsPageProps): P
             </p>
           </div>
         ) : (
-          signals.map((signal) => (
-            <SignalCard key={signal.id} signal={signal} variant="default" />
-          ))
+          signals.map((signal) => <SignalCard key={signal.id} signal={signal} variant="default" />)
         )}
       </div>
     </div>

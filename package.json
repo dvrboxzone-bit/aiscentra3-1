@@ -6,11 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "lint:fix": "next lint --fix",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "type-check": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "format:changed:check": "bash scripts/ci/format-changed.sh",
+    "test": "bash scripts/ci/run-tests.sh",
     "validate": "npm run type-check && npm run lint && npm run format:check"
   },
   "dependencies": {
@@ -36,6 +38,7 @@
     "prettier": "3.4.2",
     "prettier-plugin-tailwindcss": "0.6.11",
     "tailwindcss": "3.4.17",
+    "tsx": "^4.23.1",
     "typescript": "5.7.3"
   }
 }

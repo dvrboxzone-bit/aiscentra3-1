@@ -22,28 +22,25 @@
  * Called by: /api/cron/pipeline (daily Vercel Cron)
  * Also available for manual drain.
  */
-import { NextResponse }                   from 'next/server'
-import { createAdminClient }              from '@/lib/supabase/server'
-import { processObservation }             from '@/modules/signals/engine'
-import {
-  markObservationProcessed,
-  markObservationForRetry,
-}                                         from '@/modules/observations/queries'
-import { AIProviderError }                from '@/lib/ai/client'
-import type { ObservationRow }            from '@/modules/observations/queries'
+import { NextResponse } from 'next/server'
+import { createAdminClient } from '@/lib/supabase/server'
+import { processObservation } from '@/modules/signals/engine'
+import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
+import { AIProviderError } from '@/lib/ai/client'
+import type { ObservationRow } from '@/modules/observations/queries'
 
 export const maxDuration = 60
-export const dynamic     = 'force-dynamic'
+export const dynamic = 'force-dynamic'
 
 // ── Batch sizing & rate limiting ──────────────────────────────────────────────
 // Direct models: llama-3.3-70b (12K TPM) + llama-3.1-8b (fallback)
 // Each enrichment: ~1000-1500 tokens → max 8-12 requests/minute safely
 // Conservative: 1 request per 6s = 10 requests/minute (20% headroom)
 // TIME_BUDGET 54s → max 9 requests but we cap at 3 for stability
-const BATCH_SIZE         = 3       // 3 observations per run — conservative for stability
-const TIME_BUDGET        = 54_000  // 54s — leave 6s buffer before Vercel kills function
-const AI_RETRY_MS        = 30_000  // 30s backoff after 429
-const INTER_REQUEST_MS   = 6_000   // 6s between requests — 10 RPM effective rate
+const BATCH_SIZE = 3 // 3 observations per run — conservative for stability
+const TIME_BUDGET = 54_000 // 54s — leave 6s buffer before Vercel kills function
+const AI_RETRY_MS = 30_000 // 30s backoff after 429
+const INTER_REQUEST_MS = 6_000 // 6s between requests — 10 RPM effective rate
 
 function isAuthorized(request: Request): boolean {
   const secret = process.env['CRON_SECRET']
@@ -58,24 +55,24 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const startedAt = Date.now()
-  const supabase  = createAdminClient()
+  const supabase = createAdminClient()
 
   const stats = {
-    processed:      0,
+    processed: 0,
     signal_created: 0,
-    rejected:       0,
-    retried:        0,
-    errors:         0,
+    rejected: 0,
+    retried: 0,
+    errors: 0,
     stopped_reason: 'queue_empty' as 'queue_empty' | 'time_budget' | 'rate_limited',
     // Detailed error breakdown per analysis report
     error_breakdown: {
-      rate_limit:  0,
+      rate_limit: 0,
       server_error: 0,
-      timeout:     0,
-      json_parse:  0,
-      validation:  0,
-      database:    0,
-      unknown:     0,
+      timeout: 0,
+      json_parse: 0,
+      validation: 0,
+      database: 0,
+      unknown: 0,
     },
   }
 
@@ -125,14 +122,16 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
 
       try {
-        const { data: source } = await (supabase as any)
+        const { data: source } = (await supabase
           .from('sources')
           .select('trust_score, name, type')
           .eq('id', observation.source_id)
-          .single()
+          .single()) as {
+          data: { trust_score: number | null; name: string | null; type: string | null } | null
+        }
 
-        const trustScore = (source?.trust_score as number | undefined) ?? 0.5
-        const sourceName = (source?.name as string | undefined) ?? 'Unknown Source'
+        const trustScore = source?.trust_score ?? 0.5
+        const sourceName = source?.name ?? 'Unknown Source'
 
         const result = await processObservation(observation, trustScore, sourceName)
 
@@ -152,23 +151,21 @@ export async function POST(request: Request): Promise<NextResponse> {
         // Inter-request delay — prevents TPM/RPM exhaustion on direct models
         const timeLeft = TIME_BUDGET - (Date.now() - startedAt)
         if (timeLeft > INTER_REQUEST_MS + 8_000) {
-          await new Promise(r => setTimeout(r, INTER_REQUEST_MS))
+          await new Promise((r) => setTimeout(r, INTER_REQUEST_MS))
         }
-
-
-
       } catch (err) {
         // Classify error
-        const isRateLimit  = err instanceof AIProviderError && err.isRateLimit
-        const isServerErr  = err instanceof AIProviderError && err.isServerError
-        const errMsg       = err instanceof Error ? err.message : String(err)
+        const isRateLimit = err instanceof AIProviderError && err.isRateLimit
+        const isServerErr = err instanceof AIProviderError && err.isServerError
+        const errMsg = err instanceof Error ? err.message : String(err)
 
         // Update error breakdown
-        if (isRateLimit)        stats.error_breakdown.rate_limit++
-        else if (isServerErr)   stats.error_breakdown.server_error++
-        else if (errMsg.includes('JSON'))  stats.error_breakdown.json_parse++
-        else if (errMsg.includes('schema') || errMsg.includes('validation')) stats.error_breakdown.validation++
-        else                    stats.error_breakdown.unknown++
+        if (isRateLimit) stats.error_breakdown.rate_limit++
+        else if (isServerErr) stats.error_breakdown.server_error++
+        else if (errMsg.includes('JSON')) stats.error_breakdown.json_parse++
+        else if (errMsg.includes('schema') || errMsg.includes('validation'))
+          stats.error_breakdown.validation++
+        else stats.error_breakdown.unknown++
 
         if (isRateLimit) {
           // 429 = temporary provider limit — NOT a processing error
@@ -176,7 +173,9 @@ export async function POST(request: Request): Promise<NextResponse> {
           await markObservationForRetry(observation.id, AI_RETRY_MS)
           stats.retried++
           stats.stopped_reason = 'rate_limited'
-          console.warn(`[enrich/batch] rate_limit — ${observation.id} queued for retry in ${AI_RETRY_MS}ms`)
+          console.warn(
+            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${AI_RETRY_MS}ms`,
+          )
           break
         }
 
@@ -200,6 +199,6 @@ export async function POST(request: Request): Promise<NextResponse> {
   return NextResponse.json({
     ...stats,
     duration_ms: duration,
-    timestamp:   new Date().toISOString(),
+    timestamp: new Date().toISOString(),
   })
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { SeverityBadge, CategoryBadge, ConfidenceBadge } from '@/components/ui/badge'
 import { ScoreBar } from '@/components/ui/score-bar'
@@ -7,7 +8,7 @@ import { getEventsBySignal } from '@/modules/events/queries'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
 import { getSignalSeverity } from '@/types/database'
 
-export const dynamic = "force-dynamic"
+export const dynamic = 'force-dynamic'
 
 interface SignalPageProps {
   params: Promise<{ slug: string }>
@@ -30,10 +31,7 @@ export async function generateMetadata({ params }: SignalPageProps): Promise<Met
 
 export default async function SignalPage({ params }: SignalPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
-  const [signal, relatedEvents] = await Promise.all([
-    getSignalById(slug),
-    getEventsBySignal(slug),
-  ])
+  const [signal, relatedEvents] = await Promise.all([getSignalById(slug), getEventsBySignal(slug)])
 
   if (!signal) notFound()
 
@@ -41,10 +39,11 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-10">
-
       {/* Breadcrumb */}
       <nav className="mb-6 font-mono text-xs text-text-muted" aria-label="Breadcrumb">
-        <a href="/signals" className="hover:text-text-secondary">Signals</a>
+        <Link href="/signals" className="hover:text-text-secondary">
+          Signals
+        </Link>
         <span className="mx-2 text-observatory-border">›</span>
         <span>{formatCategory(signal.category)}</span>
       </nav>
@@ -69,12 +68,13 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
       </header>
 
       <div className="grid gap-8 md:grid-cols-[1fr_240px]">
-
         {/* Main content */}
         <div className="space-y-6">
           {/* Analysis */}
           <section>
-            <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SIGNAL ANALYSIS</h2>
+            <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">
+              SIGNAL ANALYSIS
+            </h2>
             <p className="text-sm leading-relaxed text-text-secondary">{signal.description}</p>
           </section>
 
@@ -91,7 +91,9 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
                     href={`/events/${event.id}`}
                     className="block border border-observatory-border bg-observatory-surface p-4 transition-colors hover:bg-observatory-dark"
                   >
-                    <p className="mb-1 font-mono text-xs text-text-muted">{event.event_type.replace('_', ' ')}</p>
+                    <p className="mb-1 font-mono text-xs text-text-muted">
+                      {event.event_type.replace('_', ' ')}
+                    </p>
                     <p className="text-sm text-text-secondary">{event.title}</p>
                   </a>
                 ))}
@@ -103,16 +105,21 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
           <section className="border border-observatory-border bg-observatory-surface p-4">
             <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SIGNAL STATUS</h2>
             <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-              <StatusItem label="Status"   value={signal.status} />
+              <StatusItem label="Status" value={signal.status} />
               <StatusItem label="Category" value={formatCategory(signal.category)} />
-              <StatusItem label="Sources"  value={`${signal.observation_ids.length} linked`} />
+              <StatusItem label="Sources" value={`${signal.observation_ids.length} linked`} />
               <StatusItem label="Entities" value={`${signal.entity_ids.length} detected`} />
-              <StatusItem label="Override" value={signal.manual_override ? 'Manual' : 'Automated'} />
+              <StatusItem
+                label="Override"
+                value={signal.manual_override ? 'Manual' : 'Automated'}
+              />
               <StatusItem
                 label="Momentum"
-                value={signal.momentum_last_calculated
-                  ? formatRelativeTime(signal.momentum_last_calculated)
-                  : 'Pending'}
+                value={
+                  signal.momentum_last_calculated
+                    ? formatRelativeTime(signal.momentum_last_calculated)
+                    : 'Pending'
+                }
               />
             </div>
           </section>
@@ -123,29 +130,31 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
           <section className="border border-observatory-border bg-observatory-surface p-4">
             <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">SIGNAL SCORES</h2>
             <div className="space-y-2.5">
-              <ScoreBar value={signal.signal_score}     label="Signal" />
+              <ScoreBar value={signal.signal_score} label="Signal" />
               <ScoreBar value={signal.confidence_score} label="Conf" />
-              <ScoreBar value={signal.momentum_score}   label="Momentum" />
+              <ScoreBar value={signal.momentum_score} label="Momentum" />
             </div>
           </section>
 
           <section className="border border-observatory-border bg-observatory-surface p-4">
-            <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">FACTOR BREAKDOWN</h2>
+            <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
+              FACTOR BREAKDOWN
+            </h2>
             <div className="space-y-2">
-              <ScoreBar value={signal.impact_factor * 10}        label="Impact" />
-              <ScoreBar value={signal.actor_factor * 10}         label="Actor" />
-              <ScoreBar value={signal.novelty_factor * 10}       label="Novelty" />
+              <ScoreBar value={signal.impact_factor * 10} label="Impact" />
+              <ScoreBar value={signal.actor_factor * 10} label="Actor" />
+              <ScoreBar value={signal.novelty_factor * 10} label="Novelty" />
               <ScoreBar value={signal.verifiability_factor * 10} label="Verify" />
-              <ScoreBar value={signal.strategic_factor * 10}     label="Strategic" />
+              <ScoreBar value={signal.strategic_factor * 10} label="Strategic" />
             </div>
           </section>
 
-          <a
+          <Link
             href="/signals"
             className="block text-center font-mono text-xs tracking-wider text-text-muted transition-colors hover:text-text-secondary"
           >
             ← ALL SIGNALS
-          </a>
+          </Link>
         </aside>
       </div>
     </div>

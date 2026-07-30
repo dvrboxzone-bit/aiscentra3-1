@@ -11,9 +11,16 @@
  *   import { agentComplete, agentCompleteJSON } from '@/lib/openrouter/agent'
  *   const result = await agentComplete('editor', messages)
  */
-import { complete, completeJSON, OpenRouterError, type OpenRouterMessage, type OpenRouterOptions, type OpenRouterResult } from './client'
+import {
+  complete,
+  completeJSON,
+  OpenRouterError,
+  type OpenRouterMessage,
+  type OpenRouterOptions,
+  type OpenRouterResult,
+} from './client'
 import { getModelChain, type AgentRole } from './models'
-import { z } from 'zod'
+import type { z } from 'zod'
 
 export type { AgentRole }
 
@@ -26,7 +33,7 @@ export async function agentComplete(
   messages: OpenRouterMessage[],
   options: Omit<OpenRouterOptions, 'model'> = {},
 ): Promise<OpenRouterResult & { modelUsed: string }> {
-  const chain  = getModelChain(role)
+  const chain = getModelChain(role)
   const errors: string[] = []
 
   for (const model of chain) {
@@ -36,17 +43,16 @@ export async function agentComplete(
       console.info(`[agent:${role}] completed with ${model} (${result.tokensUsed} tokens)`)
       return { ...result, modelUsed: model }
     } catch (err) {
-      const msg = err instanceof OpenRouterError
-        ? `${model}: HTTP ${err.statusCode} — ${err.message}`
-        : `${model}: ${String(err)}`
+      const msg =
+        err instanceof OpenRouterError
+          ? `${model}: HTTP ${err.statusCode} — ${err.message}`
+          : `${model}: ${String(err)}`
       errors.push(msg)
       console.warn(`[agent:${role}] failed on ${model}, trying next...`)
     }
   }
 
-  throw new Error(
-    `[agent:${role}] All models failed:\n${errors.join('\n')}`
-  )
+  throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
 }
 
 /**
@@ -59,7 +65,7 @@ export async function agentCompleteJSON<T>(
   schema: z.ZodType<T>,
   options: Omit<OpenRouterOptions, 'model'> = {},
 ): Promise<T & { _modelUsed?: string }> {
-  const chain  = getModelChain(role)
+  const chain = getModelChain(role)
   const errors: string[] = []
 
   for (const model of chain) {
@@ -68,15 +74,14 @@ export async function agentCompleteJSON<T>(
       console.info(`[agent:${role}] JSON completed with ${model}`)
       return { ...result, _modelUsed: model }
     } catch (err) {
-      const msg = err instanceof OpenRouterError
-        ? `${model}: HTTP ${err.statusCode} — ${err.message}`
-        : `${model}: ${String(err)}`
+      const msg =
+        err instanceof OpenRouterError
+          ? `${model}: HTTP ${err.statusCode} — ${err.message}`
+          : `${model}: ${String(err)}`
       errors.push(msg)
       console.warn(`[agent:${role}] JSON failed on ${model}, trying next...`)
     }
   }
 
-  throw new Error(
-    `[agent:${role}] All models failed:\n${errors.join('\n')}`
-  )
+  throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
 }

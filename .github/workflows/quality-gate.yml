@@ -1,0 +1,152 @@
+name: Quality Gate
+
+# Restores the minimum mandatory CI baseline for pull requests into main:
+# npm ci, changed-files format check, lint, type-check, tests, build.
+# Runs on a free GitHub-hosted runner. No production secrets, no Supabase/
+# Vercel access, no paid resources.
+#
+# Security note: npm audit steps below are EVIDENCE ONLY. This workflow
+# does NOT declare a Security Gate PASS/FAIL and does NOT run
+# `npm audit fix`. Known advisories are tracked and remediated as a
+# separate, dedicated task after independent review.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality Gate (format, lint, type-check, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout (full history for merge-base computation)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch explicitly (do not rely on unconfirmed origin/<base> presence)
+        # actions/checkout with fetch-depth:0 fetches full history of the
+        # checked-out ref, but does not guarantee other branches (e.g. the
+        # PR's base branch) exist as local remote-tracking refs. Fetching
+        # the base branch explicitly here makes the merge-base computation
+        # in format-changed.sh provably correct rather than assumed.
+        run: git fetch origin "${{ github.base_ref }}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Changed-files format check
+        run: bash scripts/ci/format-changed.sh "origin/${{ github.base_ref }}"
+
+      - name: Lint (full project)
+        run: npm run lint
+
+      - name: TypeScript type-check
+        run: npm run type-check
+
+      - name: Automated tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+          ADMIN_EMAIL: admin@placeholder.invalid
+
+      - name: Dependency audit evidence (production only) — evidence only, not a gate
+        if: always()
+        # No blanket `|| true`. npm audit's own non-zero exit code (caused
+        # by known, already-tracked vulnerabilities) is captured explicitly
+        # and surfaced as evidence, NOT swallowed. This step only tolerates
+        # that specific, expected non-zero exit -- it still fails the
+        # workflow on a genuine operational failure (network error,
+        # malformed JSON, a top-level `error` field, or missing `metadata`),
+        # since those indicate the audit did not actually run, which must
+        # not be silently treated as "no vulnerabilities found".
+        run: |
+          set +e
+          npm audit --omit=dev --json > audit-production.json
+          AUDIT_EXIT=$?
+          set -e
+
+          node <<'NODE'
+          const fs = require('fs')
+          const value = JSON.parse(fs.readFileSync('audit-production.json', 'utf8'))
+
+          if (value.error) {
+            console.error('npm audit returned an operational error:')
+            console.error(JSON.stringify(value.error, null, 2))
+            process.exit(1)
+          }
+
+          if (!value.metadata) {
+            console.error('npm audit JSON does not contain metadata')
+            process.exit(1)
+          }
+          NODE
+
+          echo "npm audit --omit=dev exit code: ${AUDIT_EXIT}"
+
+      - name: Dependency audit evidence (full) — evidence only, not a gate
+        if: always()
+        run: |
+          set +e
+          npm audit --json > audit-full.json
+          AUDIT_EXIT=$?
+          set -e
+
+          node <<'NODE'
+          const fs = require('fs')
+          const value = JSON.parse(fs.readFileSync('audit-full.json', 'utf8'))
+
+          if (value.error) {
+            console.error('npm audit returned an operational error:')
+            console.error(JSON.stringify(value.error, null, 2))
+            process.exit(1)
+          }
+
+          if (!value.metadata) {
+            console.error('npm audit JSON does not contain metadata')
+            process.exit(1)
+          }
+          NODE
+
+          echo "npm audit exit code: ${AUDIT_EXIT}"
+
+      - name: Upload quality logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-logs
+          path: |
+            audit-production.json
+            audit-full.json
+          retention-days: 30
+
+      - name: Upload production audit JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-production
+          path: audit-production.json
+          retention-days: 30
+
+      - name: Upload full audit JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-full
+          path: audit-full.json
+          retention-days: 30

@@ -8,6 +8,6 @@ import { createBrowserClient } from '@supabase/ssr'
 import { env } from '@/config/env'
 import type { Database } from './types'
 
-export function createClient() {
+export function createClient(): ReturnType<typeof createBrowserClient<Database>> {
   return createBrowserClient<Database>(env.SUPABASE_URL, env.SUPABASE_ANON_KEY)
 }
