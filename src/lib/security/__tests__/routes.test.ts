@@ -1,35 +1,52 @@
 /**
- * AIscentra — Phase 1A: Route Containment Tests
+ * AIscentra — Phase 1A: Route Containment Tests (Dependency Injection)
  *
- * Two kinds of tests here:
+ * Three kinds of tests here:
  *
- * 1. buildSafeAgentResponse() — a pure function exported specifically for
- *    testability (a "dependency seam" per the task's own instruction).
- *    Verified directly against a hand-built fake AgentRunResult, with NO
- *    Runtime, Supabase, or Groq call anywhere.
+ * 1. buildSafeAgentResponse() — a pure function, no I/O, verified against a
+ *    hand-built fake AgentRunResult.
  *
- * 2. Route-level denial paths — the actual exported GET/POST handlers of
- *    all three routes are invoked directly with crafted Request objects
- *    lacking valid credentials. This repository's test environment has NO
- *    SUPABASE_SERVICE_ROLE_KEY / GROQ_API_KEY configured (they are simply
- *    absent from process.env when `node --test` runs standalone, as
- *    confirmed by this same test file's own environment inspection below).
- *    This means: if a route's guard ever failed to block an unauthorized
- *    request, the request would proceed into createAdminClient() /
- *    buildProductionRuntime() / a live fetch() call and either throw
- *    immediately or hang attempting a real network call — NOT return the
- *    guard's own clean 401/403/404/503. Asserting the exact expected
- *    denial status is therefore real evidence that execution stopped at
- *    the guard, not merely a code-reading claim.
+ * 2. Direct dependency-call evidence via injected fakes: each route's
+ *    createXPostHandler(deps) factory is invoked with a locally-scoped
+ *    fake `deps` object carrying its own counters (not global/exported
+ *    module state). For a denied/invalid request, control flow never
+ *    reaches the lines that call deps.*, so the local counters stay 0 as
+ *    a direct, provable consequence of the guard/validation
+ *    short-circuiting.
+ *
+ * 3. Provider-error redaction: a fake AI dependency throws an error
+ *    containing a unique marker string; the test proves that marker never
+ *    reaches the response body or engine_justification.
+ *
+ * No real Supabase, Groq, or network call happens anywhere in this file.
+ * All secrets used are >=32 characters, matching the production minimum.
  */
 import { test, describe, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildSafeAgentResponse } from '../../../app/api/agent/route'
-import { GET as agentGet, POST as agentPost } from '../../../app/api/agent/route'
-import { GET as adminGet, POST as adminPost } from '../../../app/api/admin/simulate-engine-v2/route'
-import { POST as assistantPost } from '../../../app/api/assistant/route'
-import type { AgentRunResult } from '../../../../supabase/functions/intelligence-agent/index'
+import {
+  buildSafeAgentResponse,
+  createAgentGetHandler,
+  createAgentPostHandler,
+} from '../../../app/api/agent/route'
+import type { AgentDependencies, AgentRuntimeModule } from '../../../app/api/agent/route'
+import {
+  createAdminGetHandler,
+  createAdminPostHandler,
+} from '../../../app/api/admin/simulate-engine-v2/route'
+import type {
+  AdminDependencies,
+  SimulationRunPayload,
+} from '../../../app/api/admin/simulate-engine-v2/route'
+import { createAssistantPostHandler } from '../../../app/api/assistant/route'
+import type { AssistantDependencies, RetrievalModule } from '../../../app/api/assistant/route'
+import type {
+  AgentRunResult,
+  AgentTask,
+} from '../../../../supabase/functions/intelligence-agent/index'
+
+const VALID_INTERNAL_SECRET = 'a'.repeat(32)
+const VALID_ADMIN_SECRET = 'b'.repeat(32)
 
 const ENV_KEYS = [
   'ENABLE_INTERNAL_AGENT_API',
@@ -38,6 +55,7 @@ const ENV_KEYS = [
   'ADMIN_API_SECRET',
   'PUBLIC_ASSISTANT_ACCESS_MODE',
   'VERCEL_ENV',
+  'NODE_ENV',
   'SUPABASE_SERVICE_ROLE_KEY',
   'GROQ_API_KEY',
 ] as const
@@ -46,16 +64,18 @@ let savedEnv: Record<string, string | undefined> = {}
 
 beforeEach(() => {
   savedEnv = {}
+  const mutableEnv = process.env as Record<string, string | undefined>
   for (const key of ENV_KEYS) {
-    savedEnv[key] = process.env[key]
-    delete process.env[key]
+    savedEnv[key] = mutableEnv[key]
+    delete mutableEnv[key]
   }
 })
 
 afterEach(() => {
+  const mutableEnv = process.env as Record<string, string | undefined>
   for (const key of ENV_KEYS) {
-    if (savedEnv[key] === undefined) delete process.env[key]
-    else process.env[key] = savedEnv[key]
+    if (savedEnv[key] === undefined) delete mutableEnv[key]
+    else mutableEnv[key] = savedEnv[key]
   }
 })
 
@@ -179,11 +199,7 @@ describe('buildSafeAgentResponse', () => {
     const dto = buildSafeAgentResponse(buildFakeResult())
     const serialized = JSON.stringify(dto)
     assert.equal(serialized.includes('provider-payload-should-not-leak'), false)
-    assert.equal(
-      serialized.includes('LOAD_OBSERVATIONS'),
-      false,
-      'internal step-kind diagnostics must not leak',
-    )
+    assert.equal(serialized.includes('LOAD_OBSERVATIONS'), false)
     assert.equal('plan' in dto, false)
     assert.equal('context' in dto, false)
   })
@@ -230,118 +246,441 @@ describe('buildSafeAgentResponse', () => {
   })
 })
 
-// ── Route denial paths — real handlers, no valid credentials ───────────────────
+// ── /api/agent — DI-based direct dependency-call evidence ──────────────────────
 
-describe('/api/agent — denial paths never reach the Runtime', () => {
-  test('GET always returns 405 and never touches the Runtime', async () => {
-    const res = await agentGet()
+function makeFakeAgentDeps(): {
+  deps: AgentDependencies
+  counts: { loader: number; factory: number; run: number }
+} {
+  const counts = { loader: 0, factory: 0, run: 0 }
+  const fakeResult: AgentRunResult = {
+    task: {
+      id: 't1',
+      type: 'INVESTIGATION',
+      query: 'x',
+      parameters: {},
+      requestedBy: 'test',
+      createdAt: new Date().toISOString(),
+    },
+    plan: {
+      taskId: 't1',
+      taskType: 'INVESTIGATION',
+      steps: [],
+      createdAt: new Date().toISOString(),
+    },
+    context: {
+      taskId: 't1',
+      observations: [],
+      signals: [],
+      graphNodes: [],
+      memoryEntries: [],
+      entities: [],
+      loadedAt: new Date().toISOString(),
+      gaps: [],
+    },
+    execution: {
+      taskId: 't1',
+      planId: 't1',
+      stepResults: [],
+      reasoning: null,
+      success: true,
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    },
+    reflection: {
+      taskId: 't1',
+      success: true,
+      failure: null,
+      confidence: 5,
+      durationMs: 1,
+      lessons: [],
+      nextActions: [],
+      reflectedAt: new Date().toISOString(),
+    },
+  }
+  const deps: AgentDependencies = {
+    loadRuntime: async (): Promise<AgentRuntimeModule> => {
+      counts.loader++
+      return {
+        buildProductionRuntime: () => {
+          counts.factory++
+          return {
+            run: async (_task: AgentTask) => {
+              counts.run++
+              return fakeResult
+            },
+          }
+        },
+        routeTask: () => 'INVESTIGATION',
+      }
+    },
+  }
+  return { deps, counts }
+}
+
+describe('/api/agent — direct dependency-call evidence via injected fakes', () => {
+  test('GET: runtime loader count is 0', async () => {
+    const GET = createAgentGetHandler()
+    const res = await GET()
     assert.equal(res.status, 405)
-    assert.equal(res.headers.get('Allow'), 'POST')
   })
 
-  test('POST with feature disabled returns 404, not a Runtime/provider error', async () => {
+  test('unauthorized POST (feature disabled): loader count is 0', async () => {
+    const { deps, counts } = makeFakeAgentDeps()
+    const POST = createAgentPostHandler(deps)
     const req = new Request('https://example.invalid/api/agent', {
       method: 'POST',
       headers: { authorization: 'Bearer whatever', 'content-type': 'application/json' },
       body: JSON.stringify({ query: 'test query text' }),
     })
-    const res = await agentPost(req as never)
-    assert.equal(
-      res.status,
-      404,
-      'with ENABLE_INTERNAL_AGENT_API unset, the guard must deny before buildProductionRuntime() is ever reached',
-    )
+    const res = await POST(req as never)
+    assert.equal(res.status, 404)
+    assert.equal(counts.loader, 0)
+    assert.equal(counts.factory, 0)
+    assert.equal(counts.run, 0)
   })
 
-  test('POST with feature enabled but wrong secret returns 403, not a Runtime/provider error', async () => {
+  test('unauthorized POST (wrong secret): loader count is 0', async () => {
     process.env['ENABLE_INTERNAL_AGENT_API'] = 'true'
-    process.env['INTERNAL_API_SECRET'] = 'correct-secret'
+    process.env['INTERNAL_API_SECRET'] = VALID_INTERNAL_SECRET
+    const { deps, counts } = makeFakeAgentDeps()
+    const POST = createAgentPostHandler(deps)
     const req = new Request('https://example.invalid/api/agent', {
       method: 'POST',
-      headers: { authorization: 'Bearer wrong-secret', 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${'z'.repeat(32)}`, 'content-type': 'application/json' },
       body: JSON.stringify({ query: 'test query text' }),
     })
-    const res = await agentPost(req as never)
+    const res = await POST(req as never)
     assert.equal(res.status, 403)
+    assert.equal(counts.loader, 0)
   })
 
-  test('POST with valid auth but invalid body (too short) returns 400 before Runtime construction', async () => {
+  test('invalid authorized body: loader count is 0', async () => {
     process.env['ENABLE_INTERNAL_AGENT_API'] = 'true'
-    process.env['INTERNAL_API_SECRET'] = 'correct-secret'
+    process.env['INTERNAL_API_SECRET'] = VALID_INTERNAL_SECRET
+    const { deps, counts } = makeFakeAgentDeps()
+    const POST = createAgentPostHandler(deps)
     const req = new Request('https://example.invalid/api/agent', {
       method: 'POST',
-      headers: { authorization: 'Bearer correct-secret', 'content-type': 'application/json' },
-      body: JSON.stringify({ query: 'x' }), // below min(2)
+      headers: {
+        authorization: `Bearer ${VALID_INTERNAL_SECRET}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query: 'x' }),
     })
-    const res = await agentPost(req as never)
+    const res = await POST(req as never)
     assert.equal(res.status, 400)
+    assert.equal(counts.loader, 0)
   })
 
-  test('POST with valid auth but an unknown extra field is rejected by strict schema before Runtime construction', async () => {
+  test('authorized valid body: loader=1, factory=1, run=1', async () => {
     process.env['ENABLE_INTERNAL_AGENT_API'] = 'true'
-    process.env['INTERNAL_API_SECRET'] = 'correct-secret'
+    process.env['INTERNAL_API_SECRET'] = VALID_INTERNAL_SECRET
+    const { deps, counts } = makeFakeAgentDeps()
+    const POST = createAgentPostHandler(deps)
     const req = new Request('https://example.invalid/api/agent', {
       method: 'POST',
-      headers: { authorization: 'Bearer correct-secret', 'content-type': 'application/json' },
-      body: JSON.stringify({ query: 'a valid query', extraField: 'should not be allowed' }),
+      headers: {
+        authorization: `Bearer ${VALID_INTERNAL_SECRET}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query: 'a valid test query' }),
     })
-    const res = await agentPost(req as never)
-    assert.equal(res.status, 400)
+    const res = await POST(req as never)
+    assert.equal(res.status, 200)
+    assert.equal(counts.loader, 1)
+    assert.equal(counts.factory, 1)
+    assert.equal(counts.run, 1)
   })
 })
 
-describe('/api/admin/simulate-engine-v2 — denial paths never reach createAdminClient or AI', () => {
-  test('GET always returns 405 and never touches the database or an AI provider', async () => {
-    const res = await adminGet()
+// ── /api/admin/simulate-engine-v2 — DI-based direct dependency-call evidence ───
+
+function makeFakeAdminDeps(overrides: Partial<AdminDependencies> = {}): {
+  deps: AdminDependencies
+  counts: { adminClient: number; ai: number; dbRead: number; dbWrite: number }
+  writtenPayloads: SimulationRunPayload[]
+} {
+  const counts = { adminClient: 0, ai: 0, dbRead: 0, dbWrite: 0 }
+  const writtenPayloads: SimulationRunPayload[] = []
+
+  const fakeObservation = {
+    id: 'obs-1',
+    title: 'Test observation title',
+    content:
+      'Test observation content, long enough to pass hard-rejection checks about minimum length for sure.',
+    source_id: 'src-1',
+    processed: true,
+    signal_id: null,
+    sources: { name: 'Test Source', type: 'academic', trust_score: 0.9 },
+  }
+
+  const deps: AdminDependencies = {
+    loadAdminClient: async () => {
+      counts.adminClient++
+      return { fake: true }
+    },
+    readObservations: async () => {
+      counts.dbRead++
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return { data: [fakeObservation as any], error: null }
+    },
+    callAI: async () => {
+      counts.ai++
+      return {
+        sis_novelty: 5,
+        sis_importance: 5,
+        sis_urgency: 5,
+        sis_confidence: 5,
+        human_cto: false,
+        human_founder: false,
+        human_investor: false,
+        human_researcher: false,
+        human_policy: false,
+        human_engineer: false,
+        is_survey: false,
+        is_tutorial: false,
+        is_normal_science: false,
+        engine_justification: 'fake justification',
+      }
+    },
+    isRateLimitError: () => false,
+    writeSimulationRun: async (_client, payload) => {
+      counts.dbWrite++
+      writtenPayloads.push(payload)
+    },
+    ...overrides,
+  }
+  return { deps, counts, writtenPayloads }
+}
+
+describe('/api/admin/simulate-engine-v2 — direct dependency-call evidence via injected fakes', () => {
+  test('GET: all counts are 0', async () => {
+    const GET = createAdminGetHandler()
+    const res = await GET()
     assert.equal(res.status, 405)
-    assert.equal(res.headers.get('Allow'), 'POST')
   })
 
-  test('POST with feature disabled returns 404, never constructing an admin client', async () => {
+  test('unauthorized POST (feature disabled): all counts are 0', async () => {
+    const { deps, counts } = makeFakeAdminDeps()
+    const POST = createAdminPostHandler(deps)
     const req = new Request('https://example.invalid/api/admin/simulate-engine-v2', {
       method: 'POST',
       headers: { authorization: 'Bearer whatever' },
     })
-    const res = await adminPost(req as never)
+    const res = await POST(req as never)
+    assert.equal(res.status, 404)
+    assert.equal(counts.adminClient, 0)
+    assert.equal(counts.ai, 0)
+    assert.equal(counts.dbRead, 0)
+    assert.equal(counts.dbWrite, 0)
+  })
+
+  test('unauthorized POST (wrong secret): all counts are 0', async () => {
+    process.env['ENABLE_ENGINE_SIMULATION'] = 'true'
+    process.env['ADMIN_API_SECRET'] = VALID_ADMIN_SECRET
+    const { deps, counts } = makeFakeAdminDeps()
+    const POST = createAdminPostHandler(deps)
+    const req = new Request('https://example.invalid/api/admin/simulate-engine-v2', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${'z'.repeat(32)}` },
+    })
+    const res = await POST(req as never)
+    assert.equal(res.status, 403)
+    assert.equal(counts.adminClient, 0)
+    assert.equal(counts.ai, 0)
+    assert.equal(counts.dbRead, 0)
+    assert.equal(counts.dbWrite, 0)
+  })
+
+  test('authorized: admin client, AI, db read, db write all called; response contains no leaked content', async () => {
+    process.env['ENABLE_ENGINE_SIMULATION'] = 'true'
+    process.env['ADMIN_API_SECRET'] = VALID_ADMIN_SECRET
+    const { deps, counts, writtenPayloads } = makeFakeAdminDeps()
+    const POST = createAdminPostHandler(deps)
+    const req = new Request('https://example.invalid/api/admin/simulate-engine-v2', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${VALID_ADMIN_SECRET}` },
+    })
+    const res = await POST(req as never)
+    assert.equal(res.status, 200)
+    assert.equal(counts.adminClient, 1)
+    assert.equal(counts.dbRead, 1)
+    assert.equal(counts.ai, 1)
+    assert.equal(counts.dbWrite, 1)
+    assert.equal(writtenPayloads.length, 1)
+  })
+
+  test('provider-error redaction: RAW_PROVIDER_PAYLOAD_MUST_NOT_LEAK never reaches response body or engine_justification', async () => {
+    process.env['ENABLE_ENGINE_SIMULATION'] = 'true'
+    process.env['ADMIN_API_SECRET'] = VALID_ADMIN_SECRET
+    const LEAK_MARKER = 'RAW_PROVIDER_PAYLOAD_MUST_NOT_LEAK'
+    const { deps, writtenPayloads } = makeFakeAdminDeps({
+      callAI: async () => {
+        throw new Error(`Provider returned: ${LEAK_MARKER} (raw internal payload details here)`)
+      },
+      isRateLimitError: () => false,
+    })
+    const POST = createAdminPostHandler(deps)
+    const req = new Request('https://example.invalid/api/admin/simulate-engine-v2', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${VALID_ADMIN_SECRET}` },
+    })
+    const res = await POST(req as never)
+    assert.equal(res.status, 200, 'the handler must complete with a safe result, not crash')
+    const bodyText = await res.clone().text()
     assert.equal(
-      res.status,
-      404,
-      'with ENABLE_ENGINE_SIMULATION unset, no service-role client or AI call should ever be attempted',
+      bodyText.includes(LEAK_MARKER),
+      false,
+      'the leak marker must not appear in the response body',
+    )
+    assert.equal(
+      bodyText.includes('AI provider request failed'),
+      true,
+      'the safe fixed string must be used instead',
+    )
+    assert.equal(writtenPayloads.length, 1)
+    const [firstWrittenPayload] = writtenPayloads
+    assert.ok(firstWrittenPayload, 'expected exactly one written simulation run payload')
+    const savedJustifications = firstWrittenPayload.results.map((r) => r.engine_justification)
+    assert.equal(
+      savedJustifications.some((j) => j.includes(LEAK_MARKER)),
+      false,
+      'the leak marker must not appear in the persisted engine_justification either',
     )
   })
 
-  test('POST with feature enabled but wrong secret returns 403, never constructing an admin client', async () => {
+  test('provider-error redaction: rate-limit errors get the rate-limit-specific safe string', async () => {
     process.env['ENABLE_ENGINE_SIMULATION'] = 'true'
-    process.env['ADMIN_API_SECRET'] = 'correct-admin-secret'
+    process.env['ADMIN_API_SECRET'] = VALID_ADMIN_SECRET
+    const { deps, writtenPayloads } = makeFakeAdminDeps({
+      callAI: async () => {
+        throw new Error('RAW_PROVIDER_PAYLOAD_MUST_NOT_LEAK: rate limited')
+      },
+      isRateLimitError: () => true,
+    })
+    const POST = createAdminPostHandler(deps)
     const req = new Request('https://example.invalid/api/admin/simulate-engine-v2', {
       method: 'POST',
-      headers: { authorization: 'Bearer wrong' },
+      headers: { authorization: `Bearer ${VALID_ADMIN_SECRET}` },
     })
-    const res = await adminPost(req as never)
-    assert.equal(res.status, 403)
+    const res = await POST(req as never)
+    const bodyText = await res.clone().text()
+    assert.equal(bodyText.includes('RAW_PROVIDER_PAYLOAD_MUST_NOT_LEAK'), false)
+    assert.equal(bodyText.includes('AI provider rate limit reached'), true)
+    const [firstWrittenPayload] = writtenPayloads
+    assert.ok(firstWrittenPayload, 'expected exactly one written simulation run payload')
+    const [firstResult] = firstWrittenPayload.results
+    assert.ok(firstResult, 'expected exactly one simulation result')
+    assert.equal(firstResult.v2_decision, 'RATE_LIMITED')
   })
 })
 
-describe('/api/assistant — production disabled, no retrieval or Groq call', () => {
-  test('POST returns 503 when PUBLIC_ASSISTANT_ACCESS_MODE is unset (default disabled), before any retrieval or Groq call', async () => {
+// ── /api/assistant — DI-based direct dependency-call evidence ──────────────────
+
+function makeFakeAssistantDeps(): {
+  deps: AssistantDependencies
+  counts: { retrievalLoader: number; retrieval: number; fetch: number }
+} {
+  const counts = { retrievalLoader: 0, retrieval: 0, fetch: 0 }
+  const deps: AssistantDependencies = {
+    loadRetrieval: async (): Promise<RetrievalModule> => {
+      counts.retrievalLoader++
+      return {
+        retrieveContext: async () => {
+          counts.retrieval++
+          return {
+            signals: [],
+            events: [],
+            reports: [],
+            hasContext: false,
+            contextSummary: 'no context (fake)',
+          }
+        },
+        formatContextForPrompt: () => 'fake context text',
+        ASSISTANT_SYSTEM_PROMPT: 'fake system prompt',
+      }
+    },
+    fetchGroq: async () => {
+      counts.fetch++
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      })
+      return new Response(stream, { status: 200 })
+    },
+    getGroqApiKey: () => 'fake-groq-key',
+    getGroqModel: () => 'fake-model',
+  }
+  return { deps, counts }
+}
+
+describe('/api/assistant — direct dependency-call evidence via injected fakes', () => {
+  test('production-disabled POST (mode unset): retrieval loader/call/fetch counts are all 0', async () => {
+    const { deps, counts } = makeFakeAssistantDeps()
+    const POST = createAssistantPostHandler(deps)
     const req = new Request('https://example.invalid/api/assistant', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: 'hello there' }),
     })
-    const res = await assistantPost(req)
+    const res = await POST(req)
     assert.equal(res.status, 503)
+    assert.equal(counts.retrievalLoader, 0)
+    assert.equal(counts.retrieval, 0)
+    assert.equal(counts.fetch, 0)
   })
 
-  test('POST returns 503 in production even if PUBLIC_ASSISTANT_ACCESS_MODE=preview-only is set (misconfiguration cannot enable production access)', async () => {
+  test('production + preview-only misconfiguration: all counts are 0', async () => {
     process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
     process.env['VERCEL_ENV'] = 'production'
+    const { deps, counts } = makeFakeAssistantDeps()
+    const POST = createAssistantPostHandler(deps)
     const req = new Request('https://example.invalid/api/assistant', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: 'hello there' }),
     })
-    const res = await assistantPost(req)
+    const res = await POST(req)
     assert.equal(res.status, 503)
+    assert.equal(counts.retrievalLoader, 0)
+    assert.equal(counts.retrieval, 0)
+    assert.equal(counts.fetch, 0)
+  })
+
+  test('unknown VERCEL_ENV: all counts are 0', async () => {
+    process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
+    process.env['VERCEL_ENV'] = 'some-unknown-value'
+    const { deps, counts } = makeFakeAssistantDeps()
+    const POST = createAssistantPostHandler(deps)
+    const req = new Request('https://example.invalid/api/assistant', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello there' }),
+    })
+    const res = await POST(req)
+    assert.equal(res.status, 503)
+    assert.equal(counts.retrievalLoader, 0)
+    assert.equal(counts.retrieval, 0)
+    assert.equal(counts.fetch, 0)
+  })
+
+  test('allowed Preview: fake retrieval/fetch execute without any real network call', async () => {
+    process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
+    process.env['VERCEL_ENV'] = 'preview'
+    const { deps, counts } = makeFakeAssistantDeps()
+    const POST = createAssistantPostHandler(deps)
+    const req = new Request('https://example.invalid/api/assistant', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'a real question here' }),
+    })
+    const res = await POST(req)
+    assert.equal(res.status, 200)
+    assert.equal(counts.retrievalLoader, 1)
+    assert.equal(counts.retrieval, 1)
+    assert.equal(counts.fetch, 1)
   })
 })

@@ -118,9 +118,30 @@ function readEnableFlag(name: string): boolean {
   return process.env[name] === 'true'
 }
 
+// A secret must actually be present, non-whitespace, not the documented
+// .env.example placeholder value, and at least 32 characters — anything
+// less is treated as "not configured" (fail-closed), never as a weak-but-
+// present secret. This prevents an .env.example placeholder value or an
+// empty/whitespace string from ever being accepted as a real secret.
+const MIN_SECRET_LENGTH = 32
+const KNOWN_PLACEHOLDER_VALUES = new Set(['your-random-secret-here'])
+
 function readSecret(name: string): string | null {
-  const value = process.env[name]
-  return value && value.length > 0 ? value : null
+  const raw = process.env[name]
+  if (raw === undefined) return null
+
+  const trimmed = raw.trim()
+  if (trimmed.length === 0) return null
+  if (KNOWN_PLACEHOLDER_VALUES.has(trimmed)) return null
+  if (trimmed.length < MIN_SECRET_LENGTH) return null
+
+  // Intentionally return the ORIGINAL (untrimmed) value for comparison —
+  // if an operator's real secret happens to have meaningful leading/
+  // trailing whitespace (unusual, but not this module's business to
+  // silently correct), constant-time comparison must be against the exact
+  // configured value, not a normalized one. Trimming above is only used to
+  // classify emptiness/placeholder/length, not to alter what is compared.
+  return raw
 }
 
 // ── Internal guard: /api/agent ────────────────────────────────────────────────
@@ -214,16 +235,29 @@ function resolvePublicAssistantAccessMode(): PublicAssistantAccessMode {
   return raw === 'preview-only' ? 'preview-only' : 'disabled'
 }
 
-function isProductionEnvironment(): boolean {
-  // Vercel sets VERCEL_ENV to 'production' | 'preview' | 'development'.
-  // Fall back to NODE_ENV === 'production' for non-Vercel environments
-  // (e.g. a production-like process started outside Vercel's platform).
-  // Fail-closed direction: if EITHER signal says production, treat it as
-  // production — never require both to agree before restricting access.
-  if (process.env['VERCEL_ENV'] === 'production') return true
-  if (process.env['VERCEL_ENV'] === undefined && process.env['NODE_ENV'] === 'production')
-    return true
-  return false
+function isKnownSafeNonProductionEnvironment(): boolean {
+  // Vercel sets VERCEL_ENV to exactly one of: 'production' | 'preview' | 'development'.
+  //
+  // This is an ALLOW-LIST, not a deny-list: only the two explicitly
+  // recognized non-production values are treated as safe. Any other
+  // defined VERCEL_ENV value — a typo ('prod'), an unrelated convention
+  // ('staging'), or an empty string — is NOT recognized and fails closed
+  // exactly as if it were production. The previous implementation was a
+  // deny-list (`=== 'production'` only) and therefore silently treated
+  // any unrecognized value as safe — this was the actual vulnerability
+  // being fixed here.
+  const vercelEnv = process.env['VERCEL_ENV']
+
+  if (vercelEnv !== undefined) {
+    return vercelEnv === 'preview' || vercelEnv === 'development'
+  }
+
+  // VERCEL_ENV is not set at all — e.g. running outside Vercel entirely
+  // (local development, this test suite, or a non-Vercel host). Fall back
+  // to NODE_ENV: anything other than the literal 'production' is treated
+  // as safe (matches existing local-development conventions elsewhere in
+  // this codebase, e.g. src/config/env.ts's IS_DEV/IS_PROD checks).
+  return process.env['NODE_ENV'] !== 'production'
 }
 
 export function checkPublicAssistantAccess(): GuardResult {
@@ -238,17 +272,18 @@ export function checkPublicAssistantAccess(): GuardResult {
   }
 
   // mode === 'preview-only' from here on. Even if an environment variable
-  // claims 'preview-only', this is only honored outside production —
-  // production always resolves to disabled regardless of misconfiguration,
-  // per the explicit fail-closed requirement that "in production значение
-  // всегда должно фактически давать disabled, даже если environment
-  // настроен ошибочно".
-  if (isProductionEnvironment()) {
+  // claims 'preview-only', this is only honored in a recognized non-
+  // production environment — an unrecognized or production environment
+  // always resolves to disabled regardless of misconfiguration, per the
+  // explicit fail-closed requirement that "in production значение всегда
+  // должно фактически давать disabled, даже если environment настроен
+  // ошибочно".
+  if (!isKnownSafeNonProductionEnvironment()) {
     return {
       allowed: false,
       response: serviceUnavailableResponse(),
       internalReason:
-        'public assistant access denied: preview-only mode is not honored in production',
+        'public assistant access denied: preview-only mode is not honored outside a recognized preview/development environment',
     }
   }
 
