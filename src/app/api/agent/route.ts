@@ -1,62 +1,136 @@
 /**
- * AIscentra — Agent Runtime HTTP Integration
+ * AIscentra — Agent Runtime HTTP Integration (Phase 1A: Emergency API Containment)
  *
- * GET /api/agent?q=<query>
+ * POST /api/agent
+ * Authorization: Bearer <INTERNAL_API_SECRET>
+ * Body: { query: string }
  *
- * Production endpoint that invokes the EXISTING Agent Runtime
- * (supabase/functions/intelligence-agent/) exactly as-is. No Runtime file
- * is modified by this route — this file only imports and calls the
- * already-existing public API surface (buildProductionRuntime, AgentTask).
+ * GET is no longer supported and never reaches the Runtime — it exists only
+ * to return an explicit 405, since a bare GET was the original vulnerability
+ * (unauthenticated, cost-triggering, over-disclosing endpoint).
  *
- * Pipeline:
- *   HTTP Request
- *     ↓ validate input (query param)
- *   buildProductionRuntime()
- *     ↓ (SupabaseObservationProvider, SupabaseSignalProvider,
- *        SupabaseGraphProvider, SupabaseMemoryProvider, GroqReasoningEngine,
- *        DefaultSafetyProvider, ConsoleAgentLogger — all pre-existing classes)
- *   AgentRuntime.run(task)
- *     ↓ Planner → Context Loader → Execution → Reflection (all pre-existing)
- *   AgentRunResult (includes ExecutionResult)
- *     ↓
- *   HTTP Response (full JSON, no truncation)
+ * Access requires ALL of, checked strictly in this order:
+ *   1. method === POST
+ *   2. ENABLE_INTERNAL_AGENT_API === 'true'
+ *   3. a valid Bearer token matching INTERNAL_API_SECRET (constant-time compare)
+ *   4. request body parses as JSON
+ *   5. body passes strict Zod validation
  *
- * GET (not POST) is used deliberately so this can be triggered directly from
- * a browser URL bar or curl without a request body — consistent with the
- * existing /api/admin/simulate-engine-v2 pattern already used in this project
- * for on-demand diagnostic invocation.
+ * Only AFTER all five checks pass does this module dynamically `import()`
+ * the Agent Runtime (buildProductionRuntime, routeTask). This is
+ * deliberate: a static top-level import of Runtime code would load and
+ * evaluate that module graph on every request to this route — including
+ * unauthorized ones — before the guard even runs. The dynamic import
+ * inside the authorized branch means an unauthorized/invalid request never
+ * causes the Runtime module (and anything it transitively imports —
+ * Supabase providers, GroqReasoningEngine, etc.) to be loaded at all.
+ *
+ * The client receives a minimal, sanitized DTO only — never the full
+ * internal AgentRunResult (no execution plan, no raw context, no provider
+ * payloads, no internal step diagnostics, no evidence IDs referencing
+ * internal Observatory records).
  */
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import {
-  buildProductionRuntime,
-  routeTask,
+import { z } from 'zod'
+import { checkInternalAccess, methodNotAllowedResponse } from '@/lib/security/api-access'
+// Type-only import — erased entirely from runtime output, does not trigger
+// module evaluation. Verified: `tsc`'s `isolatedModules`/`verbatimModuleSyntax`-
+// style erasure removes `import type` statements completely at compile time.
+import type {
+  AgentTask,
+  AgentRunResult,
 } from '../../../../supabase/functions/intelligence-agent/index'
-import type { AgentTask } from '../../../../supabase/functions/intelligence-agent/index'
 
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
-const MAX_QUERY_LENGTH = 500
+const RequestBodySchema = z
+  .object({
+    query: z.string().trim().min(2).max(500),
+  })
+  .strict()
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  const { searchParams } = new URL(request.url)
-  const rawQuery = searchParams.get('q')
+interface AgentApiClaim {
+  type: string
+  statement: string
+  confidence: number
+}
 
-  // ── Validate input ──────────────────────────────────────────────────────────
-  if (!rawQuery || typeof rawQuery !== 'string' || rawQuery.trim().length === 0) {
+interface AgentApiResponse {
+  taskId: string
+  status: 'success' | 'failed'
+  summary: string
+  claims: AgentApiClaim[]
+  gaps: string[]
+  confidence: number
+}
+
+/**
+ * Builds the client-facing DTO from the full internal AgentRunResult.
+ * Deliberately omits: execution plan, raw context (observations/signals/
+ * graph/memory/entities), provider payloads, per-step diagnostics, and
+ * claim evidenceIds (which reference internal Observatory record IDs).
+ *
+ * Pure function — no imports of Runtime code, no I/O. Exported specifically
+ * as a testable seam: tests can construct a fake AgentRunResult and assert
+ * on the DTO shape without ever touching the real Runtime.
+ */
+export function buildSafeAgentResponse(result: AgentRunResult): AgentApiResponse {
+  const reasoning = result.execution.reasoning
+
+  return {
+    taskId: result.task.id,
+    status: result.reflection.success ? 'success' : 'failed',
+    summary: reasoning?.summary ?? 'No reasoning result available for this task.',
+    claims: (reasoning?.claims ?? []).map((claim) => ({
+      type: claim.type,
+      statement: claim.statement,
+      confidence: claim.confidence,
+    })),
+    gaps: reasoning?.gapsIdentified ?? [],
+    confidence: result.reflection.confidence,
+  }
+}
+
+export async function GET(): Promise<NextResponse> {
+  // GET never touches the Runtime, Supabase, or Groq — rejected before any
+  // of that code is even imported.
+  return methodNotAllowedResponse('POST')
+}
+
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  // ── 1-3. Guard runs before anything else, including body parsing ───────────
+  // No Runtime module is imported anywhere above this line.
+  const guard = checkInternalAccess(request)
+  if (!guard.allowed) {
+    console.error(`[api/agent] ${guard.internalReason}`)
+    return guard.response
+  }
+
+  // ── 4-5. Strict body validation — still before any Runtime import ──────────
+  let rawBody: unknown
+  try {
+    rawBody = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  const parsed = RequestBodySchema.safeParse(rawBody)
+  if (!parsed.success) {
     return NextResponse.json(
-      {
-        error:
-          'Missing or empty required query parameter "q". Example: /api/agent?q=Investigate%20OpenAI',
-      },
+      { error: 'Invalid request body', issues: parsed.error.issues.map((i) => i.message) },
       { status: 400 },
     )
   }
 
-  const query = rawQuery.trim().slice(0, MAX_QUERY_LENGTH)
+  const query = parsed.data.query
 
-  // ── Build task (mirrors the shape used by index.ts's own runTask()) ─────────
+  // ── Only now, after all five checks passed, load the Runtime ────────────────
+  const { buildProductionRuntime, routeTask } = await import(
+    '../../../../supabase/functions/intelligence-agent/index'
+  )
+
   const task: AgentTask = {
     id: `task-${Date.now()}`,
     type: routeTask(query),
@@ -66,20 +140,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     createdAt: new Date().toISOString(),
   }
 
-  // ── Invoke the EXISTING Agent Runtime — zero modification to Runtime code ───
-  let result
+  let result: AgentRunResult
   try {
     const runtime = buildProductionRuntime()
     result = await runtime.run(task)
   } catch (err) {
+    const requestId = task.id
+    // Sanitized server-side log only — the raw error (which may contain
+    // provider response bodies, stack traces, or internal paths) never
+    // reaches the client.
+    console.error(
+      `[api/agent] request ${requestId} failed:`,
+      err instanceof Error ? err.message : String(err),
+    )
     return NextResponse.json(
-      {
-        error: 'Agent Runtime execution failed',
-        detail: err instanceof Error ? err.message : String(err),
-      },
+      { error: 'Agent Runtime execution failed', requestId },
       { status: 500 },
     )
   }
 
-  return NextResponse.json(result)
+  return NextResponse.json(buildSafeAgentResponse(result))
 }

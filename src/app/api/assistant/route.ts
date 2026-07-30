@@ -1,19 +1,34 @@
 /**
- * AIscentra — Observatory Assistant API
+ * AIscentra — Observatory Assistant API (Phase 1A: Emergency API Containment)
  *
  * POST /api/assistant
  * Body: { message: string, history?: { role: string, content: string }[] }
  *
  * Returns: streaming text response (Server-Sent Events)
  *
- * Pattern:
+ * ACCESS: production access is fully disabled pending authenticated
+ * sessions and quotas (a full user-auth system is explicitly out of scope
+ * for this containment phase). The route returns a safe 503 before any
+ * Observatory retrieval or Groq call — no Supabase query and no outbound
+ * AI request happens when access is denied. "preview-only" mode is only
+ * honored outside Vercel/NODE_ENV production (production always forces
+ * disabled regardless of configuration).
+ *
+ * `retrieveContext` (src/modules/assistant/retrieval.ts) transitively
+ * imports src/lib/supabase/server.ts, which in turn imports
+ * src/config/env.ts — whose top-level `export const env = {...}` block
+ * eagerly throws if NEXT_PUBLIC_SUPABASE_URL is missing, merely by being
+ * imported. To ensure a disabled/denied request never triggers that (or
+ * any real Supabase/Groq call), retrieval and prompt-building are loaded
+ * via `await import(...)` ONLY after the access guard has already passed.
+ *
+ * Pattern (once access is allowed):
  * 1. Retrieve relevant context from Observatory (RAG)
  * 2. Build grounded prompt with context
  * 3. Stream response from OpenRouter
  * 4. Never answer from general AI knowledge
  */
-import { retrieveContext, formatContextForPrompt } from '@/modules/assistant/retrieval'
-import { ASSISTANT_SYSTEM_PROMPT } from '@/modules/assistant/prompt'
+import { checkPublicAssistantAccess } from '@/lib/security/api-access'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30 // Assistant can take longer than pipeline functions
@@ -24,6 +39,19 @@ interface MessageHistory {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  // ── Guard runs before ANY retrieval or Groq call — and before either is
+  //    even imported ──────────────────────────────────────────────────────────
+  const guard = checkPublicAssistantAccess()
+  if (!guard.allowed) {
+    console.error(`[api/assistant] ${guard.internalReason}`)
+    return guard.response
+  }
+
+  // ── Only now, after the guard passed, load retrieval (which transitively
+  //    imports Supabase) ──────────────────────────────────────────────────────
+  const { retrieveContext, formatContextForPrompt } = await import('@/modules/assistant/retrieval')
+  const { ASSISTANT_SYSTEM_PROMPT } = await import('@/modules/assistant/prompt')
+
   let body: { message?: string; history?: MessageHistory[] } = {}
   try {
     body = (await request.json()) as typeof body
