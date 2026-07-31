@@ -3,7 +3,8 @@
 **Status:** Design approved for staged implementation; Phase 1C-B1
 implemented and independently verified; Phase 1C-B2 not started. This
 document does not authorize further implementation by itself.
-**Baseline:** `main@bf4d507319c20160b742fc2de5d0398b5c047360`
+**Design baseline:** `main@bf4d507319c20160b742fc2de5d0398b5c047360`
+**Phase 1C-B1 closeout evidence baseline:** `main@0bf8fe15604808a7ca94b532689f6b209804aed9`
 **Date:** 31 July 2026
 **Related:** `docs/governance/AISCENTRA_REPAIR_ROADMAP.md` Phase 1C
 
@@ -351,15 +352,26 @@ primary artifacts, not merely reported:
   merge (`dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U`) reached `state: READY`,
   `target: production`, `source: git`, `githubCommitRef: main`,
   `githubCommitSha` equal to the merge SHA.
-- Production smoke (`https://aiscentra.com/`, `/api/health`,
-  `/opengraph-image`) is reported as HTTP 200/200/200 with
-  `/opengraph-image` returning `content-type: image/png`. **This
-  specific result was not independently re-verified by Claude** during
-  either the implementation task or this governance-sync task — Claude's
-  sandbox network egress policy blocked direct requests to
-  `aiscentra.com` throughout (`x-deny-reason: host_not_allowed`); the
-  200/200/200 figures are carried forward from the owner's/ChatGPT's own
-  verification.
+- Production evidence for this deployment: the connected Vercel
+  deployment/API (a primary artifact, not a model report) confirms
+  `dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U` reached `state: READY`,
+  `target: production`, `source: git`, `githubCommitRef: main`,
+  `githubCommitSha` equal to the merge SHA. Independent external
+  verification through a direct fetch of the production URL
+  (`web_fetch`, a tool distinct from this sandbox's blocked `curl`
+  proxy) on 31 July 2026 successfully retrieved real, live homepage
+  content from `https://aiscentra.com/` — positive evidence the
+  deployment genuinely serves production traffic, not merely reported
+  as such. `/api/health` could not be independently confirmed this way:
+  the site's own `robots.txt` disallows automated access to that path
+  for the `web_fetch` tool. `/opengraph-image` returned a tool-side
+  "image content not supported" error rather than a network-level
+  failure, consistent with the endpoint serving real binary image
+  content, but not by itself a confirmation of the literal HTTP status
+  code or `content-type` header value. Claude's `bash`-sandboxed `curl`
+  could not reach any of these URLs directly
+  (`x-deny-reason: host_not_allowed`) — a disclosed sandbox limitation,
+  not a production failure.
 
 **Explicitly not claimed by this closeout:** automatic Vercel production
 deployment from `main` is still fully enabled — B1 did not touch it.

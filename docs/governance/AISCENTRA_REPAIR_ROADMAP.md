@@ -1,7 +1,7 @@
 AISCENTRA REPAIR ROADMAP
 Version 1.0
 Status: Current operational repair sequence
-Baseline: main@bf4d507319c20160b742fc2de5d0398b5c047360
+Baseline: main@0bf8fe15604808a7ca94b532689f6b209804aed9 (pre-PR #9 governance-closeout baseline)
 Date: 31 July 2026
 
 ---
@@ -92,15 +92,26 @@ moderate 0, low 2, total 2` (artifact ID `8792716966`).
 - Automatic production deployment `dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U`
   reached `READY`, `target: production`, `source: git`,
   `githubCommitRef: main`, `githubCommitSha` equal to the merge SHA.
-- Production smoke (`https://aiscentra.com/`, `/api/health`,
-  `/opengraph-image`) reported as HTTP 200/200/200 with
-  `/opengraph-image` returning `content-type: image/png`. **This smoke
-  result was not independently re-verified by Claude in the governance
-  documentation task itself** — Claude's own sandbox network egress
-  policy blocked direct requests to `aiscentra.com` throughout this
-  session (`x-deny-reason: host_not_allowed`); the 200/200/200 result is
-  carried forward from the owner's/ChatGPT's own verification, not
-  re-confirmed here.
+- Production evidence for this deployment: the connected Vercel
+  deployment/API (primary artifact, not a model report) confirms
+  `dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U` reached `state: READY`,
+  `target: production`, `source: git`, with `githubCommitSha` exactly
+  equal to the merge SHA. Independent external verification through a
+  direct fetch of the production URL (`web_fetch`, a tool distinct from
+  this sandbox's blocked `curl` proxy) on 31 July 2026 successfully
+  retrieved real, live homepage content from `https://aiscentra.com/`
+  (signal listings, Open Graph metadata, current page structure) —
+  positive evidence the deployment is genuinely serving production
+  traffic, not merely reported as such. `/api/health` could not be
+  independently confirmed this way: the site's own `robots.txt`
+  disallows automated access to that path for the `web_fetch` tool.
+  `/opengraph-image` returned a tool-side "image content not supported"
+  error rather than a network-level failure, which is consistent with
+  the endpoint serving real binary image content, but does not by
+  itself confirm the literal HTTP status code or `content-type` header
+  value. Claude's `bash`-sandboxed `curl` could not reach any of these
+  URLs directly (`x-deny-reason: host_not_allowed`) — that specific,
+  disclosed sandbox limitation is not a production failure.
 
 **Explicitly not claimed by this completion:** automatic Vercel
 production deployment from `main` is still fully enabled — Phase 1C-B1
@@ -222,8 +233,8 @@ operational tracking, not a claim of remediation.
 
 ## Source
 
-Baseline commit: `bf4d507319c20160b742fc2de5d0398b5c047360` (`main`,
-merge commit of PR #5).
+Baseline commit: `0bf8fe15604808a7ca94b532689f6b209804aed9` (`main`,
+merge commit of PR #8, the pre-PR #9 governance-closeout baseline).
 
 This document supersedes the historical Master Audit Plan
 (`docs/governance/AISCENTRA_MASTER_AUDIT_PLAN.md`, fixed 29 July 2026)
