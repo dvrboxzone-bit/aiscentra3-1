@@ -1,7 +1,7 @@
 AISCENTRA REPAIR ROADMAP
 Version 1.0
 Status: Current operational repair sequence
-Baseline: main@59822d418ec33705c77ba3fcd60dc3fd44cadb72
+Baseline: main@bf4d507319c20160b742fc2de5d0398b5c047360
 Date: 31 July 2026
 
 ---
@@ -40,23 +40,48 @@ Full machine-verified inventory of all 15 `src/app/api/**` routes, with
 a CI-enforced consistency checker (`npm run check:api-inventory`).
 Established the current confirmed security baseline (see below).
 
-### 3. Governance Sync — **CURRENT**
+### 3. Governance Sync — **COMPLETED**
 
-Only canonicalization of governance documents (Constitution, Product
-Vision, historical Master Audit Plan, this Repair Roadmap, Phase 1B
-closeout evidence) into `docs/governance/**`, and fixation of the
-current phase sequence. No production route, migration, Supabase
-schema, RLS, GitHub Actions, or Vercel/environment change is part of
+PR #5 merged (`bf4d507319c20160b742fc2de5d0398b5c047360`) and automatically
+deployed to production (`dpl_DNUoRmQf3kj68UPS4Z4FoQyEVsZG`, `READY`,
+`target: production`, `githubCommitSha` confirmed matching the merge
+commit exactly). Canonicalized Constitution, Product Vision (owner-provided
+canonical source, status unchanged — **not approved**), the historical
+Master Audit Plan, this Repair Roadmap, and Phase 1B closeout evidence
+into `docs/governance/**`. No production route, migration, Supabase
+schema, RLS, GitHub Actions, or Vercel/environment change was part of
 this phase.
 
-### 4. Phase 1C — Merge/deployment governance separation
+This merge-then-automatic-deploy sequence is exactly the confirmed
+current behavior that Phase 1C (below) exists to separate.
+
+### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN COMPLETE, 1C-B1 PARTIALLY COMPLETED, 1C-B2 NOT STARTED**
 
 Separate, explicit confirmations for merge and production deployment;
 remove the dependency where merging a PR automatically triggers a
 production deployment, to the extent technically possible within the
-current Vercel Git-integration model. Scope, risk level, and exact
-technical approach to be re-cut by ChatGPT against the actual current
-Vercel project configuration before this phase begins.
+current Vercel Git-integration model.
+
+Split into two sequential stages, per
+`docs/governance/decisions/PHASE_1C_DEPLOYMENT_SEPARATION.md`:
+
+**Phase 1C-B1 — Protected Main and Exact-SHA CI (PARTIALLY COMPLETED).**
+The owner created and activated the `Protect main` GitHub repository
+ruleset (confirmed live: `pull_request` required, the Quality Gate check
+required, force-push and deletion blocked, no bypass actors configured).
+**Remaining, not yet done:** proving the required Quality Gate check is
+actually evaluated against the exact final commit SHA on `main`, not
+only the ephemeral pre-merge synthetic merge commit — today
+`quality-gate.yml` triggers only on `pull_request`, which GitHub Actions
+evaluates against `refs/pull/<N>/merge`, not the head commit or the
+post-merge `main` commit directly.
+
+**Phase 1C-B2 — Manual Production Release (NOT STARTED).** Disabling
+automatic Vercel deployment for `main`, introducing a project-scoped
+Vercel API token stored as a GitHub Environment secret, and an
+owner-triggered `workflow_dispatch` release workflow implementing the
+exact-SHA release gate specified in the decision record. **Must not
+begin before Phase 1C-B1 is independently confirmed complete.**
 
 ### 5. Phase 1D — Centralized machine/cron access and error sanitization
 
@@ -163,7 +188,8 @@ operational tracking, not a claim of remediation.
 
 ## Source
 
-Baseline commit: `59822d418ec33705c77ba3fcd60dc3fd44cadb72` (`main`).
+Baseline commit: `bf4d507319c20160b742fc2de5d0398b5c047360` (`main`,
+merge commit of PR #5).
 
 This document supersedes the historical Master Audit Plan
 (`docs/governance/AISCENTRA_MASTER_AUDIT_PLAN.md`, fixed 29 July 2026)
