@@ -55,23 +55,33 @@ this phase.
 This merge-then-automatic-deploy sequence is exactly the confirmed
 current behavior that Phase 1C (below) exists to separate.
 
-### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN/PREFLIGHT**
+### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN COMPLETE, 1C-B1 PARTIALLY COMPLETED, 1C-B2 NOT STARTED**
 
 Separate, explicit confirmations for merge and production deployment;
 remove the dependency where merging a PR automatically triggers a
 production deployment, to the extent technically possible within the
-current Vercel Git-integration model. Scope, risk level, and exact
-technical approach to be re-cut by ChatGPT against the actual current
-Vercel project configuration before this phase begins.
+current Vercel Git-integration model.
 
-**Design/preflight only, not implemented.** See
-`docs/governance/decisions/PHASE_1C_DEPLOYMENT_SEPARATION.md` for the
-confirmed current behavior, actual platform configuration established
-via primary artifacts, a three-option comparison, a recommendation, and
-open questions requiring an explicit owner decision before
-implementation is scoped as a separate task. That document does not
-authorize implementation and this roadmap entry does not mark Phase 1C
-as implemented or complete.
+Split into two sequential stages, per
+`docs/governance/decisions/PHASE_1C_DEPLOYMENT_SEPARATION.md`:
+
+**Phase 1C-B1 — Protected Main and Exact-SHA CI (PARTIALLY COMPLETED).**
+The owner created and activated the `Protect main` GitHub repository
+ruleset (confirmed live: `pull_request` required, the Quality Gate check
+required, force-push and deletion blocked, no bypass actors configured).
+**Remaining, not yet done:** proving the required Quality Gate check is
+actually evaluated against the exact final commit SHA on `main`, not
+only the ephemeral pre-merge synthetic merge commit — today
+`quality-gate.yml` triggers only on `pull_request`, which GitHub Actions
+evaluates against `refs/pull/<N>/merge`, not the head commit or the
+post-merge `main` commit directly.
+
+**Phase 1C-B2 — Manual Production Release (NOT STARTED).** Disabling
+automatic Vercel deployment for `main`, introducing a project-scoped
+Vercel API token stored as a GitHub Environment secret, and an
+owner-triggered `workflow_dispatch` release workflow implementing the
+exact-SHA release gate specified in the decision record. **Must not
+begin before Phase 1C-B1 is independently confirmed complete.**
 
 ### 5. Phase 1D — Centralized machine/cron access and error sanitization
 
