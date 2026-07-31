@@ -12,6 +12,9 @@ name: Quality Gate
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -28,12 +31,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Confirm tested commit identity
+        run: |
+          set -euo pipefail
+          echo "event=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "github.sha=${{ github.sha }}"
+          echo "git.head=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
       - name: Fetch base branch explicitly (do not rely on unconfirmed origin/<base> presence)
         # actions/checkout with fetch-depth:0 fetches full history of the
         # checked-out ref, but does not guarantee other branches (e.g. the
         # PR's base branch) exist as local remote-tracking refs. Fetching
         # the base branch explicitly here makes the merge-base computation
         # in format-changed.sh provably correct rather than assumed.
+        # PR-only: github.base_ref is empty on push events.
+        if: github.event_name == 'pull_request'
         run: git fetch origin "${{ github.base_ref }}"
 
       - name: Set up Node.js
@@ -45,8 +59,32 @@ jobs:
       - name: npm ci
         run: npm ci
 
-      - name: Changed-files format check
+      - name: Changed-files format check (pull_request)
+        if: github.event_name == 'pull_request'
         run: bash scripts/ci/format-changed.sh "origin/${{ github.base_ref }}"
+
+      - name: Changed-files format check (push to main)
+        # github.event.before is the SHA main pointed to immediately before
+        # this push. Fail-closed: any condition where that SHA cannot be
+        # trusted (missing, all-zero i.e. a new-branch/force-push edge case,
+        # or not present in this checkout's local history) falls back to a
+        # full-repository format check rather than silently skipping or
+        # comparing main against itself. No `|| true` anywhere in this step.
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+
+          BEFORE="${{ github.event.before }}"
+
+          if [[ -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+            echo "No valid before SHA; running full format check."
+            npm run format:check
+          elif git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            bash scripts/ci/format-changed.sh "$BEFORE"
+          else
+            echo "Before SHA is not available locally; running full format check."
+            npm run format:check
+          fi
 
       - name: Lint (full project)
         run: npm run lint
