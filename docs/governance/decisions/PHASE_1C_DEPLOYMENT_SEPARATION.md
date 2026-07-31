@@ -1,7 +1,10 @@
 # PHASE 1C — DEPLOYMENT SEPARATION: DECISION RECORD
 
-**Status:** Preflight / design only. No implementation authorized by this document.
-**Baseline:** `main@bf4d507319c20160b742fc2de5d0398b5c047360`
+**Status:** Design approved for staged implementation; Phase 1C-B1
+implemented and independently verified; Phase 1C-B2 not started. This
+document does not authorize further implementation by itself.
+**Design baseline:** `main@bf4d507319c20160b742fc2de5d0398b5c047360`
+**Phase 1C-B1 closeout evidence baseline:** `main@0bf8fe15604808a7ca94b532689f6b209804aed9`
 **Date:** 31 July 2026
 **Related:** `docs/governance/AISCENTRA_REPAIR_ROADMAP.md` Phase 1C
 
@@ -33,7 +36,24 @@ before Phase 1C implementation can be scoped as a separate task.
   required-review-count setting.
 - A separate structural production-deployment approval gate still does
   not exist: merging to `main` continues to trigger an automatic Vercel
-  production deployment.
+  production deployment. **This remains true after Phase 1C-B1** — B1
+  closed the exact-SHA CI gap described below, but did not disable
+  automatic deployment; that remains Phase 1C-B2's scope.
+- **Phase 1C-B1 closeout (new, this update):** the exact-main-SHA
+  Quality Gate gap described in the original design below (Section 5)
+  is now closed and independently verified. PR #8 (merging
+  `ci/exact-main-sha-quality-gate` into `main`) added a `push: branches:
+[main]` trigger alongside the existing `pull_request` trigger, with an
+  event-specific, fail-closed format-check split and a diagnostic step
+  proving `git.head == github.sha` on every run. PR #8 merged as commit
+  `0bf8fe15604808a7ca94b532689f6b209804aed9`; the automatic
+  `push`-triggered run (`30629372155`, job `91151923416`) confirmed
+  `event=push`, `ref=refs/heads/main`, `head_sha` equal to the merge SHA,
+  all steps `success`, 95/95 tests, and a production build on Next.js
+  `16.2.12`. The automatic production deployment triggered by the same
+  merge (`dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U`) reached `READY` with
+  `githubCommitSha` equal to the merge SHA. Full detail in
+  `docs/governance/AISCENTRA_REPAIR_ROADMAP.md` Phase 1C-B1.
 
 ## 2. Actual platform configuration (established via primary artifacts)
 
@@ -245,13 +265,13 @@ staged release and explicit promotion.
 
 Protected Main (Section 2.3-2.5) is now in place as an external,
 owner-driven fact, confirmed via the GitHub API during this correction
-pass. It is **not**, by itself, sufficient to safely introduce a
-production deployment credential or release workflow — Phase 1C-B1
-(Section 5) must additionally prove that the required Quality Gate check
-applies to the exact final commit SHA that lands on `main`, not merely
-to the ephemeral pre-merge synthetic merge commit. Production tokens and
-release workflows (Phase 1C-B2) are not represented as safe to introduce
-until Phase 1C-B1 is independently confirmed complete.
+pass. Phase 1C-B1 (Section 5) has since been independently confirmed
+complete — the required Quality Gate check is proven to apply to the
+exact final commit SHA that lands on `main`, not merely to the ephemeral
+pre-merge synthetic merge commit. Production tokens and release
+workflows (Phase 1C-B2) are still not represented as implemented or
+authorized by this document — B2 remains its own separate task requiring
+its own separate, explicit owner authorization.
 
 Rationale, weighed directly against the stated selection criteria:
 
@@ -272,27 +292,95 @@ sequential stages, tracked explicitly in the Repair Roadmap:
 
 ### Phase 1C-B1 — Protected Main and Exact-SHA CI
 
-**Status: PARTIALLY COMPLETED.**
+**Status: COMPLETED.** (Historical status at design/preflight time was
+_PARTIALLY COMPLETED_ — see "State at design/preflight" below, retained
+unmodified for the audit trail. "State after B1 implementation" reflects
+the current, independently verified status.)
+
+#### State at design/preflight (historical, unmodified)
 
 Completed (external, owner-driven):
 
 - The owner created and activated the `Protect main` ruleset (Section 2.3). Its actual configuration is machine-confirmed, not assumed.
 
-Remains open, as a separate future implementation task:
+Remained open at that time, as a separate future implementation task:
 
-- Ensure the Quality Gate check is evaluated against the actual final commit SHA that lands on `main` — today, `quality-gate.yml` triggers only on `pull_request`, meaning GitHub Actions checks out and tests `refs/pull/<N>/merge` (a synthetic merge commit), not the PR's head commit directly, and does not run again on the resulting merge commit after merge (see Section 8 for this PR's own concrete evidence of that distinction).
-- One reasonable technical direction (not yet decided or implemented) is adding a `push: branches: [main]` trigger to the existing Quality Gate workflow, or making it reusable and invoked post-merge — the exact approach is left to the future implementation task, not decided here.
+- Ensure the Quality Gate check is evaluated against the actual final commit SHA that lands on `main` — at that time, `quality-gate.yml` triggered only on `pull_request`, meaning GitHub Actions checks out and tests `refs/pull/<N>/merge` (a synthetic merge commit), not the PR's head commit directly, and did not run again on the resulting merge commit after merge (see Section 8 for the concrete evidence of that distinction, as it stood before this closeout).
+- One reasonable technical direction (not yet decided or implemented at that time) was adding a `push: branches: [main]` trigger to the existing Quality Gate workflow, or making it reusable and invoked post-merge.
 - Prove, with real evidence, that a successful check reported against `main` corresponds to the exact commit SHA actually on `main` at that time.
 - Confirm the required-status-check enforcement in the `Protect main` ruleset continues to apply correctly after any workflow-trigger change.
-- Explicitly out of scope for 1C-B1: any Vercel deployment-behavior change, any Vercel token, any GitHub production secret.
+- Explicitly out of scope for 1C-B1 at that time: any Vercel deployment-behavior change, any Vercel token, any GitHub production secret.
 
-Phase 1C-B1 is not considered complete until exact-SHA CI on the final
-`main` commit is implemented and independently verified — the ruleset's
-existence alone does not close this gap.
+#### State after B1 implementation (current, this update)
+
+Phase 1C-B1 is now considered complete. Independently verified via
+primary artifacts, not merely reported:
+
+- PR #8 (`ci/exact-main-sha-quality-gate` → `main`) implemented exactly
+  the technical direction anticipated above: a `push: branches: [main]`
+  trigger added alongside the existing `pull_request` trigger, an
+  event-specific fail-closed format-check split (PR-only step uses
+  `github.base_ref`; push-only step uses `github.event.before` with a
+  full-repository fallback if that SHA is missing, all-zero, or not
+  locally available), and a new diagnostic step
+  ("Confirm tested commit identity") that asserts
+  `git rev-parse HEAD == github.sha` and fails the job if they diverge.
+- PR #8 merged as commit `0bf8fe15604808a7ca94b532689f6b209804aed9`
+  (`mergedAt: 2026-07-31T12:05:56Z`, merged by the repository owner, not
+  a bot).
+- The automatic `push`-triggered Quality Gate run
+  (`30629372155`, job `91151923416`) fired on that exact merge and
+  confirmed: `event=push`, `head_branch=main`, `ref=refs/heads/main`,
+  `head_sha` equal to the merge SHA. The "Confirm tested commit
+  identity" step succeeded, which is itself the proof that
+  `git.head == github.sha` on this run (the step's own command fails
+  non-zero on any mismatch). The push-specific format-check step
+  succeeded using the real prior `main` SHA
+  (`c41a1c1b9fcba6fb96545c5ac13673da3e261f40`, independently confirmed
+  via the repository Events API, not just the workflow's own claim) as
+  its comparison base — the fail-closed full-repository fallback was
+  not triggered. All remaining steps (lint, type-check, 95/95 tests,
+  production build on Next.js `16.2.12`, both dependency-audit evidence
+  steps, all three artifact uploads) succeeded.
+- Production dependency audit on this exact commit (artifact ID
+  `8792716966`): `critical 0, high 0, moderate 0, low 2, total 2`,
+  independently re-confirmed via a local `npm audit --omit=dev` run
+  against the exact merge commit after establishing that the merge
+  changed only the workflow file (no `package.json`/`package-lock.json`
+  change).
+- The automatic Vercel production deployment triggered by this same
+  merge (`dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U`) reached `state: READY`,
+  `target: production`, `source: git`, `githubCommitRef: main`,
+  `githubCommitSha` equal to the merge SHA.
+- Production evidence for this deployment: the connected Vercel
+  deployment/API (a primary artifact, not a model report) confirms
+  `dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U` reached `state: READY`,
+  `target: production`, `source: git`, `githubCommitRef: main`,
+  `githubCommitSha` equal to the merge SHA. Independent external
+  verification through a direct fetch of the production URL
+  (`web_fetch`, a tool distinct from this sandbox's blocked `curl`
+  proxy) on 31 July 2026 successfully retrieved real, live homepage
+  content from `https://aiscentra.com/` — positive evidence the
+  deployment genuinely serves production traffic, not merely reported
+  as such. `/api/health` could not be independently confirmed this way:
+  the site's own `robots.txt` disallows automated access to that path
+  for the `web_fetch` tool. `/opengraph-image` returned a tool-side
+  "image content not supported" error rather than a network-level
+  failure, consistent with the endpoint serving real binary image
+  content, but not by itself a confirmation of the literal HTTP status
+  code or `content-type` header value. Claude's `bash`-sandboxed `curl`
+  could not reach any of these URLs directly
+  (`x-deny-reason: host_not_allowed`) — a disclosed sandbox limitation,
+  not a production failure.
+
+**Explicitly not claimed by this closeout:** automatic Vercel production
+deployment from `main` is still fully enabled — B1 did not touch it.
+Phase 1C as a whole remains incomplete until Phase 1C-B2 also lands.
 
 ### Phase 1C-B2 — Manual Production Release
 
-Only after Phase 1C-B1 is fully complete:
+Only after Phase 1C-B1 is fully complete (now independently confirmed,
+per the above):
 
 - Disable automatic Git deployment for `main` (`git.deploymentEnabled: { "main": false }`).
 - Preserve automatic PR Preview deployments (unaffected by the above, per Vercel's documented per-branch default).
@@ -301,8 +389,12 @@ Only after Phase 1C-B1 is fully complete:
 - Store the token only as a GitHub **Environment** secret (not a plain repository secret), scoped to a `production` environment requiring the job to declare `environment: production`.
 - Perform staged deployment, verification, and explicit promotion against a specific, owner-approved commit SHA.
 
-A production deployment credential must not be introduced before Phase
-1C-B1 is complete.
+Phase 1C-B1's completion does not itself authorize, start, or scope
+Phase 1C-B2. B2 requires its own separate implementation task and its
+own separate, explicit owner authorization before any code, Vercel
+token, or GitHub secret is introduced. It is **not** implemented,
+authorized, or started by this document or by this governance-sync
+update.
 
 ## 6. Exact-SHA release gate — mandatory conditions for the future Phase 1C-B2 release workflow
 

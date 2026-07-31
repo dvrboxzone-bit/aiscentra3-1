@@ -1,7 +1,7 @@
 AISCENTRA REPAIR ROADMAP
 Version 1.0
 Status: Current operational repair sequence
-Baseline: main@bf4d507319c20160b742fc2de5d0398b5c047360
+Baseline: main@0bf8fe15604808a7ca94b532689f6b209804aed9 (pre-PR #9 governance-closeout baseline)
 Date: 31 July 2026
 
 ---
@@ -55,7 +55,7 @@ this phase.
 This merge-then-automatic-deploy sequence is exactly the confirmed
 current behavior that Phase 1C (below) exists to separate.
 
-### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN COMPLETE, 1C-B1 PARTIALLY COMPLETED, 1C-B2 NOT STARTED**
+### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN COMPLETE, 1C-B1 COMPLETED, 1C-B2 NOT STARTED**
 
 Separate, explicit confirmations for merge and production deployment;
 remove the dependency where merging a PR automatically triggers a
@@ -65,23 +65,68 @@ current Vercel Git-integration model.
 Split into two sequential stages, per
 `docs/governance/decisions/PHASE_1C_DEPLOYMENT_SEPARATION.md`:
 
-**Phase 1C-B1 — Protected Main and Exact-SHA CI (PARTIALLY COMPLETED).**
+**Phase 1C-B1 — Protected Main and Exact-SHA CI (COMPLETED).**
 The owner created and activated the `Protect main` GitHub repository
 ruleset (confirmed live: `pull_request` required, the Quality Gate check
-required, force-push and deletion blocked, no bypass actors configured).
-**Remaining, not yet done:** proving the required Quality Gate check is
-actually evaluated against the exact final commit SHA on `main`, not
-only the ephemeral pre-merge synthetic merge commit — today
-`quality-gate.yml` triggers only on `pull_request`, which GitHub Actions
-evaluates against `refs/pull/<N>/merge`, not the head commit or the
-post-merge `main` commit directly.
+required, force-push and deletion blocked, no bypass actors configured;
+required check context unchanged: `Quality Gate (format, lint,
+type-check, test, build)`). The remaining engineering gap — proving the
+required Quality Gate check is actually evaluated against the exact
+final commit SHA on `main`, not only the ephemeral pre-merge synthetic
+merge commit — is now closed and independently verified:
+
+- PR #8 merged; merge/main SHA
+  `0bf8fe15604808a7ca94b532689f6b209804aed9`.
+- Automatic `push`-triggered Quality Gate run `30629372155`
+  (job `91151923416`): `event=push`, `ref=refs/heads/main`,
+  `head_sha` equal to the merge SHA. `github.sha` and `git.head` equal
+  the merge SHA (proven by the "Confirm tested commit identity" step's
+  own pass/fail assertion succeeding, not merely asserted).
+- Push-specific format-check step (`Changed-files format check (push to
+main)`) succeeded using the real prior `main` SHA
+  (`c41a1c1b9fcba6fb96545c5ac13673da3e261f40`) as its comparison base —
+  the fail-closed full-repository fallback was not needed.
+- 95/95 tests passed; production build succeeded; Next.js `16.2.12`.
+- Production dependency audit on this exact commit: `critical 0, high 0,
+moderate 0, low 2, total 2` (artifact ID `8792716966`).
+- Automatic production deployment `dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U`
+  reached `READY`, `target: production`, `source: git`,
+  `githubCommitRef: main`, `githubCommitSha` equal to the merge SHA.
+- Production evidence for this deployment: the connected Vercel
+  deployment/API (primary artifact, not a model report) confirms
+  `dpl_A9wVLvHYqrvwhHE2NJANxatCmi9U` reached `state: READY`,
+  `target: production`, `source: git`, with `githubCommitSha` exactly
+  equal to the merge SHA. Independent external verification through a
+  direct fetch of the production URL (`web_fetch`, a tool distinct from
+  this sandbox's blocked `curl` proxy) on 31 July 2026 successfully
+  retrieved real, live homepage content from `https://aiscentra.com/`
+  (signal listings, Open Graph metadata, current page structure) —
+  positive evidence the deployment is genuinely serving production
+  traffic, not merely reported as such. `/api/health` could not be
+  independently confirmed this way: the site's own `robots.txt`
+  disallows automated access to that path for the `web_fetch` tool.
+  `/opengraph-image` returned a tool-side "image content not supported"
+  error rather than a network-level failure, which is consistent with
+  the endpoint serving real binary image content, but does not by
+  itself confirm the literal HTTP status code or `content-type` header
+  value. Claude's `bash`-sandboxed `curl` could not reach any of these
+  URLs directly (`x-deny-reason: host_not_allowed`) — that specific,
+  disclosed sandbox limitation is not a production failure.
+
+**Explicitly not claimed by this completion:** automatic Vercel
+production deployment from `main` is still fully enabled — Phase 1C-B1
+did not disable it. Phase 1C as a whole is not complete until Phase
+1C-B2 also lands.
 
 **Phase 1C-B2 — Manual Production Release (NOT STARTED).** Disabling
 automatic Vercel deployment for `main`, introducing a project-scoped
 Vercel API token stored as a GitHub Environment secret, and an
 owner-triggered `workflow_dispatch` release workflow implementing the
-exact-SHA release gate specified in the decision record. **Must not
-begin before Phase 1C-B1 is independently confirmed complete.**
+exact-SHA release gate specified in the decision record. Now that
+Phase 1C-B1 is independently confirmed complete, B2 may be scoped as
+its own separate task and requires its own separate, explicit owner
+authorization before implementation begins — it is **not** implemented,
+authorized, or started by this governance-sync document.
 
 ### 5. Phase 1D — Centralized machine/cron access and error sanitization
 
@@ -188,8 +233,8 @@ operational tracking, not a claim of remediation.
 
 ## Source
 
-Baseline commit: `bf4d507319c20160b742fc2de5d0398b5c047360` (`main`,
-merge commit of PR #5).
+Baseline commit: `0bf8fe15604808a7ca94b532689f6b209804aed9` (`main`,
+merge commit of PR #8, the pre-PR #9 governance-closeout baseline).
 
 This document supersedes the historical Master Audit Plan
 (`docs/governance/AISCENTRA_MASTER_AUDIT_PLAN.md`, fixed 29 July 2026)
