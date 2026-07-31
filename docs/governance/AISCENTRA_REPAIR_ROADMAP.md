@@ -60,7 +60,7 @@ Vercel project configuration before this phase begins.
 
 ### 5. Phase 1D — Centralized machine/cron access and error sanitization
 
-Centralized guards for the remaining machine/cron routes (currently 9–11
+Centralized guards for the remaining machine/cron routes (currently 11
 routes using a duplicated, non-constant-time `CRON_SECRET` check per the
 Phase 1B inventory — see baseline below), constant-time secret
 comparison, and removal of raw caller-facing infrastructure errors

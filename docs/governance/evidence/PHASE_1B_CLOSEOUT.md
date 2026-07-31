@@ -32,10 +32,13 @@ reopen, re-litigate, or alter the merged and closed PR #4.
 The following fields were confirmed during Phase 1B itself (the prior
 session/task that produced and merged PR #4), via GitHub Actions API,
 Vercel API, and production HTTP probes at that time. **They are
-transcribed here as historical record, not re-verified by Claude via
-API calls during this Governance Sync task** — the GitHub REST API was
-rate-limited for unauthenticated requests at the time this file was
-written, and no task-scoped token was provided for this docs-only task:
+transcribed here as historical record.**
+
+Claude did not independently re-query the historical Vercel production
+deployment during Governance Sync. A task-scoped GitHub PAT was provided
+later only for pushing the governance branch, opening Draft PR #5, and
+reading the current PR CI results. It did not constitute re-verification
+of the historical Vercel production deployment.
 
 ```
 PR #4 merged and closed.
@@ -55,8 +58,15 @@ main page HTTP 200
 /api/health HTTP 200
 database ok
 pipeline errors_24h: 0
-(recorded from the prior review; see this PR's Evidence Manifest for a
-fresh, unprivileged public smoke check performed during this specific task)
+
+Production smoke values were independently verified during the prior
+Phase 1B post-merge review and are retained here as historical evidence.
+
+A repeat public smoke check was attempted from the Claude sandbox during
+Governance Sync, but the request was blocked by the sandbox egress policy
+with x-deny-reason: host_not_allowed. Therefore no fresh production smoke
+result was produced by Claude in this task. This sandbox denial was not a
+production failure.
 ```
 
 If independent re-verification of the CI/Vercel-specific fields above is
