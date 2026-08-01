@@ -357,12 +357,13 @@ jobs:
           fi
 
           # Collect every full, non-empty https:// URL line on stdout,
-          # deduplicated. Fail closed unless exactly one distinct URL is
-          # present -- zero means no URL was printed; more than one is
-          # ambiguous and must not be silently resolved by picking the
-          # last line.
+          # WITHOUT deduplication -- each occurrence is counted, even if
+          # two lines contain the identical URL. Exactly one line is a
+          # pass; zero lines means no URL was printed; two or more lines
+          # (identical or not) is ambiguous and must not be silently
+          # resolved by picking the last line or collapsing duplicates.
           set +e
-          ALL_URLS="$(grep -Eo '^https://[A-Za-z0-9.-]+$' /tmp/deploy-stdout.txt | sort -u)"
+          ALL_URLS="$(grep -Eo '^https://[A-Za-z0-9.-]+$' /tmp/deploy-stdout.txt)"
           URL_COUNT="$(printf '%s\n' "$ALL_URLS" | grep -c .)"
           set -e
 
@@ -372,7 +373,7 @@ jobs:
           fi
 
           if [ "$URL_COUNT" -gt 1 ]; then
-            echo "::error::Expected exactly one deployment URL on stdout, found $URL_COUNT distinct URLs. Ambiguous -- STOP, do not guess."
+            echo "::error::Expected exactly one deployment URL line on stdout, found $URL_COUNT (duplicates are not collapsed and do not pass). Ambiguous -- STOP, do not guess."
             exit 1
           fi
 
