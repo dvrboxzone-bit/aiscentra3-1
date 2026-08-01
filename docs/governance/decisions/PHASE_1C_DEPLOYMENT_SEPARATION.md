@@ -259,8 +259,9 @@ verification → explicit promote (assign domains)
 
 ```
 Protected Main + exact-SHA CI first, then disabled automatic deployment
-for main + project-scoped Vercel token + protected owner-triggered
-staged release and explicit promotion.
+for main + Team-scoped Vercel token with a runtime fail-closed
+single-project Team invariant + protected owner-triggered staged
+release and explicit promotion.
 ```
 
 Protected Main (Section 2.3-2.5) is now in place as an external,
@@ -280,7 +281,7 @@ Rationale, weighed directly against the stated selection criteria:
 - **Exact SHA-pinning:** Option B's staged build step checks out and builds one exact, named commit SHA on demand — stronger and more directly verifiable (via the deployment's own `githubCommitSha` metadata field, which this session has repeatedly used as primary evidence) than Option A's reliance on a second Git ref staying in sync. This exact-SHA guarantee is the specific engineering property Phase 1C-B1 exists to prove end-to-end (Section 5), not merely assume.
 - **PR Preview preserved:** confirmed unaffected under Option B (Section 3, Option B row 1) — this is a hard Vercel-documented guarantee (`deploymentEnabled` is a per-branch map defaulting to `true` for unlisted branches), not an assumption.
 - **No manual owner code/CLI work:** achievable under Option B only if the promotion step is wrapped in a `workflow_dispatch` GitHub Actions job the owner can trigger from the GitHub UI (a button, effectively) rather than requiring the owner to run `vercel promote` locally — this is a **required part of the proposed Phase 1C-B2 implementation scope**, not optional polish, per Constitution Article 2.1's explicit requirement that the owner not be expected to run technical commands.
-- **Minimal secret scope:** requires exactly one new secret (a project-scoped Vercel API token), introduced only in Phase 1C-B2, stored only as a GitHub Environment secret restricted to a `production` environment job (Section 6) — never before Phase 1C-B1 is complete.
+- **Minimal secret scope:** requires exactly one new secret (a Team-scoped Vercel API token, combined with a runtime fail-closed single-project Team invariant — see the Phase 1C-B2 subsection of Section 5 for the full correction), introduced only in Phase 1C-B2, stored only as a GitHub Environment secret restricted to a `production` environment job (Section 6) — never before Phase 1C-B1 is complete.
 - **No irreversible change:** `git.deploymentEnabled` is itself a reversible, single-line `vercel.json` change; nothing about Option B forecloses reverting to full automatic deployment later.
 - **Clear rollback:** `vercel rollback <previous-deployment-url-or-id>` — a distinct command from `vercel promote` — is Vercel's own documented emergency-recovery mechanism (Section 11), specifically for restoring production traffic to a deployment that has already served production before. It is not represented as "the same `vercel promote` call against an older deployment"; Section 7 makes clear that exercising it is not authorized by this document.
 - **Fit for confirmed plan/tooling:** every mechanism Option B relies on (`--skip-domain`, `promote`, `rollback`, per-branch `deploymentEnabled`) is documented by Vercel's own current documentation (Section 11); the two unconfirmed items — exact plan-tier availability of staged promotion for normal release, and separately, of rollback to an arbitrary prior deployment — remain open questions (Section 10, items 1 and 2), not assumed.
@@ -379,22 +380,90 @@ Phase 1C as a whole remains incomplete until Phase 1C-B2 also lands.
 
 ### Phase 1C-B2 — Manual Production Release
 
-Only after Phase 1C-B1 is fully complete (now independently confirmed,
-per the above):
+**Status: IMPLEMENTATION IN DRAFT — NOT MERGED / NOT CONFIGURED / NOT
+TESTED.** Now that Phase 1C-B1 is independently confirmed complete, the
+owner separately authorized starting B2's implementation as a Draft PR
+(1 August 2026). This section records what that Draft PR actually
+implements and, separately, what remains outside its scope.
 
-- Disable automatic Git deployment for `main` (`git.deploymentEnabled: { "main": false }`).
-- Preserve automatic PR Preview deployments (unaffected by the above, per Vercel's documented per-branch default).
-- Add an owner-triggered production release workflow (Section 6).
-- Create a project-scoped Vercel token.
-- Store the token only as a GitHub **Environment** secret (not a plain repository secret), scoped to a `production` environment requiring the job to declare `environment: production`.
-- Perform staged deployment, verification, and explicit promotion against a specific, owner-approved commit SHA.
+**Implemented in the Draft PR:**
+
+- `vercel.json` disables automatic Git deployment for `main` only
+  (`git.deploymentEnabled: { "main": false }`); Preview deployments for
+  all other branches are unaffected, per Vercel's documented per-branch
+  default.
+- `.github/workflows/production-release.yml` (new file):
+  `workflow_dispatch`-only trigger; owner/ref/input gate; exact
+  main-SHA + canonical push-event Quality Gate check (Section 8); Team
+  single-project invariant check (below); staged `--skip-domain` deploy
+  with custom metadata; deployment metadata gate; pre-promotion staged
+  smoke via `vercel curl`; TOCTOU re-check; `vercel promote`;
+  post-promotion smoke with no automatic rollback on failure (Section
+  7).
+
+**Token-scope correction (mandatory, per explicit owner instruction):**
+the original design language below described "a project-scoped Vercel
+token" as if Vercel guaranteed that scoping shape. Current Vercel
+documentation does not support that claim: personal access tokens are
+scoped to a **Team**, not guaranteed restricted to a single Project.
+The corrected, accurate model is: **a Team-scoped token
+(`team_kcxAeWtnmoE4vJPkVHy2vbjT`) combined with a runtime fail-closed
+single-project Team invariant** — before every deploy, and again
+immediately before promotion, the workflow calls Vercel's
+`GET /v10/projects?teamId=...` REST API directly (not CLI table-text
+parsing) and STOPs unless the team contains exactly one project matching
+the expected ID (`prj_CSXbFWdA5q0xM5F0oQ57eKn1W3zF`) and name
+(`aiscentra3-1`). This is a compensating control, not a Vercel-native
+guarantee, and is disclosed as such. Confirmed live during this task:
+the team currently contains exactly this one project.
+
+**GitHub Actions workflow permissions:** `contents: read` and
+`actions: read` only, per explicit owner instruction — `actions: read`
+is required specifically to query the canonical push-event Quality Gate
+run via the GitHub API (Section 8). No other permission (`id-token`,
+`packages`, `issues`, `pull-requests`, `checks`, `deployments`, or any
+write permission) is granted.
+
+**Required external GitHub Environment configuration (NOT performed by
+this Draft PR — a prerequisite the owner must configure separately
+before this workflow can ever be dispatched):**
+
+- Environment name: `production`.
+- Required reviewer: repository owner `dvrboxzone-bit`.
+- `prevent_self_review: false` — a necessary, explicitly acknowledged
+  exception under this single-owner repository model; without it, the
+  owner could never approve their own release, making the Environment
+  gate unusable rather than safer.
+- Deployment branches/tags restricted to the selected branch `main`
+  only.
+- Administrators cannot bypass protection rules.
+- Environment secret name: `VERCEL_TOKEN` (Team-scoped, per the
+  correction above), readable only by jobs that declare
+  `environment: production` — the `validate` and `exact-sha-check` jobs
+  deliberately do not declare this and have no secret access at all.
+
+**Explicitly NOT done by this Draft PR:** no Vercel token created; no
+GitHub Environment created or modified; no GitHub secret created or
+configured; the workflow has never been dispatched; no staged
+deployment, promotion, or production deployment has been performed.
+
+**Capability assumptions explicitly NOT made:** normal `vercel promote`
+capability, and rollback-to-an-arbitrary-prior-deployment capability,
+remain **unconfirmed for this team's actual Vercel plan** until a real
+staged release is first exercised successfully — this design does not
+assume either is available. Vercel's own documentation states Hobby-tier
+accounts can only roll back to the immediately-previous production
+deployment; no broader plan tier is assumed here without separate
+confirmation. A rollback drill is not performed, tested, or authorized
+by this task — it requires its own separate, explicit owner
+authorization at the time it is needed (Section 7).
 
 Phase 1C-B1's completion does not itself authorize, start, or scope
-Phase 1C-B2. B2 requires its own separate implementation task and its
-own separate, explicit owner authorization before any code, Vercel
-token, or GitHub secret is introduced. It is **not** implemented,
-authorized, or started by this document or by this governance-sync
-update.
+Phase 1C-B2. The Draft PR implementing B2 still requires: independent
+review, owner configuration of the Environment/secret described above, a
+successfully exercised real staged-and-promoted release, and separate,
+explicit owner authorization for Ready + merge, before Phase 1C as a
+whole can be considered complete.
 
 ## 6. Exact-SHA release gate — mandatory conditions for the future Phase 1C-B2 release workflow
 
