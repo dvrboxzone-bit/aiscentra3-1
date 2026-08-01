@@ -1,8 +1,8 @@
 AISCENTRA REPAIR ROADMAP
 Version 1.0
 Status: Current operational repair sequence
-Baseline: main@0bf8fe15604808a7ca94b532689f6b209804aed9 (pre-PR #9 governance-closeout baseline)
-Date: 31 July 2026
+Baseline: main@1c735761507b542ef8e5d7e0f8c001e3836c00c3 (pre-Phase-1C-B2 Draft baseline)
+Date: 1 August 2026
 
 ---
 
@@ -55,7 +55,7 @@ this phase.
 This merge-then-automatic-deploy sequence is exactly the confirmed
 current behavior that Phase 1C (below) exists to separate.
 
-### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN COMPLETE, 1C-B1 COMPLETED, 1C-B2 NOT STARTED**
+### 4. Phase 1C — Merge/deployment governance separation — **CURRENT — DESIGN COMPLETE, 1C-B1 COMPLETED, 1C-B2 IMPLEMENTATION IN DRAFT — NOT MERGED / NOT CONFIGURED / NOT TESTED**
 
 Separate, explicit confirmations for merge and production deployment;
 remove the dependency where merging a PR automatically triggers a
@@ -118,15 +118,69 @@ production deployment from `main` is still fully enabled — Phase 1C-B1
 did not disable it. Phase 1C as a whole is not complete until Phase
 1C-B2 also lands.
 
-**Phase 1C-B2 — Manual Production Release (NOT STARTED).** Disabling
-automatic Vercel deployment for `main`, introducing a project-scoped
-Vercel API token stored as a GitHub Environment secret, and an
-owner-triggered `workflow_dispatch` release workflow implementing the
-exact-SHA release gate specified in the decision record. Now that
-Phase 1C-B1 is independently confirmed complete, B2 may be scoped as
-its own separate task and requires its own separate, explicit owner
-authorization before implementation begins — it is **not** implemented,
-authorized, or started by this governance-sync document.
+**Phase 1C-B2 — Manual Production Release (IMPLEMENTATION IN DRAFT — NOT
+MERGED / NOT CONFIGURED / NOT TESTED).** A Draft PR implements Option B
+end-to-end: `vercel.json` disables automatic Git deployment for `main`
+only (`git.deploymentEnabled.main: false`, per-branch, Preview
+deployments for other branches unaffected); a new
+`.github/workflows/production-release.yml` implements the full
+owner-triggered, exact-SHA, fail-closed staged-deploy-then-promote
+pipeline (owner/ref/input gate, exact main-SHA + canonical push Quality
+Gate check, Vercel Team single-project invariant via a real REST API
+call — not CLI table-text parsing, staged `--skip-domain` deploy with
+custom metadata, deployment metadata gate checking the system
+`githubCommitSha` field, pre-promotion staged smoke via `vercel curl`,
+a TOCTOU re-check repeating every gate immediately before promotion,
+`vercel promote`, and post-promotion smoke with no automatic rollback
+on failure).
+
+**Token-scope correction (from this task's own explicit instruction):**
+current Vercel documentation confirms personal access tokens are scoped
+to a Team, not guaranteed to a single Project. This design does **not**
+claim "project-scoped token" as an inherent Vercel guarantee. Instead it
+is a **Team-scoped token with a runtime fail-closed single-project Team
+invariant**: before every deploy and again immediately before promotion,
+the workflow calls Vercel's `GET /v9/projects` REST API directly, and
+STOPs unless the team (`team_kcxAeWtnmoE4vJPkVHy2vbjT`) contains exactly
+one project matching the expected ID (`prj_CSXbFWdA5q0xM5F0oQ57eKn1W3zF`)
+and name (`aiscentra3-1`). Confirmed live, this task: the team currently
+contains exactly this one project.
+
+**Explicitly NOT done by this Draft PR:**
+
+- No Vercel API token was created.
+- No GitHub Environment was created or modified.
+- No GitHub secret was created or configured.
+- The workflow has never been dispatched.
+- No staged deployment, promotion, or production deployment has been
+  performed by this task.
+- Before this workflow can be run for the first time, the repository
+  owner must separately configure a GitHub `production` Environment
+  with: required reviewer = repository owner `dvrboxzone-bit`;
+  `prevent_self_review: false` (a necessary exception under this
+  single-owner model — otherwise the owner could never approve their
+  own release); deployment branches/tags restricted to `main` only;
+  administrators cannot bypass protection rules; and an Environment
+  secret named `VERCEL_TOKEN` (Team-scoped, per the correction above),
+  accessible only to jobs that declare `environment: production` (the
+  `validate` and `exact-sha-check` jobs deliberately do not declare it
+  and have no secret access).
+- Normal `vercel promote` capability and rollback-to-an-arbitrary-prior-
+  deployment capability remain **unconfirmed for this team's actual
+  Vercel plan** until a real staged release is first exercised — not
+  assumed available by this design. Vercel's own documentation states
+  Hobby-tier accounts can only roll back to the immediately-previous
+  production deployment; this document does not assume a broader plan
+  tier applies here.
+- A rollback drill is **not** performed, tested, or authorized by this
+  task — it requires its own separate, explicit owner authorization at
+  the time it is needed, exactly as this design has stated since Phase
+  1C-A.
+
+Phase 1C as a whole remains **IN PROGRESS**, not complete, until this
+Draft PR is reviewed, the required Environment/secret are configured by
+the owner, a real staged-and-promoted release is exercised successfully,
+and the owner separately authorizes Ready + merge.
 
 ### 5. Phase 1D — Centralized machine/cron access and error sanitization
 
