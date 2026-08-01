@@ -500,6 +500,8 @@ jobs:
 
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "::error::vercel curl / failed with exit code $CURL_EXIT. STOP -- do not promote."
+            echo "--- captured stderr (token redacted) ---"
+            sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/root-curl-stderr.txt 2>/dev/null
             exit 1
           fi
 
@@ -534,6 +536,8 @@ jobs:
 
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "::error::vercel curl /api/health failed with exit code $CURL_EXIT. STOP -- do not promote."
+            echo "--- captured stderr (token redacted) ---"
+            sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/health-curl-stderr.txt 2>/dev/null
             exit 1
           fi
 
@@ -575,6 +579,8 @@ jobs:
 
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "::error::vercel curl /opengraph-image failed with exit code $CURL_EXIT. STOP -- do not promote."
+            echo "--- captured stderr (token redacted) ---"
+            sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/og-curl-stderr.txt 2>/dev/null
             exit 1
           fi
 
@@ -754,7 +760,7 @@ jobs:
             -- -o /tmp/recheck-root.html -w '%{http_code}' > /tmp/recheck-root-status.txt 2>/tmp/recheck-root-stderr.txt
           ROOT_CURL_EXIT=$?
           set -e
-          [ "$ROOT_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check root vercel curl failed (exit $ROOT_CURL_EXIT). STOP -- do not promote."; exit 1; }
+          [ "$ROOT_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check root vercel curl failed (exit $ROOT_CURL_EXIT). STOP -- do not promote."; sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/recheck-root-stderr.txt 2>/dev/null; exit 1; }
           ROOT_STATUS="$(cat /tmp/recheck-root-status.txt)"
           [ "$ROOT_STATUS" = "200" ] || { echo "::error::Re-check root returned HTTP $ROOT_STATUS. STOP -- do not promote."; exit 1; }
           grep -qi "aiscentra" /tmp/recheck-root.html || { echo "::error::Re-check root HTML not recognizable. STOP -- do not promote."; exit 1; }
@@ -766,7 +772,7 @@ jobs:
             -- -o /tmp/recheck-health.json -w '%{http_code}' > /tmp/recheck-health-status.txt 2>/tmp/recheck-health-stderr.txt
           HEALTH_CURL_EXIT=$?
           set -e
-          [ "$HEALTH_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check health vercel curl failed (exit $HEALTH_CURL_EXIT). STOP -- do not promote."; exit 1; }
+          [ "$HEALTH_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check health vercel curl failed (exit $HEALTH_CURL_EXIT). STOP -- do not promote."; sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/recheck-health-stderr.txt 2>/dev/null; exit 1; }
           HEALTH_STATUS="$(cat /tmp/recheck-health-status.txt)"
           [ "$HEALTH_STATUS" = "200" ] || { echo "::error::Re-check health returned HTTP $HEALTH_STATUS. STOP -- do not promote."; exit 1; }
           jq -e '.status == "ok"' /tmp/recheck-health.json > /dev/null || { echo "::error::Re-check health .status != ok. STOP -- do not promote."; exit 1; }
@@ -779,7 +785,7 @@ jobs:
             -- -o /tmp/recheck-og.png -D /tmp/recheck-og-headers.txt -w '%{http_code}' > /tmp/recheck-og-status.txt 2>/tmp/recheck-og-stderr.txt
           OG_CURL_EXIT=$?
           set -e
-          [ "$OG_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check Open Graph vercel curl failed (exit $OG_CURL_EXIT). STOP -- do not promote."; exit 1; }
+          [ "$OG_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check Open Graph vercel curl failed (exit $OG_CURL_EXIT). STOP -- do not promote."; sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/recheck-og-stderr.txt 2>/dev/null; exit 1; }
           OG_STATUS="$(cat /tmp/recheck-og-status.txt)"
           [ "$OG_STATUS" = "200" ] || { echo "::error::Re-check Open Graph returned HTTP $OG_STATUS. STOP -- do not promote."; exit 1; }
           RECHECK_CONTENT_TYPE="$(awk 'BEGIN{IGNORECASE=1} /^content-type:/{print $2; exit}' /tmp/recheck-og-headers.txt | tr -d '\r')"
