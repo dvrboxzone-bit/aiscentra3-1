@@ -356,11 +356,27 @@ jobs:
             exit 1
           fi
 
-          # Exactly one non-empty https:// URL is expected on stdout.
+          # Collect every full, non-empty https:// URL line on stdout,
+          # deduplicated. Fail closed unless exactly one distinct URL is
+          # present -- zero means no URL was printed; more than one is
+          # ambiguous and must not be silently resolved by picking the
+          # last line.
           set +e
-          DEPLOYMENT_URL="$(grep -Eo '^https://[A-Za-z0-9.-]+' /tmp/deploy-stdout.txt | tail -n1)"
-          GREP_EXIT=$?
+          ALL_URLS="$(grep -Eo '^https://[A-Za-z0-9.-]+$' /tmp/deploy-stdout.txt | sort -u)"
+          URL_COUNT="$(printf '%s\n' "$ALL_URLS" | grep -c .)"
           set -e
+
+          if [ "$URL_COUNT" -eq 0 ]; then
+            echo "::error::No https:// deployment URL found on vercel deploy stdout. STOP."
+            exit 1
+          fi
+
+          if [ "$URL_COUNT" -gt 1 ]; then
+            echo "::error::Expected exactly one deployment URL on stdout, found $URL_COUNT distinct URLs. Ambiguous -- STOP, do not guess."
+            exit 1
+          fi
+
+          DEPLOYMENT_URL="$ALL_URLS"
 
           if [ -z "$DEPLOYMENT_URL" ]; then
             echo "::error::Could not read a deployment URL from vercel deploy stdout. STOP."
@@ -829,8 +845,15 @@ jobs:
               exit 1
             fi
 
-            HAS_ALIAS_1="$(jq -er --arg a "$PRODUCTION_ALIAS_1" '(.alias // []) | index($a) != null' /tmp/promoted.json)"
-            HAS_ALIAS_2="$(jq -er --arg a "$PRODUCTION_ALIAS_2" '(.alias // []) | index($a) != null' /tmp/promoted.json)"
+            # NOTE: jq -e treats a `false` filter result as exit code 1,
+            # which under `set -e` would terminate this script on the
+            # very first poll attempt where an alias is not yet present
+            # -- `false` here is an expected, non-terminal polling state,
+            # not an error. Use plain `jq -r` and compare the resulting
+            # string explicitly instead, so `false` simply continues the
+            # loop to the next bounded attempt.
+            HAS_ALIAS_1="$(jq -r --arg a "$PRODUCTION_ALIAS_1" '(.alias // []) | index($a) != null' /tmp/promoted.json)"
+            HAS_ALIAS_2="$(jq -r --arg a "$PRODUCTION_ALIAS_2" '(.alias // []) | index($a) != null' /tmp/promoted.json)"
 
             if [ "$HAS_ALIAS_1" = "true" ] && [ "$HAS_ALIAS_2" = "true" ]; then
               CONFIRMED=1
