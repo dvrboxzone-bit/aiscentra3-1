@@ -711,7 +711,8 @@ jobs:
           TARGET="$(jq -er '.target' /tmp/deployment-recheck.json)"
           SYSTEM_SHA="$(jq -r '.meta.githubCommitSha // empty' /tmp/deployment-recheck.json)"
           CUSTOM_SHA="$(jq -r '.meta.aiscentraReleaseSha // empty' /tmp/deployment-recheck.json)"
-          ALIAS_COUNT="$(jq -e '(.alias // []) | length' /tmp/deployment-recheck.json)"
+          HAS_PROD_ALIAS="$(jq -er --arg a1 "$PRODUCTION_ALIAS_1" --arg a2 "$PRODUCTION_ALIAS_2" \
+            '(.alias // []) | map(select(. == $a1 or . == $a2)) | length' /tmp/deployment-recheck.json)"
 
           if [ "$READY_STATE" != "READY" ]; then
             echo "::error::Re-check readyState is '$READY_STATE', expected READY. STOP -- do not promote."
@@ -733,13 +734,13 @@ jobs:
             exit 1
           fi
 
-          if [ "$ALIAS_COUNT" != "0" ]; then
-            echo "::error::Re-check: deployment now has $ALIAS_COUNT alias(es); expected zero before promotion. STOP -- do not promote."
+          if [ "$HAS_PROD_ALIAS" != "0" ]; then
+            echo "::error::Re-check: deployment now has a production-domain alias already assigned before promotion (expected zero). STOP -- do not promote."
             exit 1
           fi
 
           rm -f /tmp/deployment-recheck.json
-          echo "Deployment metadata fully re-confirmed: READY, target=production, systemSha=$SYSTEM_SHA, customSha=$CUSTOM_SHA, aliasCount=0."
+          echo "Deployment metadata fully re-confirmed: READY, target=production, systemSha=$SYSTEM_SHA, customSha=$CUSTOM_SHA, no production alias yet."
 
       - name: Repeat full staged smoke (root/health/PNG) immediately before promotion
         env:
