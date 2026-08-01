@@ -1,8 +1,8 @@
 AISCENTRA REPAIR ROADMAP
 Version 1.0
 Status: Current operational repair sequence
-Baseline: main@0bf8fe15604808a7ca94b532689f6b209804aed9 (pre-PR #9 governance-closeout baseline)
-Date: 31 July 2026
+Baseline: main@1c735761507b542ef8e5d7e0f8c001e3836c00c3 (pre-Phase-1C-B2 Draft baseline)
+Date: 1 August 2026
 
 ---
 
@@ -140,7 +140,7 @@ to a Team, not guaranteed to a single Project. This design does **not**
 claim "project-scoped token" as an inherent Vercel guarantee. Instead it
 is a **Team-scoped token with a runtime fail-closed single-project Team
 invariant**: before every deploy and again immediately before promotion,
-the workflow calls Vercel's `GET /v10/projects` REST API directly, and
+the workflow calls Vercel's `GET /v9/projects` REST API directly, and
 STOPs unless the team (`team_kcxAeWtnmoE4vJPkVHy2vbjT`) contains exactly
 one project matching the expected ID (`prj_CSXbFWdA5q0xM5F0oQ57eKn1W3zF`)
 and name (`aiscentra3-1`). Confirmed live, this task: the team currently

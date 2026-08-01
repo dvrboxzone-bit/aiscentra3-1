@@ -1,11 +1,15 @@
 # PHASE 1C — DEPLOYMENT SEPARATION: DECISION RECORD
 
 **Status:** Design approved for staged implementation; Phase 1C-B1
-implemented and independently verified; Phase 1C-B2 not started. This
-document does not authorize further implementation by itself.
+implemented and independently verified; Phase 1C-B2 implementation is
+in Draft — not merged, not configured (no Environment/secret/token
+exists), and not tested (never dispatched). This document does not by
+itself authorize external settings, workflow dispatch, merge, or any
+production action.
 **Design baseline:** `main@bf4d507319c20160b742fc2de5d0398b5c047360`
 **Phase 1C-B1 closeout evidence baseline:** `main@0bf8fe15604808a7ca94b532689f6b209804aed9`
-**Date:** 31 July 2026
+**Phase 1C-B2 implementation baseline:** `main@1c735761507b542ef8e5d7e0f8c001e3836c00c3`
+**Date:** 1 August 2026
 **Related:** `docs/governance/AISCENTRA_REPAIR_ROADMAP.md` Phase 1C
 
 This document does not authorize any code, Vercel, GitHub Actions, or
@@ -98,7 +102,7 @@ before Phase 1C implementation can be scoped as a separate task.
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | Default branch                                                       | `main`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `GET /repos/.../{repo}`                          |
 | `main` branch protection (**at the start of Phase 1C-A preflight**)  | `protected: false` — no branch protection or ruleset existed at all. `required_status_checks.enforcement_level: "off"`. **This state no longer applies — see Section 2.3.**                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `GET /repos/.../branches/main`                   |
-| Quality Gate workflow trigger                                        | `pull_request` only (no `push`, no `workflow_dispatch`) — confirmed by reading `.github/workflows/quality-gate.yml` directly                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | file read                                        |
+| Quality Gate workflow trigger                                        | `pull_request` **and** `push: branches: [main]`, per Phase 1C-B1 (PR #8, merged) — no `workflow_dispatch` on Quality Gate. Confirmed by reading `.github/workflows/quality-gate.yml` directly at this task's baseline (`main@1c735761507b542ef8e5d7e0f8c001e3836c00c3`). This is the current state; it is distinct from the new `production-release.yml` workflow this Draft PR adds, which is `workflow_dispatch`-only and never triggers on push/pull_request.                                                                                                                                                                  | file read, this task                             |
 | Postgres Migration Check workflow trigger                            | `pull_request` **and** `workflow_dispatch: {}` — confirmed by reading `.github/workflows/postgres-migration-check.yml` directly. `workflow_dispatch` is already configured in this existing repository workflow. A successful historical manual execution was not independently verified during Phase 1C-A: `gh api repos/.../actions/workflows/postgres-migration-check.yml/runs?event=workflow_dispatch` returned `total_count: 0` (confirmed during the correction pass on this PR). Configuration presence is not, by itself, evidence that manual dispatch has ever actually been exercised successfully in this repository. | file read; live `gh api` call, correction pass   |
 | GitHub Actions secrets currently referenced by any existing workflow | **None.** `grep -c "secrets\."` against every `.github/workflows/*.yml` file returns zero matches across the board. Any new release/promotion workflow would start from an empty secrets footprint, not modify an existing one.                                                                                                                                                                                                                                                                                                                                                                                                   | file read                                        |
 | GitHub Actions secrets configured on the repository (names)          | **Not independently confirmed** — `GET /repos/.../actions/secrets` requires authenticated repo-admin-scoped access; unauthenticated request returned `401 Requires authentication`. No token was requested or used for this design-only task.                                                                                                                                                                                                                                                                                                                                                                                     | live API call (401 response)                     |
@@ -410,7 +414,7 @@ The corrected, accurate model is: **a Team-scoped token
 (`team_kcxAeWtnmoE4vJPkVHy2vbjT`) combined with a runtime fail-closed
 single-project Team invariant** — before every deploy, and again
 immediately before promotion, the workflow calls Vercel's
-`GET /v10/projects?teamId=...` REST API directly (not CLI table-text
+`GET /v9/projects?teamId=...` REST API directly (not CLI table-text
 parsing) and STOPs unless the team contains exactly one project matching
 the expected ID (`prj_CSXbFWdA5q0xM5F0oQ57eKn1W3zF`) and name
 (`aiscentra3-1`). This is a compensating control, not a Vercel-native
@@ -465,25 +469,35 @@ successfully exercised real staged-and-promoted release, and separate,
 explicit owner authorization for Ready + merge, before Phase 1C as a
 whole can be considered complete.
 
-## 6. Exact-SHA release gate — mandatory conditions for the future Phase 1C-B2 release workflow
+## 6. Exact-SHA release gate — binding requirements, now implemented in the current Draft
 
-The following are binding design conditions for the Phase 1C-B2
-implementation task, not yet built or authorized by this document:
+The following are binding requirements for the Phase 1C-B2 release
+workflow. They are no longer a future design target: they are
+implemented in `.github/workflows/production-release.yml` as of this
+Draft PR, and are re-verified against the actual file content at
+correction time (not merely re-asserted from memory):
 
-- The workflow input accepts a full 40-character commit SHA.
-- The input value is validated against a strict format check before any other action.
+- The workflow input accepts a full 40-character commit SHA; uppercase input is normalized to lowercase before any comparison, since GitHub SHA strings are canonically lowercase.
+- The input value is validated against a strict format check (`^[0-9a-f]{40}$`, post-normalization) before any other action.
+- **Every** `workflow_dispatch` input (`commit_sha`, `confirmation`, `reason`) and every flexible `github.*` context value used in a shell script is passed through a step-level `env:` block and read only as an ordinary shell variable — never interpolated directly as `${{ inputs.* }}` or `${{ github.* }}` literal text inside `run:` source. This is a deliberate script-injection defense: GitHub expands `${{ ... }}` before the runner script is written to disk, so interpolating an attacker-influenced string (workflow_dispatch inputs are user-controlled) directly into `run:` would let quotes, command substitutions, or shell metacharacters in an input alter the script itself.
+- The free-form `reason` input is never echoed to logs in full — only its character length is logged.
 - The workflow verifies the commit exists in the repository.
 - The workflow verifies the commit is present in `origin/main`'s history.
-- For a normal release, the workflow verifies the input SHA matches `origin/main`'s current HEAD exactly.
-- The workflow verifies the Quality Gate check for that exact commit SHA has `conclusion: success` (dependent on Phase 1C-B1 making this check meaningful against the real `main` commit, not only the synthetic merge commit).
-- The resulting deployment's own metadata (`githubCommitSha`) is confirmed to match the same input SHA before promotion proceeds.
+- For a normal release, the workflow verifies the input SHA matches `origin/main`'s current HEAD exactly — both at initial check and again immediately before deploy and again immediately before promotion (TOCTOU-aware, not a single point-in-time check).
+- The workflow verifies the Quality Gate check for that exact commit SHA has `conclusion: success`, querying by exact `head_sha` (never "most recent success") — made meaningful by Phase 1C-B1's exact-SHA push-triggered Quality Gate.
+- The Vercel Team single-project invariant (Section 10 of this document) is checked via a real REST API call before every deploy and again immediately before promotion — count, exact project ID, and exact project name, not merely count.
+- The resulting deployment's own **system** metadata (`meta.githubCommitSha`) is confirmed to match the same input SHA before promotion proceeds — custom metadata (`aiscentraReleaseSha`) alone is explicitly insufficient and is checked as an additional, not substitute, signal.
+- The pre-promotion TOCTOU re-check repeats, immediately before promotion: main HEAD, Quality Gate conclusion, Team invariant (count/id/name), full deployment metadata (READY/target/system SHA/custom SHA/zero production aliases), and the complete staged smoke (root/health/PNG signature) — not a subset, and not merely reused job outputs from earlier in the run.
+- Staged pre-promotion smoke and post-promotion smoke use the documented `vercel curl /path --deployment <url>` syntax (a path argument plus `--deployment`, never a full URL as the path argument) for the staged, unaliased deployment, and ordinary system `curl` against the real public aliases for post-promotion checks.
 - Promotion is refused on any mismatch at any of the checks above.
-- Workflow permissions are explicitly `contents: read`; all other GitHub permissions are explicitly set to `none` where the platform allows it.
-- The production secret is accessible only to a job declaring `environment: production` — never a job without that declaration.
+- Promotion uses the documented `vercel promote <deployment-id>` CLI command with an explicit `--timeout`, followed by a bounded poll (fixed maximum attempts, fixed sleep interval, never indefinite) confirming both production aliases via the Vercel API before declaring success.
+- Workflow permissions are explicitly `contents: read` and `actions: read` only — `actions: read` is required specifically to query the canonical push-event Quality Gate run via the GitHub API; no other GitHub permission (write, `id-token`, `packages`, `issues`, `pull-requests`, `checks`, `deployments`) is granted.
+- The production secret (`VERCEL_TOKEN`) is accessible only to jobs declaring `environment: production` — the `validate` and `exact-sha-check` jobs deliberately do not declare it and have no secret access at all.
 - The token value is never written to workflow logs.
-- Full API responses that could contain sensitive data are never dumped to logs in full — only the specific fields needed for verification.
-- Workflow `concurrency` settings prevent two production releases from running simultaneously.
-- Normal release and rollback (Section 7) are implemented as distinct modes or distinct workflows — never the same code path with an implicit branch.
+- Full Vercel API responses are never dumped to logs in full — only the specific fields needed for verification are extracted and printed.
+- `jq -e` (fail-closed: non-zero exit on `false`/`null`/invalid JSON) is used for every JSON field check on a release-verification path — no `|| true` on any such path.
+- Workflow `concurrency` (a single fixed group, `cancel-in-progress: false`) prevents two production releases from running simultaneously.
+- Normal release and rollback (Section 7) are implemented as distinct code paths — this workflow contains no rollback action of any kind; rollback remains entirely out of this workflow's scope.
 
 "Most recent successful CI run" is explicitly rejected as a promotion
 trigger anywhere in this design — every promotion decision must be tied
@@ -548,22 +562,33 @@ the ambiguity Phase 1C-B1 must resolve for the real `main` branch before
 any release workflow can safely trust a "Quality Gate: success" signal
 as proof about a specific `main` commit.
 
-## 9. Proposed implementation scope for Phase 1C-B2 (NOT authorized by this document)
+## 9. Current Draft implementation scope for Phase 1C-B2
 
-- **Files:** `vercel.json` (add `"git": { "deploymentEnabled": { "main": false } }`); one new `.github/workflows/*.yml` file (e.g. `production-release.yml`) with `on: workflow_dispatch` only, implementing the Section 6 exact-SHA gate, using a newly-created, narrowly-scoped Vercel API token stored as a GitHub **Environment** secret.
-- **External settings:** creation of the new Vercel API token itself (owner action, outside this repository); adding it as a GitHub Environment secret (requires repo-admin write access, itself a separate, explicit action).
-- **Required credentials / minimum scope:** a Vercel token restricted to the AIscentra project and capable of the deployment and promotion operations required by the release workflow. Whether Vercel supports further operation-level restriction to only those actions has not been independently confirmed and must be verified before credential creation. Not created before Phase 1C-B1 is complete; to be stored only as a GitHub Environment secret when eventually created.
-- **Rollout:** implemented and merged as its own PR, only after Phase 1C-B1 is independently confirmed complete; tested first with a real staged-and-promoted deployment against a low-risk commit (e.g. a docs-only change) before being relied upon for any substantive release.
+Explicitly owner-authorized as a Draft-only implementation (1 August
+2026). What follows describes what the current Draft PR actually
+contains, distinct from what remains a future owner action.
+
+- **Files changed by this Draft PR (exactly four):** `vercel.json` (adds `"git": { "deploymentEnabled": { "main": false } }`); new `.github/workflows/production-release.yml` with `on: workflow_dispatch` only, implementing the Section 6 exact-SHA gate; `docs/governance/AISCENTRA_REPAIR_ROADMAP.md`; this document.
+- **Token model implemented:** a Team-scoped Vercel token (`team_kcxAeWtnmoE4vJPkVHy2vbjT`) combined with a runtime fail-closed single-project Team invariant, checked via the real `GET /v9/projects?teamId=...` REST API (not CLI table-text parsing) before every deploy and again immediately before promotion. This is a compensating control, not a Vercel-native single-project guarantee — disclosed as such.
+- **Not created by this Draft PR:** the Vercel API token itself; the GitHub `production` Environment; the `VERCEL_TOKEN` Environment secret. All three remain separate, explicit, future owner actions outside this repository (creating the token) and requiring repo-admin write access (configuring the Environment/secret) — neither is performed by this task.
+- **Not performed by this Draft PR:** `workflow_dispatch` of the new workflow; any staged deployment; any promotion; any production deployment; any rollback.
+- **Rollout:** this Draft PR itself is merged (a separate future owner decision) only after independent review; the required Environment/secret are configured by the owner; a real staged-and-promoted release is exercised successfully against a low-risk commit before being relied upon for any substantive release.
 - **Rollback:** see Section 7 — requires separate explicit owner authorization at the time it is exercised; the `vercel.json` change itself can also be reverted (single line) as an immediate fallback if the new workflow proves unreliable.
-- **Acceptance criteria:** (a) a merge to `main` no longer produces any deployment with `target: production` automatically — confirmed by observing at least one real merge with zero automatic production deployment; (b) the new `workflow_dispatch` job, when triggered with a specific SHA, produces a deployment whose `githubCommitSha` metadata field exactly matches that SHA, per the Section 6 gate; (c) Preview deployments for at least one concurrent PR continue to build automatically and are unaffected; (d) a rollback drill using `vercel rollback <approved-prior-deployment-id-or-url>` (Section 7) — not `vercel promote` — is exercised at least once successfully, under its own separate owner authorization, before this is considered load-bearing.
+- **Acceptance criteria (not yet met by this Draft PR alone):** (a) a merge to `main` no longer produces any deployment with `target: production` automatically — cannot be confirmed until this PR is merged; (b) the `workflow_dispatch` job, when triggered with a specific SHA, produces a deployment whose system `githubCommitSha` metadata field exactly matches that SHA — cannot be confirmed until the workflow is actually dispatched, which requires the Environment/secret to exist first; (c) Preview deployments for at least one concurrent PR continue to build automatically and are unaffected — expected, per Vercel's documented per-branch `deploymentEnabled` default, but not yet observed post-merge; (d) a rollback drill (Section 7) is exercised at least once successfully, under its own separate owner authorization, before this is considered load-bearing — not performed by this task.
 
-## 10. Open questions requiring an explicit owner decision (not resolved by this document)
+## 10. Open questions — status after Phase 1C-B1 completion and Phase 1C-B2 Draft
 
-1. Does the current Vercel team plan support staged production deployment + promote for a **normal release** (`--skip-domain` / the promote REST endpoint) in practice, not just in Vercel's general documentation? This should be confirmed directly against the team's actual plan/billing page before Phase 1C-B2 is scoped as a task, since this design-only task had no tool capable of reading plan-tier feature availability.
-2. Does the current Vercel team plan support **rollback** to a specifically-selected older prior production deployment (as opposed to only the immediately-previous one, which Vercel documents as the Hobby-tier limit)? This is a separate question from Open Question 1 — normal-release promotion and emergency rollback are different mechanisms with potentially different plan-tier availability, and neither has been independently confirmed for this team's actual plan.
-3. Who creates the new Vercel API token, and under what account (the current project creator/owner's personal account, or a dedicated service-style Vercel user)? This is explicitly an owner decision per Constitution Article 2.1/23.1 and was not decided by this task.
-4. Is Option A (separate production branch) preferred over Option B for any reason not weighed above (e.g. team familiarity, a strong preference for Git-native mechanisms over Vercel-API-based ones)? This design document recommends Option B, but the choice remains the owner's/ChatGPT's to make explicitly.
-5. What is the exact technical approach for Phase 1C-B1's exact-SHA CI (a `push: branches: [main]` trigger added to the existing workflow, a separate reusable workflow, or another mechanism)? Not decided by this document — left to the future 1C-B1 implementation task.
+**Resolved:**
+
+1. ~~Is Option A (separate production branch) preferred over Option B?~~ **Resolved.** The owner chose Option B; Phase 1C-B2's Draft implementation follows it exclusively.
+2. ~~What is the exact technical approach for Phase 1C-B1's exact-SHA CI?~~ **Resolved and completed.** A `push: branches: [main]` trigger was added to the existing Quality Gate workflow (PR #8, merged), independently verified per Section 5's B1 closeout evidence.
+3. ~~What is the token scope model?~~ **Resolved.** Team-scoped token (`team_kcxAeWtnmoE4vJPkVHy2vbjT`) plus a runtime fail-closed single-project Team invariant, implemented in the current Draft workflow (Section 6, Section 9).
+
+**Remain open, not resolved by this document:**
+
+4. Who creates the new Vercel API token, and under what account (the current project creator/owner's personal account, or a dedicated service-style Vercel user)? This is explicitly an owner decision per Constitution Article 2.1/23.1 and is not decided by this task. Token creation, and Environment/secret configuration, remain separate future owner actions not performed by this Draft PR.
+5. Does the current Vercel team plan support staged production deployment + promote for a **normal release** (`--skip-domain` / the promote CLI/REST mechanism) in practice, not just in Vercel's general documentation? This remains unconfirmed until an explicitly authorized real release is first exercised successfully.
+6. Does the current Vercel team plan support **rollback** to a specifically-selected older prior production deployment (as opposed to only the immediately-previous one, which Vercel documents as the Hobby-tier limit)? This is a separate question from #5 — normal-release promotion and emergency rollback are different mechanisms with potentially different plan-tier availability, and neither is confirmed for this team's actual plan. A rollback drill remains separately authorized (Section 7) and is not performed by this task.
 
 ## 11. Authoritative Vercel references
 
@@ -575,7 +600,7 @@ as proof about a specific `main` commit.
 | `vercel promote` (CLI)                                | https://vercel.com/docs/cli                                                                             | Promoting a specific deployment to become the current production deployment                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Promote to production (REST)                          | https://vercel.com/docs/rest-api/projects/point-production-traffic-to-a-given-deployment                | `POST /v10/projects/{projectId}/promote/{deploymentId}` — does not rebuild the deployment                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Post-promotion verification                           | https://vercel.com/docs/deployments/promote-preview-to-production                                       | Checking production logs and domain response after promotion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Project-scoped tokens                                 | https://vercel.com/docs/cli/tokens                                                                      | Vercel personal access tokens; documented as scoped to a user account, and optionally to a single project. The token can be restricted to the AIscentra Vercel project. Whether Vercel supports further operation-level restriction to only deploy and promote has not yet been independently confirmed.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Team-scoped tokens + single-project invariant         | https://vercel.com/docs/cli/tokens                                                                      | Vercel personal access tokens are documented as scoped to a user account and a **Team**, not guaranteed restricted to a single Project. This design does not claim otherwise. The implemented compensating control is a runtime fail-closed single-project Team invariant: before every deploy and again immediately before promotion, the workflow calls `GET /v9/projects?teamId=team_kcxAeWtnmoE4vJPkVHy2vbjT` directly and STOPs unless the team contains exactly one project matching the expected ID (`prj_CSXbFWdA5q0xM5F0oQ57eKn1W3zF`) and name (`aiscentra3-1`). Whether Vercel supports further native operation-level restriction (deploy/promote-only) has not been independently confirmed and is not assumed.                              |
 | `vercel rollback` (CLI)                               | https://vercel.com/docs/cli/rollback                                                                    | `vercel rollback <previous-deployment-url-or-id>` restores production traffic to a previously-served production deployment — a distinct command from `vercel promote`. `vercel rollback status` reports pending-rollback state.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Rollback (recovery guide)                             | https://vercel.com/docs/deployments/rollback-production-deployment                                      | Documents `vercel rollback <previous-deployment-url-or-id>` as the emergency-recovery mechanism, distinct from `vercel promote`. Verified exact current page text: "On the Hobby plan, you can only roll back to the immediately previous production deployment. Pro and Enterprise plans can roll back to any previous production deployment by specifying the deployment URL." Rollback changes live production traffic and requires its own separate, explicit owner authorization at the time it is exercised (Section 7) — it is not pre-authorized by this document. Whether this specific team's plan tier supports rolling back to an arbitrary prior deployment (versus only the immediately-previous one) has not been independently confirmed. |
 | Rollback to previous production deployment (REST/SDK) | See "Rollback interface — public reference vs. current CLI implementation" immediately below this table |
@@ -640,12 +665,22 @@ Claude independently fetched and read this pass — disclosed for
 completeness, not as a basis for treating the divergence any
 differently than instructed above.
 
-## 12. What this document does NOT do
+## 12. What this document (and this Draft PR) does and does not do
 
-- It does not modify `vercel.json`, any GitHub Actions workflow, any application code, Supabase, Vercel project settings, domains, environment variables, or Deploy Hooks.
+**What this Draft PR changes in the repository (exactly four files):**
+
+- `vercel.json`: adds `git.deploymentEnabled.main: false` only.
+- `.github/workflows/production-release.yml` (new): the `workflow_dispatch`-only exact-SHA staged-release-and-promote pipeline described in Section 6.
+- `docs/governance/AISCENTRA_REPAIR_ROADMAP.md` and this document: updated to reflect the above as implemented-in-Draft, per Section 9.
+
+**What this Draft PR/document does NOT do:**
+
 - It does not modify the `Protect main` ruleset (created independently by the owner, read here only).
-- It does not create any Vercel token or GitHub secret.
-- It does not start Phase 1C-B1 or Phase 1C-B2 implementation.
-- It does not perform or authorize a rollback drill.
+- It does not modify `.github/workflows/quality-gate.yml`, any application/runtime code, `package.json`/`package-lock.json`, Supabase, Vercel project settings, domains, or Deploy Hooks.
+- It does not create any Vercel token, GitHub Environment, or GitHub secret.
+- It does not dispatch the new workflow.
+- It does not perform any staged deployment, promotion, or production deployment.
+- It does not perform or authorize a rollback drill, or any rollback.
+- It does not transition this PR to Ready for review or perform a merge.
 - It does not approve Product Vision v1.0.0.
-- It does not merge any pull request.
+- It does not, by itself, complete Phase 1C-B2 or Phase 1C overall — both remain in progress pending independent review, owner configuration of the required Environment/secret, a successfully exercised real release, and separate owner authorization for Ready/merge.
