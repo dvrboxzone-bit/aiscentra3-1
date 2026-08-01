@@ -494,7 +494,7 @@ jobs:
           npx --yes vercel@${VERCEL_CLI_VERSION} curl / \
             --deployment "$DEPLOYMENT_URL" \
             --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG" \
-            -o /tmp/root.html -D /tmp/root-headers.txt -w '%{http_code}' > /tmp/root-status.txt 2>/tmp/root-curl-stderr.txt
+            -- -o /tmp/root.html -D /tmp/root-headers.txt -w '%{http_code}' > /tmp/root-status.txt 2>/tmp/root-curl-stderr.txt
           CURL_EXIT=$?
           set -e
 
@@ -528,7 +528,7 @@ jobs:
           npx --yes vercel@${VERCEL_CLI_VERSION} curl /api/health \
             --deployment "$DEPLOYMENT_URL" \
             --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG" \
-            -o /tmp/health.json -w '%{http_code}' > /tmp/health-status.txt 2>/tmp/health-curl-stderr.txt
+            -- -o /tmp/health.json -w '%{http_code}' > /tmp/health-status.txt 2>/tmp/health-curl-stderr.txt
           CURL_EXIT=$?
           set -e
 
@@ -569,7 +569,7 @@ jobs:
           npx --yes vercel@${VERCEL_CLI_VERSION} curl /opengraph-image \
             --deployment "$DEPLOYMENT_URL" \
             --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG" \
-            -o /tmp/og.png -D /tmp/og-headers.txt -w '%{http_code}' > /tmp/og-status.txt 2>/tmp/og-curl-stderr.txt
+            -- -o /tmp/og.png -D /tmp/og-headers.txt -w '%{http_code}' > /tmp/og-status.txt 2>/tmp/og-curl-stderr.txt
           CURL_EXIT=$?
           set -e
 
@@ -751,7 +751,7 @@ jobs:
           npx --yes vercel@${VERCEL_CLI_VERSION} curl / \
             --deployment "$DEPLOYMENT_URL" \
             --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG" \
-            -o /tmp/recheck-root.html -w '%{http_code}' > /tmp/recheck-root-status.txt 2>/tmp/recheck-root-stderr.txt
+            -- -o /tmp/recheck-root.html -w '%{http_code}' > /tmp/recheck-root-status.txt 2>/tmp/recheck-root-stderr.txt
           ROOT_CURL_EXIT=$?
           set -e
           [ "$ROOT_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check root vercel curl failed (exit $ROOT_CURL_EXIT). STOP -- do not promote."; exit 1; }
@@ -763,7 +763,7 @@ jobs:
           npx --yes vercel@${VERCEL_CLI_VERSION} curl /api/health \
             --deployment "$DEPLOYMENT_URL" \
             --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG" \
-            -o /tmp/recheck-health.json -w '%{http_code}' > /tmp/recheck-health-status.txt 2>/tmp/recheck-health-stderr.txt
+            -- -o /tmp/recheck-health.json -w '%{http_code}' > /tmp/recheck-health-status.txt 2>/tmp/recheck-health-stderr.txt
           HEALTH_CURL_EXIT=$?
           set -e
           [ "$HEALTH_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check health vercel curl failed (exit $HEALTH_CURL_EXIT). STOP -- do not promote."; exit 1; }
@@ -776,7 +776,7 @@ jobs:
           npx --yes vercel@${VERCEL_CLI_VERSION} curl /opengraph-image \
             --deployment "$DEPLOYMENT_URL" \
             --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG" \
-            -o /tmp/recheck-og.png -D /tmp/recheck-og-headers.txt -w '%{http_code}' > /tmp/recheck-og-status.txt 2>/tmp/recheck-og-stderr.txt
+            -- -o /tmp/recheck-og.png -D /tmp/recheck-og-headers.txt -w '%{http_code}' > /tmp/recheck-og-status.txt 2>/tmp/recheck-og-stderr.txt
           OG_CURL_EXIT=$?
           set -e
           [ "$OG_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check Open Graph vercel curl failed (exit $OG_CURL_EXIT). STOP -- do not promote."; exit 1; }
