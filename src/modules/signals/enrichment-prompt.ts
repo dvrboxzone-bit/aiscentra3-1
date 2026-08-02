@@ -17,39 +17,76 @@ import type { SignalCategory } from '@/types/database'
 export const EnrichmentOutputSchema = z.object({
   // Signal identity
   title: z.string().min(10).max(80),
-  description: z.string().min(50).max(1200).transform(s => s.slice(0, 1200)),
+  description: z
+    .string()
+    .min(50)
+    .max(1200)
+    .transform((s) => s.slice(0, 1200)),
   category: z.enum([
-    'RESEARCH', 'MODELS', 'COMPANIES', 'INFRASTRUCTURE',
-    'OPEN_SOURCE', 'FUNDING', 'REGULATION', 'AGENTS', 'HARDWARE',
+    'RESEARCH',
+    'MODELS',
+    'COMPANIES',
+    'INFRASTRUCTURE',
+    'OPEN_SOURCE',
+    'FUNDING',
+    'REGULATION',
+    'AGENTS',
+    'HARDWARE',
   ]),
 
   // Signal Score factors (Section 05)
-  impact_factor:        z.number().int().min(0).max(10),
-  actor_factor:         z.number().int().min(0).max(10),
-  novelty_factor:       z.number().int().min(0).max(10),
+  impact_factor: z.number().int().min(0).max(10),
+  actor_factor: z.number().int().min(0).max(10),
+  novelty_factor: z.number().int().min(0).max(10),
   verifiability_factor: z.number().int().min(0).max(10),
-  strategic_factor:     z.number().int().min(0).max(10),
+  strategic_factor: z.number().int().min(0).max(10),
 
   // Confidence Score factors (Section 06)
-  authority_factor:           z.number().int().min(0).max(10),
-  corroboration_factor:       z.number().int().min(0).max(10),
-  specificity_factor:         z.number().int().min(0).max(10),
+  authority_factor: z.number().int().min(0).max(10),
+  corroboration_factor: z.number().int().min(0).max(10),
+  specificity_factor: z.number().int().min(0).max(10),
   category_confidence_factor: z.number().int().min(0).max(10),
 
   // Entities
-  entities: z.array(z.object({
-    name: z.string().min(1),
-    type: z.enum([
-      'COMPANY', 'MODEL', 'RESEARCH_PAPER', 'PERSON', 'PRODUCT',
-      'AGENT', 'ORGANIZATION', 'TECHNOLOGY', 'INFRASTRUCTURE',
-      'REGULATION', 'INVESTMENT', 'DATASET', 'TOOL',
-    ]),
-  })).max(10),
+  entities: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        // UNKNOWN is a legitimate catch-all type. The model occasionally
+        // emits values outside this list (observed in production:
+        // BENCHMARK, METHOD, PLATFORM, OPEN_SOURCE) -- these are remapped to
+        // UNKNOWN by the preprocessor below rather than causing the entire
+        // enrichment call to fail schema validation over one entity's type.
+        type: z.preprocess(
+          (val) => {
+            const KNOWN_MISMAPS = new Set(['BENCHMARK', 'METHOD', 'PLATFORM', 'OPEN_SOURCE'])
+            return typeof val === 'string' && KNOWN_MISMAPS.has(val) ? 'UNKNOWN' : val
+          },
+          z.enum([
+            'COMPANY',
+            'MODEL',
+            'RESEARCH_PAPER',
+            'PERSON',
+            'PRODUCT',
+            'AGENT',
+            'ORGANIZATION',
+            'TECHNOLOGY',
+            'INFRASTRUCTURE',
+            'REGULATION',
+            'INVESTMENT',
+            'DATASET',
+            'TOOL',
+            'UNKNOWN',
+          ]),
+        ),
+      }),
+    )
+    .max(10),
 
   // Duplicate and quality flags
-  is_duplicate:   z.boolean(),
+  is_duplicate: z.boolean(),
   duplicate_note: z.union([z.string(), z.null()]).optional().default(''),
-  is_marketing:   z.boolean(),
+  is_marketing: z.boolean(),
 
   // Required when novelty_factor > 7 — prevents inflation
   novelty_prior_example: z.union([z.string(), z.null()]).optional().default(''),
@@ -137,12 +174,12 @@ Return ONLY valid JSON. No markdown. No text before or after the JSON object.`
 
 export interface EnrichmentInput {
   title: string
-  content: string          // First 3000 chars
+  content: string // First 3000 chars
   sourceUrl: string
   sourceName: string
   sourceTrustScore: number
   candidateCategory: SignalCategory
-  recentSignalTitles: string[]  // Last 20 active signals for novelty context
+  recentSignalTitles: string[] // Last 20 active signals for novelty context
 }
 
 export function buildEnrichmentPrompt(input: EnrichmentInput): string {
@@ -154,5 +191,5 @@ TITLE: ${input.title}
 CONTENT: ${body}
 
 Return JSON (no markdown):
-{"title":"<10-80 chars>","description":"<50-250 chars, facts+impact>","category":"<RESEARCH|MODELS|COMPANIES|INFRASTRUCTURE|OPEN_SOURCE|FUNDING|REGULATION|AGENTS|HARDWARE>","impact_factor":<0-10>,"actor_factor":<0-10>,"novelty_factor":<0-10>,"verifiability_factor":<0-10>,"strategic_factor":<0-10>,"authority_factor":<0-10>,"corroboration_factor":<0-10>,"specificity_factor":<0-10>,"category_confidence_factor":<0-10>,"entities":[{"name":"...","type":"COMPANY|MODEL|PERSON|PRODUCT|AGENT|ORGANIZATION|TECHNOLOGY|RESEARCH_PAPER|DATASET|TOOL"}],"is_duplicate":false,"duplicate_note":null,"is_marketing":false,"novelty_prior_example":null}`
+{"title":"<10-80 chars>","description":"<50-250 chars, facts+impact>","category":"<RESEARCH|MODELS|COMPANIES|INFRASTRUCTURE|OPEN_SOURCE|FUNDING|REGULATION|AGENTS|HARDWARE>","impact_factor":<0-10>,"actor_factor":<0-10>,"novelty_factor":<0-10>,"verifiability_factor":<0-10>,"strategic_factor":<0-10>,"authority_factor":<0-10>,"corroboration_factor":<0-10>,"specificity_factor":<0-10>,"category_confidence_factor":<0-10>,"entities":[{"name":"...","type":"COMPANY|MODEL|PERSON|PRODUCT|AGENT|ORGANIZATION|TECHNOLOGY|RESEARCH_PAPER|DATASET|TOOL|UNKNOWN"}],"is_duplicate":false,"duplicate_note":null,"is_marketing":false,"novelty_prior_example":null}`
 }

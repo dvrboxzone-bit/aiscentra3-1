@@ -168,13 +168,21 @@ export async function POST(request: Request): Promise<NextResponse> {
         else stats.error_breakdown.unknown++
 
         if (isRateLimit) {
-          // 429 = temporary provider limit — NOT a processing error
-          // agent.ts already retried with backoff — if still 429, wait longer
-          await markObservationForRetry(observation.id, AI_RETRY_MS)
+          // 429 = temporary provider limit — NOT a processing error.
+          // agent.ts already retried within-chain with exponential
+          // backoff; if the WHOLE chain (all fallback models) was still
+          // rate-limited, agent.ts now surfaces the largest Retry-After
+          // it saw (see AIProviderError.retryAfterMs) instead of losing
+          // that signal in a generic Error — use it when present, since
+          // the provider's own stated reset time is more accurate than
+          // a fixed guess.
+          const retryDelayMs =
+            (err instanceof AIProviderError ? err.retryAfterMs : undefined) ?? AI_RETRY_MS
+          await markObservationForRetry(observation.id, retryDelayMs)
           stats.retried++
           stats.stopped_reason = 'rate_limited'
           console.warn(
-            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${AI_RETRY_MS}ms`,
+            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${retryDelayMs}ms`,
           )
           break
         }

@@ -1,0 +1,75 @@
+name: Enrich Batch (hourly, free-tier structural fix)
+
+# ---------------------------------------------------------------------------
+# Why this workflow exists:
+#
+# Vercel Hobby (free tier, permanently fixed — see AISCENTRA-RELEASE-*
+# task history) allows exactly one native Vercel Cron trigger for this
+# project, already used by /api/cron/pipeline at "0 10 * * *" (once daily).
+# Diagnostic work confirmed the actual bottleneck is not any single
+# platform limit (Supabase DB size, connections, Groq token limits were
+# all found to have large headroom) but a pure throughput mismatch:
+# observations are collected at ~400/day while the once-daily pipeline
+# only drains a handful of them per invocation, producing an
+# ever-growing backlog.
+#
+# GitHub Actions' own `schedule:` trigger is free, unrelated to Vercel's
+# cron-count limit, and already used elsewhere in this repository (CI).
+# This workflow calls the existing, already-authenticated
+# /api/enrich/batch endpoint directly over HTTPS, once per hour, using
+# the same CRON_SECRET the Vercel-native cron already uses — no change
+# to the endpoint's own authorization logic was needed.
+#
+# This does NOT change BATCH_SIZE or TIME_BUDGET inside enrich/batch
+# itself (explicitly out of scope for this task) -- it only calls the
+# existing endpoint more often, so its own internal autonomous loop
+# (which already runs until the queue is empty or its internal time
+# budget is exhausted) gets many more opportunities per day to drain
+# the backlog, instead of just one.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: '0 * * * *' # every hour, on the hour (UTC)
+  workflow_dispatch: {} # manual trigger for testing/on-demand drain
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-enrich-batch:
+    name: Trigger /api/enrich/batch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call enrich/batch endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.APP_URL || 'https://aiscentra.com' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set. Configure it in GitHub repo Settings > Secrets and variables > Actions before this workflow can call the endpoint."
+            exit 1
+          fi
+
+          HTTP_STATUS="$(curl -sS -o /tmp/enrich-response.json -w '%{http_code}' \
+            -X POST "${APP_URL}/api/enrich/batch" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -d '{}')"
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "--- response body ---"
+          cat /tmp/enrich-response.json
+          echo ""
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "::notice::enrich/batch call succeeded (HTTP $HTTP_STATUS)."
+          else
+            echo "::error::enrich/batch call failed with HTTP $HTTP_STATUS."
+            exit 1
+          fi
+
+          rm -f /tmp/enrich-response.json

@@ -36,6 +36,25 @@ import type { SignalCategory } from '@/types/database'
 
 const ENGINE_VERSION = 'v2.0'
 
+// ── Input token budget ───────────────────────────────────────────────────────
+// Defensive truncation applied to observation.content before it reaches
+// either prompt builder (SIS and enrichment). Both buildSISPrompt and
+// buildEnrichmentPrompt already slice their own local copy (400 / 300
+// chars respectively) for the CONTENT portion of their prompt, but this
+// guard caps the raw content at the source, once, so an unusually large
+// observation.content value can never surprise either call site or a
+// future prompt builder that forgets to slice on its own.
+// Approximation: ~4 characters per token for English text (no tokenizer
+// dependency added, per project dependency-discipline rules) -- 500
+// tokens ≈ 2000 characters.
+const MAX_INPUT_TOKENS = 500
+const CHARS_PER_TOKEN_ESTIMATE = 4
+const MAX_INPUT_CHARS = MAX_INPUT_TOKENS * CHARS_PER_TOKEN_ESTIMATE
+
+function truncateForTokenBudget(content: string): string {
+  return content.length > MAX_INPUT_CHARS ? content.slice(0, MAX_INPUT_CHARS) : content
+}
+
 // ── Category Pre-Assignment (V1 compatible) ───────────────────────────────────
 
 // ── Result type ───────────────────────────────────────────────────────────────
@@ -248,7 +267,12 @@ export async function processObservation(
         { role: 'system', content: SIS_SYSTEM_PROMPT },
         {
           role: 'user',
-          content: buildSISPrompt(observation.title, observation.content, sourceName, sourceType),
+          content: buildSISPrompt(
+            observation.title,
+            truncateForTokenBudget(observation.content),
+            sourceName,
+            sourceType,
+          ),
         },
       ],
       SISOutputSchema,
@@ -310,7 +334,7 @@ export async function processObservation(
   const recentTitles = await getRecentSignalTitles(candidateCategory, 10)
   const prompt = buildEnrichmentPrompt({
     title: observation.title,
-    content: observation.content,
+    content: truncateForTokenBudget(observation.content),
     sourceUrl: (observation.metadata['feed_url'] as string | undefined) ?? '',
     sourceName,
     sourceTrustScore,
