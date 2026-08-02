@@ -1,51 +1,49 @@
 /**
- * AIscentra — Domain Cutover Runner (Phase 1C-B2 correction)
+ * AIscentra — Domain Cutover Runner
  *
- * Thin executable wrapper around planDomainCutover(). All the decision
- * logic (holder determination, alias assignment, bounded verify-then-
- * rollback, manual-recovery status) lives in domain-cutover.ts and is
- * covered by scripts/release/__tests__/domain-cutover.test.ts; this
- * file only wires that logic to the real Vercel CLI and real HTTP
- * checks, reads required environment variables, writes the safe
- * diagnostic artifact, and sets the process exit code.
+ * Thin executable wrapper around planDomainCutover(). All decision
+ * logic lives in domain-cutover.ts and is covered by
+ * scripts/release/__tests__/domain-cutover.test.ts; this file only
+ * wires that logic to the real Vercel CLI and real HTTP checks.
  *
- * verifyDomain here performs every check that used to live in the
- * separate, now-removed `post-promotion-smoke` job -- root content,
- * health, exact commit SHA, required Open Graph tag, Open Graph image
- * HTTP status, content-type, and PNG signature. All of these now run
- * INSIDE domain-cutover's own bounded verify-then-rollback loop, so a
- * failure of any one of them triggers the same rollback path as a
- * failed alias assignment -- there is no longer any post-cutover check
- * that can fail the release without rollback.
+ * CREDENTIAL HANDLING (audit finding 1):
+ * VERCEL_TOKEN is NEVER passed via argv. Node's child_process embeds the
+ * full command line into err.message/err.cmd on failure, so a token in
+ * argv leaks into every downstream error path. Authentication is done
+ * exclusively through the VERCEL_TOKEN / VERCEL_ORG_ID environment
+ * variables, which the Vercel CLI reads natively. Additionally, no raw
+ * Error.message, stdout, stderr, cause, argv, or environment is ever
+ * read, printed, or stored -- every failure is classified into a
+ * structured SafeErrorCode by sanitizeError() before use.
  *
- * Required environment variables (all already present in
- * production-release.yml's existing env: blocks -- no new secrets
- * introduced):
- *   VERCEL_TOKEN           -- read only to pass through to the CLI/API,
- *                             never logged or included in the artifact
- *   VERCEL_TEAM_SLUG        -- Team slug, used for CLI --scope
- *   VERCEL_CLI_VERSION      -- pinned CLI version, e.g. 58.4.4
- *   STAGED_DEPLOYMENT_ID    -- the staged, already smoke-tested deployment
- *   COMMIT_SHA              -- expected commit SHA for final verification
- *   PRODUCTION_ALIAS_1      -- e.g. aiscentra.com
- *   PRODUCTION_ALIAS_2      -- e.g. www.aiscentra.com
- *   PNG_SIGNATURE_HEX       -- e.g. 89504e470d0a1a0a
- *   CUTOVER_ARTIFACT_PATH   -- where to write the safe diagnostic JSON
+ * BOUNDEDNESS (audit finding 2):
+ * Every external operation takes an explicit timeout derived from the
+ * caller's remaining budget: fetch calls use AbortSignal.timeout, body
+ * reads are size-capped and stream-limited, and child processes get
+ * both a `timeout` and `killSignal` so they are guaranteed to terminate.
+ * The OG image is never buffered whole -- only enough bytes for the PNG
+ * signature are read, then the stream is cancelled.
  *
- * Exit code is 0 only for CUTOVER_SUCCESS. Every other status --
- * including ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED -- exits 1.
- * When manual recovery is required, the domains and their safe
- * previous-holder deployment IDs are both printed to the log and
- * present in the written artifact (never a token, header, or raw
- * Vercel payload).
+ * Required environment variables:
+ *   VERCEL_TOKEN            -- consumed by the CLI from the environment
+ *   VERCEL_ORG_ID            -- consumed by the CLI from the environment
+ *   VERCEL_CLI_VERSION       -- pinned CLI version
+ *   STAGED_DEPLOYMENT_ID     -- staged, already smoke-tested deployment
+ *   COMMIT_SHA               -- expected commit SHA
+ *   PRODUCTION_ALIAS_1/2     -- the two public domains
+ *   PNG_SIGNATURE_HEX        -- expected PNG magic bytes
+ *   CUTOVER_ARTIFACT_PATH    -- where to write the safe diagnostic JSON
+ *
+ * Exit code is 0 only for CUTOVER_SUCCESS.
  */
 import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { writeFileSync } from 'node:fs'
 
 import {
   planDomainCutover,
   toSafeArtifact,
+  sanitizeError,
+  safeDetail,
   checkRootContent,
   checkHealthJson,
   checkCommitSha,
@@ -57,21 +55,104 @@ import {
   type GetCurrentHolderFn,
   type SetAliasFn,
   type VerifyDomainFn,
+  type SafeErrorCode,
 } from './domain-cutover'
 
-const execFileAsync = promisify(execFile)
+/** Hard caps on how much of any response body is ever read. */
+export const MAX_HTML_BYTES = 2 * 1024 * 1024
+export const MAX_JSON_BYTES = 256 * 1024
+/** Only the PNG magic number is needed; never buffer the whole image. */
+export const PNG_SIGNATURE_BYTES = 8
 
 function requireEnv(name: string): string {
   const value = process.env[name]
   if (!value) {
+    // Names only -- never the value.
     throw new Error(`Required environment variable ${name} is not set.`)
   }
   return value
 }
 
+/**
+ * Reads at most `maxBytes` from a response body, cancelling the stream
+ * as soon as the cap is reached. Returns null if the cap is exceeded so
+ * the caller can fail closed with BODY_TOO_LARGE.
+ */
+export async function readCapped(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  if (!body) return new Uint8Array(0)
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        total += value.byteLength
+        if (total > maxBytes) {
+          await reader.cancel()
+          return null
+        }
+        chunks.push(value)
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) {
+    out.set(c, offset)
+    offset += c.byteLength
+  }
+  return out
+}
+
+/**
+ * Reads only the leading `n` bytes then cancels the stream, so a huge
+ * or endless image body is never downloaded in full.
+ */
+export async function readPrefix(
+  body: ReadableStream<Uint8Array> | null,
+  n: number,
+): Promise<Uint8Array> {
+  if (!body) return new Uint8Array(0)
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (total < n) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        chunks.push(value)
+        total += value.byteLength
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+    reader.releaseLock()
+  }
+  const out = new Uint8Array(Math.min(total, n))
+  let offset = 0
+  for (const c of chunks) {
+    if (offset >= out.length) break
+    out.set(c.subarray(0, Math.min(c.byteLength, out.length - offset)), offset)
+    offset += c.byteLength
+  }
+  return out
+}
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
 async function main(): Promise<void> {
-  const vercelToken = requireEnv('VERCEL_TOKEN')
-  const vercelTeamSlug = requireEnv('VERCEL_TEAM_SLUG')
   const vercelCliVersion = requireEnv('VERCEL_CLI_VERSION')
   const stagedDeploymentId = requireEnv('STAGED_DEPLOYMENT_ID')
   const targetCommitSha = requireEnv('COMMIT_SHA')
@@ -79,125 +160,151 @@ async function main(): Promise<void> {
   const alias2 = requireEnv('PRODUCTION_ALIAS_2')
   const artifactPath = requireEnv('CUTOVER_ARTIFACT_PATH')
   const pngSignatureHex = requireEnv('PNG_SIGNATURE_HEX')
+  // Presence-checked only; the value is never read into a variable that
+  // could reach argv, a log line, or the artifact -- the CLI picks it up
+  // from the inherited environment itself.
+  requireEnv('VERCEL_TOKEN')
+  requireEnv('VERCEL_ORG_ID')
 
   const domains = [alias1, alias2]
 
-  async function runVercel(args: string[]): Promise<{ stdout: string; stderr: string }> {
-    return execFileAsync(
-      'npx',
-      [
-        '--yes',
-        `vercel@${vercelCliVersion}`,
-        ...args,
-        '--token',
-        vercelToken,
-        '--scope',
-        vercelTeamSlug,
-      ],
-      { env: process.env, maxBuffer: 10 * 1024 * 1024 },
-    )
+  /**
+   * Runs the Vercel CLI with NO credentials in argv and a hard timeout.
+   * Rejects with a shape sanitizeError() can classify; the caller never
+   * inspects the raw error.
+   */
+  function runVercel(args: string[], timeoutMs: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(
+        'npx',
+        ['--yes', `vercel@${vercelCliVersion}`, ...args],
+        {
+          env: process.env,
+          maxBuffer: 4 * 1024 * 1024,
+          timeout: Math.max(1, timeoutMs),
+          killSignal: 'SIGKILL',
+        },
+        (err, stdout) => {
+          if (err) {
+            // Re-wrap: drop message/cmd/stdout/stderr entirely, keep only
+            // the shape fields sanitizeError() classifies on.
+            const e = err as { killed?: boolean; signal?: NodeJS.Signals | null; code?: unknown }
+            reject({
+              name: e.killed ? 'TimeoutError' : 'Error',
+              killed: e.killed,
+              signal: e.signal,
+            })
+            return
+          }
+          resolve(stdout)
+        },
+      )
+      child.on('error', () => {
+        reject({ name: 'Error' })
+      })
+    })
   }
 
-  const getCurrentHolder: GetCurrentHolderFn = async (domain) => {
+  const getCurrentHolder: GetCurrentHolderFn = async (domain, timeoutMs) => {
+    if (timeoutMs <= 0) return null
     try {
-      const { stdout } = await runVercel(['inspect', domain, '--json'])
+      const stdout = await runVercel(['inspect', domain, '--json'], timeoutMs)
       const parsed = JSON.parse(stdout) as { id?: unknown }
-      if (typeof parsed.id === 'string' && parsed.id.length > 0) {
-        return parsed.id
-      }
-      return null
+      return typeof parsed.id === 'string' && parsed.id.length > 0 ? parsed.id : null
     } catch {
-      // Any failure to unambiguously determine the current holder
-      // (domain not aliased yet, malformed response, CLI error) must
-      // be treated as "undetermined", never guessed.
+      // Undetermined is never guessed -- callers treat null as
+      // HOLDER_UNKNOWN and escalate to manual recovery where relevant.
       return null
     }
   }
 
-  const setAlias: SetAliasFn = async (domain, deploymentId) => {
+  const setAlias: SetAliasFn = async (domain, deploymentId, timeoutMs) => {
+    if (timeoutMs <= 0) return { ok: false, errorCode: 'TIMEOUT' }
     try {
-      await runVercel(['alias', 'set', deploymentId, domain])
+      await runVercel(['alias', 'set', deploymentId, domain], timeoutMs)
       return { ok: true }
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      return { ok: false, errorCode: sanitizeError(err, 'COMMAND_FAILED') }
     }
   }
 
-  const verifyDomain: VerifyDomainFn = async (domain, expectedCommitSha) => {
+  const verifyDomain: VerifyDomainFn = async (domain, expectedCommitSha, timeoutMs) => {
+    if (timeoutMs <= 0) return { ok: false, detail: safeDetail('TIMEOUT', domain) }
+    const fail = (code: SafeErrorCode, ctx?: string): { ok: false; detail: string } => ({
+      ok: false,
+      detail: safeDetail(code, ctx),
+    })
+
     try {
-      // 1. Root: HTTP 200 + recognizable content.
-      const rootResp = await fetch(`https://${domain}/`)
-      if (rootResp.status !== 200) {
-        return { ok: false, detail: `root path HTTP ${rootResp.status}` }
-      }
-      const rootText = await rootResp.text()
+      // 1. Root -- bounded fetch, size-capped body.
+      const rootResp = await fetch(`https://${domain}/`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      if (rootResp.status !== 200) return fail('HTTP_STATUS', `root ${rootResp.status}`)
+      const rootBytes = await readCapped(rootResp.body, MAX_HTML_BYTES)
+      if (rootBytes === null) return fail('BODY_TOO_LARGE', 'root')
+      const rootText = new TextDecoder().decode(rootBytes)
+
       const rootCheck = checkRootContent(rootText)
-      if (!rootCheck.ok) return rootCheck
+      if (!rootCheck.ok) return { ok: false, detail: rootCheck.detail }
 
-      // 2. Health: HTTP 200 + status=ok + checks.database=ok.
-      const healthResp = await fetch(`https://${domain}/api/health`)
-      if (healthResp.status !== 200) {
-        return { ok: false, detail: `health path HTTP ${healthResp.status}` }
+      // 2. Health -- bounded fetch, size-capped body, safe parse.
+      const healthResp = await fetch(`https://${domain}/api/health`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      if (healthResp.status !== 200) return fail('HTTP_STATUS', `health ${healthResp.status}`)
+      const healthBytes = await readCapped(healthResp.body, MAX_JSON_BYTES)
+      if (healthBytes === null) return fail('BODY_TOO_LARGE', 'health')
+      let healthJson: unknown
+      try {
+        healthJson = JSON.parse(new TextDecoder().decode(healthBytes))
+      } catch {
+        return fail('PARSE_FAILED', 'health')
       }
-      const healthJson: unknown = await healthResp.json()
       const healthCheck = checkHealthJson(healthJson)
-      if (!healthCheck.ok) return healthCheck
+      if (!healthCheck.ok) return { ok: false, detail: healthCheck.detail }
 
-      // 3. Exact commit SHA, via Vercel's own record of what is
-      // currently serving this domain (not just what we asked to
-      // assign -- an independent, real re-check).
-      const { stdout } = await runVercel(['inspect', domain, '--json'])
-      const parsed = JSON.parse(stdout) as { meta?: { githubCommitSha?: unknown } }
-      const shaCheck = checkCommitSha(parsed.meta?.githubCommitSha, expectedCommitSha)
-      if (!shaCheck.ok) return shaCheck
-
-      // 4. Open Graph: required og:image meta tag must be present on
-      // the root page (moved here from the removed post-promotion-smoke
-      // job -- this check can now fail release and correctly triggers
-      // rollback, since it is inside the same bounded verify loop).
-      const ogTagCheck = checkOpenGraphTagPresent(rootText)
-      if (!ogTagCheck.ok) return ogTagCheck
-      const ogImageUrl = extractOpenGraphImageUrl(rootText)
-      if (!ogImageUrl) {
-        // Unreachable in practice (checkOpenGraphTagPresent already
-        // confirmed a match), but keeps this function's own control
-        // flow fail-closed rather than assuming a non-null value.
-        return { ok: false, detail: 'og:image tag matched but URL extraction returned null' }
+      // 3. Exact commit SHA, re-read from Vercel's own record.
+      let inspectJson: unknown
+      try {
+        inspectJson = JSON.parse(await runVercel(['inspect', domain, '--json'], timeoutMs))
+      } catch (err) {
+        return fail(sanitizeError(err, 'COMMAND_FAILED'), 'inspect')
       }
+      const shaCheck = checkCommitSha(
+        (inspectJson as { meta?: { githubCommitSha?: unknown } }).meta?.githubCommitSha,
+        expectedCommitSha,
+      )
+      if (!shaCheck.ok) return { ok: false, detail: shaCheck.detail }
 
-      // 5. Open Graph image itself: HTTP 200, image/png content-type,
-      // and a genuine PNG file signature -- not merely "some 200".
+      // 4. Required Open Graph tag.
+      const ogTagCheck = checkOpenGraphTagPresent(rootText)
+      if (!ogTagCheck.ok) return { ok: false, detail: ogTagCheck.detail }
+      const ogImageUrl = extractOpenGraphImageUrl(rootText)
+      if (!ogImageUrl) return fail('CONTENT_MISMATCH', 'og:image extraction')
+
+      // 5. OG image -- bounded fetch; only the signature bytes are read.
       const absoluteOgUrl = ogImageUrl.startsWith('http')
         ? ogImageUrl
         : `https://${domain}${ogImageUrl}`
-      const ogImageResp = await fetch(absoluteOgUrl)
-      const ogStatusCheck = checkOpenGraphImageStatus(ogImageResp.status)
-      if (!ogStatusCheck.ok) return ogStatusCheck
+      const ogResp = await fetch(absoluteOgUrl, { signal: AbortSignal.timeout(timeoutMs) })
+      const ogStatusCheck = checkOpenGraphImageStatus(ogResp.status)
+      if (!ogStatusCheck.ok) return { ok: false, detail: ogStatusCheck.detail }
+      const ogCtCheck = checkOpenGraphImageContentType(ogResp.headers.get('content-type'))
+      if (!ogCtCheck.ok) return { ok: false, detail: ogCtCheck.detail }
 
-      const ogContentTypeCheck = checkOpenGraphImageContentType(
-        ogImageResp.headers.get('content-type'),
-      )
-      if (!ogContentTypeCheck.ok) return ogContentTypeCheck
+      const sigBytes = await readPrefix(ogResp.body, PNG_SIGNATURE_BYTES)
+      if (sigBytes.byteLength < PNG_SIGNATURE_BYTES)
+        return fail('CONTENT_MISMATCH', 'png-truncated')
+      const pngCheck = checkPngSignature(toHex(sigBytes), pngSignatureHex)
+      if (!pngCheck.ok) return { ok: false, detail: pngCheck.detail }
 
-      const ogImageBuffer = Buffer.from(await ogImageResp.arrayBuffer())
-      const firstEightBytesHex = ogImageBuffer.subarray(0, 8).toString('hex')
-      const pngCheck = checkPngSignature(firstEightBytesHex, pngSignatureHex)
-      if (!pngCheck.ok) return pngCheck
-
-      // 6. Routing: this same function already runs once per domain in
-      // `domains` (both aiscentra.com and www.aiscentra.com), and
-      // `fetch()` follows redirects by default -- so if www.aiscentra.com
-      // redirects to the apex domain, the root/health/SHA/OG checks
-      // above already exercised the final destination and would have
-      // failed had it not resolved correctly. No separate routing check
-      // is needed to make this blocking; it already is.
-
-      return {
-        ok: true,
-        detail: 'root + health + sha + og-tag + og-image + png-signature all confirmed',
-      }
+      // 6. Routing for both domains is covered because verifyDomain runs
+      // once per domain and fetch() follows redirects, so www's own
+      // checks exercise its final destination.
+      return { ok: true, detail: 'verified' }
     } catch (err) {
-      return { ok: false, detail: err instanceof Error ? err.message : String(err) }
+      return { ok: false, detail: safeDetail(sanitizeError(err, 'UNKNOWN'), domain) }
     }
   }
 
@@ -212,18 +319,28 @@ async function main(): Promise<void> {
   })
 
   const safe = toSafeArtifact(result)
-  writeFileSync(artifactPath, JSON.stringify(safe, null, 2))
+
+  // Audit finding 4: artifact WRITING must never turn a confirmed
+  // successful cutover into a failed release. The domains are already
+  // switched and verified at this point; a local disk error is not a
+  // production-quality signal and there is nothing left to roll back to
+  // that would be an improvement. Failure is reported as a sanitized
+  // warning and does not affect the exit code.
+  try {
+    writeFileSync(artifactPath, JSON.stringify(safe, null, 2))
+  } catch (err) {
+    console.warn(`::warning::Diagnostic artifact could not be written (${sanitizeError(err)}).`)
+  }
 
   console.log(`Domain cutover status: ${result.status}`)
   console.log(JSON.stringify(safe, null, 2))
 
   if (result.status === 'ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED') {
-    console.error(
-      '::error::Rollback did not fully succeed. The following domains require MANUAL recovery ' +
-        'to their recorded previous holder:',
-    )
+    console.error('::error::MANUAL RECOVERY REQUIRED for the following domains:')
     for (const m of safe.diagnostics.manualRecoveryDomains) {
-      console.error(`::error::  ${m.domain} -> ${m.previousHolderDeploymentId}`)
+      console.error(
+        `::error::  ${m.domain} (observed: ${m.observedState}) -> ${m.previousHolderDeploymentId ?? 'UNKNOWN'}`,
+      )
     }
   }
 
@@ -233,6 +350,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('::error::Domain cutover runner crashed:', err instanceof Error ? err.message : err)
+  // Never print the raw error: it may carry argv, stdout, stderr, or a
+  // nested cause. Only the sanitized structured code is emitted.
+  console.error(`::error::Domain cutover runner failed (${sanitizeError(err)}).`)
   process.exitCode = 1
 })

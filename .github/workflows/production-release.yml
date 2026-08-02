@@ -830,6 +830,13 @@ jobs:
     needs: [validate, staged-deploy, deployment-metadata-gate, pre-promotion-recheck]
     runs-on: ubuntu-latest
     environment: production
+    # Last-resort backstop only. This does NOT replace the runner's own
+    # internal absolute deadline and reserved rollback budget -- those
+    # exist so a hang is followed by a real reconciliation and rollback
+    # INSIDE the process. This job-level timeout merely guarantees the
+    # runner cannot occupy an executor indefinitely if everything else
+    # fails at once.
+    timeout-minutes: 20
     steps:
       - name: Checkout (for scripts/release only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -848,8 +855,11 @@ jobs:
       - name: Run explicit domain cutover
         id: cutover
         env:
+          # Credentials are supplied to the Vercel CLI ONLY through the
+          # environment -- never via argv, which Node embeds in
+          # err.message/err.cmd and would leak into every error path.
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_SLUG: welvers-projects
+          VERCEL_ORG_ID: ${{ env.VERCEL_ORG_ID }}
           VERCEL_CLI_VERSION: 58.4.4
           STAGED_DEPLOYMENT_ID: ${{ needs.deployment-metadata-gate.outputs.deployment_id }}
           COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
@@ -857,7 +867,18 @@ jobs:
         run: npx tsx scripts/release/run-domain-cutover.ts
 
       - name: Upload domain cutover diagnostic artifact (no secrets)
+        # DOCUMENTED EXCEPTION -- the only continue-on-error in this
+        # workflow. This step runs AFTER the domains have already been
+        # switched and independently verified. Delivery of a diagnostic
+        # file is not a production-quality signal: if the upload service
+        # fails, the release is still good and there is nothing to roll
+        # back. Without this, an upload failure would mark a verified,
+        # successful production cutover as a failed release with no
+        # rollback -- exactly the class of defect this job exists to
+        # prevent. The artifact's *content* is still produced and logged
+        # by the step above regardless.
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: domain-cutover-diagnostics
