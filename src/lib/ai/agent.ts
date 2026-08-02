@@ -9,7 +9,14 @@
  * - Concurrency: sequential by design (one request at a time per agent call)
  */
 import { z } from 'zod'
-import { callProvider, callProviderJSON, AIProviderError, type AIMessage, type AIOptions, type AIResult } from './client'
+import {
+  callProvider,
+  callProviderJSON,
+  AIProviderError,
+  type AIMessage,
+  type AIOptions,
+  type AIResult,
+} from './client'
 import { withModelQueue } from './tpm-manager'
 import { getModelChain, type AgentRole } from './models'
 
@@ -24,9 +31,9 @@ export type ErrorKind =
   | 'unknown'
 
 // ── Retry config ──────────────────────────────────────────────────────────────
-const MAX_RETRIES    = 3
-const BASE_BACKOFF   = 5_000   // 5s base
-const MAX_BACKOFF    = 60_000  // 60s ceiling
+const MAX_RETRIES = 3
+const BASE_BACKOFF = 5_000 // 5s base
+const MAX_BACKOFF = 60_000 // 60s ceiling
 
 function backoffMs(attempt: number, retryAfterMs?: number): number {
   if (retryAfterMs) return Math.min(retryAfterMs + 500, MAX_BACKOFF)
@@ -35,21 +42,18 @@ function backoffMs(attempt: number, retryAfterMs?: number): number {
 
 function classifyError(err: unknown): ErrorKind {
   if (err instanceof AIProviderError) {
-    if (err.isRateLimit)   return 'rate_limit'
+    if (err.isRateLimit) return 'rate_limit'
     if (err.isServerError) return 'server_error'
     return 'client_error'
   }
-  if (err instanceof SyntaxError)  return 'json_parse'
-  if (err instanceof z.ZodError)   return 'validation'
+  if (err instanceof SyntaxError) return 'json_parse'
+  if (err instanceof z.ZodError) return 'validation'
   return 'unknown'
 }
 
 // ── Core retry wrapper ────────────────────────────────────────────────────────
 
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  label: string,
-): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   let lastErr: unknown
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -60,7 +64,9 @@ async function withRetry<T>(
       const kind = classifyError(err)
 
       // Retry on: rate limit (429), server errors (5xx), payload too large (413 = Groq instability)
-      const isRetryable = kind === 'rate_limit' || kind === 'server_error' ||
+      const isRetryable =
+        kind === 'rate_limit' ||
+        kind === 'server_error' ||
         (err instanceof AIProviderError && err.statusCode === 413)
       if (!isRetryable) throw err
       if (attempt === MAX_RETRIES) break
@@ -69,7 +75,7 @@ async function withRetry<T>(
       const delay = backoffMs(attempt, retryAfterMs)
 
       console.warn(`[${label}] ${kind} — retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`)
-      await new Promise(r => setTimeout(r, delay))
+      await new Promise((r) => setTimeout(r, delay))
     }
   }
 
@@ -79,12 +85,14 @@ async function withRetry<T>(
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function agentComplete(
-  role:     AgentRole,
+  role: AgentRole,
   messages: AIMessage[],
-  options:  AIOptions = {},
+  options: AIOptions = {},
 ): Promise<AIResult & { modelUsed: string; errorKind?: ErrorKind }> {
-  const chain  = getModelChain(role)
+  const chain = getModelChain(role)
   const errors: string[] = []
+  const kinds: ErrorKind[] = []
+  let maxRetryAfterMs: number | undefined
 
   for (const ref of chain) {
     const label = `agent:${role}/${ref.provider}/${ref.model}`
@@ -97,25 +105,48 @@ export async function agentComplete(
       return { ...result, modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
       const kind = classifyError(err)
-      const msg  = err instanceof AIProviderError
-        ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode} — ${err.message.slice(0, 200)}`
-        : `${ref.provider}/${ref.model}: ${String(err).slice(0, 200)}`
+      kinds.push(kind)
+      if (err instanceof AIProviderError && err.retryAfterMs) {
+        maxRetryAfterMs = Math.max(maxRetryAfterMs ?? 0, err.retryAfterMs)
+      }
+      const msg =
+        err instanceof AIProviderError
+          ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode} — ${err.message.slice(0, 200)}`
+          : `${ref.provider}/${ref.model}: ${String(err).slice(0, 200)}`
       errors.push(`[${kind}] ${msg}`)
       console.warn(`[agent:${role}] ✗ ${ref.provider}/${ref.model} (${kind}) — trying next`)
     }
+  }
+
+  // Chain-exhaustion classification (fixes silent conversion of temporary
+  // rate-limit exhaustion into a permanent error): if EVERY model in the
+  // chain failed specifically on rate limiting, the caller must still be
+  // able to see that via `instanceof AIProviderError` + `isRateLimit` --
+  // a bare Error here would make enrich/batch's retry-vs-permanent
+  // classification always fall through to "permanent", even though the
+  // provider itself said "try again later".
+  if (kinds.length > 0 && kinds.every((k) => k === 'rate_limit')) {
+    throw new AIProviderError(
+      `[agent:${role}] All models rate-limited:\n${errors.join('\n')}`,
+      chain[0]?.provider ?? 'groq',
+      429,
+      maxRetryAfterMs,
+    )
   }
 
   throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
 }
 
 export async function agentCompleteJSON<T>(
-  role:     AgentRole,
+  role: AgentRole,
   messages: AIMessage[],
-  schema:   z.ZodType<T>,
-  options:  AIOptions = {},
+  schema: z.ZodType<T>,
+  options: AIOptions = {},
 ): Promise<T & { _modelUsed?: string }> {
-  const chain  = getModelChain(role)
+  const chain = getModelChain(role)
   const errors: string[] = []
+  const kinds: ErrorKind[] = []
+  let maxRetryAfterMs: number | undefined
 
   for (const ref of chain) {
     const label = `agent:${role}/${ref.provider}/${ref.model}`
@@ -128,12 +159,29 @@ export async function agentCompleteJSON<T>(
       return { ...result, _modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
       const kind = classifyError(err)
-      const msg  = err instanceof AIProviderError
-        ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
-        : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
+      kinds.push(kind)
+      if (err instanceof AIProviderError && err.retryAfterMs) {
+        maxRetryAfterMs = Math.max(maxRetryAfterMs ?? 0, err.retryAfterMs)
+      }
+      const msg =
+        err instanceof AIProviderError
+          ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
+          : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
       errors.push(`[${kind}] ${msg}`)
       console.warn(`[agent:${role}] ✗ JSON ${ref.provider}/${ref.model} (${kind})`)
     }
+  }
+
+  // See agentComplete's identical comment above: preserve rate-limit
+  // classification across full chain exhaustion so the caller can still
+  // requeue this observation instead of marking it permanently failed.
+  if (kinds.length > 0 && kinds.every((k) => k === 'rate_limit')) {
+    throw new AIProviderError(
+      `[agent:${role}] All models rate-limited (JSON):\n${errors.join('\n')}`,
+      chain[0]?.provider ?? 'groq',
+      429,
+      maxRetryAfterMs,
+    )
   }
 
   throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
