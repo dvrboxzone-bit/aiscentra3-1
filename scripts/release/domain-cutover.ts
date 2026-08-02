@@ -44,6 +44,112 @@ export type CutoverStatus =
   | 'ABORTED_NO_HOLDER'
   | 'DOMAIN CUTOVER FAILED — ROLLBACK ATTEMPTED'
   | 'PUBLIC RELEASE NOT VERIFIED — ROLLBACK ATTEMPTED'
+  | 'ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED'
+
+/**
+ * Pure, deterministically testable content checks. These are the checks
+ * that previously lived in the separate `post-promotion-smoke` job
+ * (which ran AFTER domain-cutover had already succeeded and switched
+ * both public domains, with no rollback wired to its own failures --
+ * the confirmed defect this module now closes). They are pure functions
+ * over already-fetched bytes/text/JSON, with no network or Vercel CLI
+ * knowledge of their own, so they can be exercised directly by fast
+ * unit tests with fixture data. The real network fetching that feeds
+ * them lives in run-domain-cutover.ts's verifyDomain implementation,
+ * which calls these functions and folds every result into the SAME
+ * bounded verify-then-rollback loop below -- there is no longer any
+ * check that can fail release without triggering rollback.
+ */
+export function checkRootContent(html: string): { ok: boolean; detail?: string } {
+  if (!/aiscentra/i.test(html)) {
+    return { ok: false, detail: 'root HTML did not contain recognizable AIscentra content' }
+  }
+  return { ok: true }
+}
+
+export function checkHealthJson(json: unknown): { ok: boolean; detail?: string } {
+  const health = json as { status?: unknown; checks?: { database?: unknown } }
+  if (health.status !== 'ok') {
+    return {
+      ok: false,
+      detail: `health .status was ${JSON.stringify(health.status)}, expected "ok"`,
+    }
+  }
+  if (health.checks?.database !== 'ok') {
+    return {
+      ok: false,
+      detail: `health .checks.database was ${JSON.stringify(health.checks?.database)}, expected "ok"`,
+    }
+  }
+  return { ok: true }
+}
+
+export function checkCommitSha(
+  actualSha: unknown,
+  expectedSha: string,
+): { ok: boolean; detail?: string } {
+  if (actualSha !== expectedSha) {
+    return {
+      ok: false,
+      detail: `githubCommitSha mismatch: got ${String(actualSha)}, expected ${expectedSha}`,
+    }
+  }
+  return { ok: true }
+}
+
+/** Extracts the `content` attribute of a `<meta property="og:image" ...>` tag, if present. */
+export function extractOpenGraphImageUrl(html: string): string | null {
+  const match = html.match(
+    /<meta[^>]*\bproperty=["']og:image["'][^>]*\bcontent=["']([^"']+)["'][^>]*>/i,
+  )
+  if (match && match[1] !== undefined) return match[1]
+  // Attribute order can be reversed (content before property) -- check that too.
+  const reversed = html.match(
+    /<meta[^>]*\bcontent=["']([^"']+)["'][^>]*\bproperty=["']og:image["'][^>]*>/i,
+  )
+  return reversed && reversed[1] !== undefined ? reversed[1] : null
+}
+
+export function checkOpenGraphTagPresent(html: string): { ok: boolean; detail?: string } {
+  const url = extractOpenGraphImageUrl(html)
+  if (!url) {
+    return { ok: false, detail: 'missing required og:image meta tag' }
+  }
+  return { ok: true, detail: url }
+}
+
+export function checkOpenGraphImageStatus(status: number): { ok: boolean; detail?: string } {
+  if (status !== 200) {
+    return { ok: false, detail: `Open Graph image returned HTTP ${status}, expected 200` }
+  }
+  return { ok: true }
+}
+
+export function checkOpenGraphImageContentType(contentType: string | null): {
+  ok: boolean
+  detail?: string
+} {
+  if (!contentType || !contentType.toLowerCase().startsWith('image/png')) {
+    return {
+      ok: false,
+      detail: `Open Graph image content-type was ${String(contentType)}, expected image/png`,
+    }
+  }
+  return { ok: true }
+}
+
+export function checkPngSignature(
+  firstEightBytesHex: string,
+  expectedHex: string,
+): { ok: boolean; detail?: string } {
+  if (firstEightBytesHex.toLowerCase() !== expectedHex.toLowerCase()) {
+    return {
+      ok: false,
+      detail: `PNG signature mismatch: got ${firstEightBytesHex}, expected ${expectedHex}`,
+    }
+  }
+  return { ok: true }
+}
 
 export interface DomainAliasResult {
   domain: string
@@ -67,6 +173,15 @@ export interface CutoverDiagnostics {
   domains: DomainAliasResult[]
   verification: DomainVerifyResult[]
   verifyAttempts: number
+  /**
+   * Domains whose rollback attempt itself failed -- i.e. the domain was
+   * switched to the staged deployment, cutover then decided to roll it
+   * back, but the rollback `setAlias` call itself did not succeed. Every
+   * such domain requires manual operator recovery to its recorded
+   * previousHolderDeploymentId. Empty whenever no rollback was needed or
+   * every attempted rollback succeeded.
+   */
+  manualRecoveryDomains: Array<{ domain: string; previousHolderDeploymentId: string }>
 }
 
 export interface CutoverResult {
@@ -140,6 +255,7 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
           domains: domainResults,
           verification: [],
           verifyAttempts: 0,
+          manualRecoveryDomains: [],
         },
       }
     }
@@ -154,14 +270,19 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
     if (!assign.ok) {
       result.assignError = assign.error
       await rollbackAssigned(domainResults, setAlias)
+      const manualRecoveryDomains = computeManualRecoveryDomains(domainResults)
       return {
-        status: 'DOMAIN CUTOVER FAILED — ROLLBACK ATTEMPTED',
+        status:
+          manualRecoveryDomains.length > 0
+            ? 'ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED'
+            : 'DOMAIN CUTOVER FAILED — ROLLBACK ATTEMPTED',
         diagnostics: {
           stagedDeploymentId,
           targetCommitSha,
           domains: domainResults,
           verification: [],
           verifyAttempts: 0,
+          manualRecoveryDomains,
         },
       }
     }
@@ -196,14 +317,19 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
 
   if (!allVerified) {
     await rollbackAssigned(domainResults, setAlias)
+    const manualRecoveryDomains = computeManualRecoveryDomains(domainResults)
     return {
-      status: 'PUBLIC RELEASE NOT VERIFIED — ROLLBACK ATTEMPTED',
+      status:
+        manualRecoveryDomains.length > 0
+          ? 'ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED'
+          : 'PUBLIC RELEASE NOT VERIFIED — ROLLBACK ATTEMPTED',
       diagnostics: {
         stagedDeploymentId,
         targetCommitSha,
         domains: domainResults,
         verification,
         verifyAttempts: attempts,
+        manualRecoveryDomains,
       },
     }
   }
@@ -216,8 +342,32 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
       domains: domainResults,
       verification,
       verifyAttempts: attempts,
+      manualRecoveryDomains: [],
     },
   }
+}
+
+/**
+ * Item 10 of the required behavior: if a rollback attempt itself fails
+ * for one domain, the OTHER domain's rollback must still be attempted
+ * (already guaranteed by rollbackAssigned's plain for-loop, which never
+ * breaks/returns early on an individual rollback failure), and the
+ * overall result must surface a distinct, explicit failure status plus
+ * the exact list of domains + previous-holder IDs that require manual
+ * operator recovery.
+ */
+function computeManualRecoveryDomains(
+  domainResults: DomainAliasResult[],
+): Array<{ domain: string; previousHolderDeploymentId: string }> {
+  return domainResults
+    .filter((d) => d.rolledBack === true && d.rollbackSucceeded === false)
+    .map((d) => ({
+      domain: d.domain,
+      // previousHolderDeploymentId is guaranteed non-null here: a domain
+      // can only reach rolledBack === true after its holder was already
+      // determined in the first loop (Invariant 1).
+      previousHolderDeploymentId: d.previousHolderDeploymentId as string,
+    }))
 }
 
 async function rollbackAssigned(
@@ -266,6 +416,10 @@ export function toSafeArtifact(result: CutoverResult): CutoverResult {
         detail: v.detail,
       })),
       verifyAttempts: result.diagnostics.verifyAttempts,
+      manualRecoveryDomains: result.diagnostics.manualRecoveryDomains.map((m) => ({
+        domain: m.domain,
+        previousHolderDeploymentId: m.previousHolderDeploymentId,
+      })),
     },
   }
 }

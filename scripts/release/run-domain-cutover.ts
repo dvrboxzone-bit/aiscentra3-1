@@ -2,11 +2,21 @@
  * AIscentra — Domain Cutover Runner (Phase 1C-B2 correction)
  *
  * Thin executable wrapper around planDomainCutover(). All the decision
- * logic lives in domain-cutover.ts and is covered by
- * scripts/release/__tests__/domain-cutover.test.ts; this file only
- * wires that logic to the real Vercel CLI and real HTTP checks, reads
- * required environment variables, writes the safe diagnostic artifact,
- * and sets the process exit code.
+ * logic (holder determination, alias assignment, bounded verify-then-
+ * rollback, manual-recovery status) lives in domain-cutover.ts and is
+ * covered by scripts/release/__tests__/domain-cutover.test.ts; this
+ * file only wires that logic to the real Vercel CLI and real HTTP
+ * checks, reads required environment variables, writes the safe
+ * diagnostic artifact, and sets the process exit code.
+ *
+ * verifyDomain here performs every check that used to live in the
+ * separate, now-removed `post-promotion-smoke` job -- root content,
+ * health, exact commit SHA, required Open Graph tag, Open Graph image
+ * HTTP status, content-type, and PNG signature. All of these now run
+ * INSIDE domain-cutover's own bounded verify-then-rollback loop, so a
+ * failure of any one of them triggers the same rollback path as a
+ * failed alias assignment -- there is no longer any post-cutover check
+ * that can fail the release without rollback.
  *
  * Required environment variables (all already present in
  * production-release.yml's existing env: blocks -- no new secrets
@@ -19,9 +29,15 @@
  *   COMMIT_SHA              -- expected commit SHA for final verification
  *   PRODUCTION_ALIAS_1      -- e.g. aiscentra.com
  *   PRODUCTION_ALIAS_2      -- e.g. www.aiscentra.com
+ *   PNG_SIGNATURE_HEX       -- e.g. 89504e470d0a1a0a
  *   CUTOVER_ARTIFACT_PATH   -- where to write the safe diagnostic JSON
  *
- * Exit code is 0 only for CUTOVER_SUCCESS. Every other status exits 1.
+ * Exit code is 0 only for CUTOVER_SUCCESS. Every other status --
+ * including ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED -- exits 1.
+ * When manual recovery is required, the domains and their safe
+ * previous-holder deployment IDs are both printed to the log and
+ * present in the written artifact (never a token, header, or raw
+ * Vercel payload).
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -30,6 +46,14 @@ import { writeFileSync } from 'node:fs'
 import {
   planDomainCutover,
   toSafeArtifact,
+  checkRootContent,
+  checkHealthJson,
+  checkCommitSha,
+  checkOpenGraphTagPresent,
+  extractOpenGraphImageUrl,
+  checkOpenGraphImageStatus,
+  checkOpenGraphImageContentType,
+  checkPngSignature,
   type GetCurrentHolderFn,
   type SetAliasFn,
   type VerifyDomainFn,
@@ -54,6 +78,7 @@ async function main(): Promise<void> {
   const alias1 = requireEnv('PRODUCTION_ALIAS_1')
   const alias2 = requireEnv('PRODUCTION_ALIAS_2')
   const artifactPath = requireEnv('CUTOVER_ARTIFACT_PATH')
+  const pngSignatureHex = requireEnv('PNG_SIGNATURE_HEX')
 
   const domains = [alias1, alias2]
 
@@ -100,35 +125,77 @@ async function main(): Promise<void> {
 
   const verifyDomain: VerifyDomainFn = async (domain, expectedCommitSha) => {
     try {
+      // 1. Root: HTTP 200 + recognizable content.
       const rootResp = await fetch(`https://${domain}/`)
       if (rootResp.status !== 200) {
         return { ok: false, detail: `root path HTTP ${rootResp.status}` }
       }
       const rootText = await rootResp.text()
-      if (!/aiscentra/i.test(rootText)) {
-        return { ok: false, detail: 'root path did not contain recognizable AIscentra content' }
-      }
+      const rootCheck = checkRootContent(rootText)
+      if (!rootCheck.ok) return rootCheck
 
+      // 2. Health: HTTP 200 + status=ok + checks.database=ok.
       const healthResp = await fetch(`https://${domain}/api/health`)
       if (healthResp.status !== 200) {
         return { ok: false, detail: `health path HTTP ${healthResp.status}` }
       }
-      const health = (await healthResp.json()) as {
-        status?: unknown
-        checks?: { database?: unknown }
-      }
-      if (health.status !== 'ok' || health.checks?.database !== 'ok') {
-        return { ok: false, detail: 'health check did not report ok/ok' }
-      }
+      const healthJson: unknown = await healthResp.json()
+      const healthCheck = checkHealthJson(healthJson)
+      if (!healthCheck.ok) return healthCheck
 
+      // 3. Exact commit SHA, via Vercel's own record of what is
+      // currently serving this domain (not just what we asked to
+      // assign -- an independent, real re-check).
       const { stdout } = await runVercel(['inspect', domain, '--json'])
       const parsed = JSON.parse(stdout) as { meta?: { githubCommitSha?: unknown } }
-      const actualSha = parsed.meta?.githubCommitSha
-      if (actualSha !== expectedCommitSha) {
-        return { ok: false, detail: `githubCommitSha mismatch: got ${String(actualSha)}` }
+      const shaCheck = checkCommitSha(parsed.meta?.githubCommitSha, expectedCommitSha)
+      if (!shaCheck.ok) return shaCheck
+
+      // 4. Open Graph: required og:image meta tag must be present on
+      // the root page (moved here from the removed post-promotion-smoke
+      // job -- this check can now fail release and correctly triggers
+      // rollback, since it is inside the same bounded verify loop).
+      const ogTagCheck = checkOpenGraphTagPresent(rootText)
+      if (!ogTagCheck.ok) return ogTagCheck
+      const ogImageUrl = extractOpenGraphImageUrl(rootText)
+      if (!ogImageUrl) {
+        // Unreachable in practice (checkOpenGraphTagPresent already
+        // confirmed a match), but keeps this function's own control
+        // flow fail-closed rather than assuming a non-null value.
+        return { ok: false, detail: 'og:image tag matched but URL extraction returned null' }
       }
 
-      return { ok: true, detail: 'root 200 + health ok/ok + sha match' }
+      // 5. Open Graph image itself: HTTP 200, image/png content-type,
+      // and a genuine PNG file signature -- not merely "some 200".
+      const absoluteOgUrl = ogImageUrl.startsWith('http')
+        ? ogImageUrl
+        : `https://${domain}${ogImageUrl}`
+      const ogImageResp = await fetch(absoluteOgUrl)
+      const ogStatusCheck = checkOpenGraphImageStatus(ogImageResp.status)
+      if (!ogStatusCheck.ok) return ogStatusCheck
+
+      const ogContentTypeCheck = checkOpenGraphImageContentType(
+        ogImageResp.headers.get('content-type'),
+      )
+      if (!ogContentTypeCheck.ok) return ogContentTypeCheck
+
+      const ogImageBuffer = Buffer.from(await ogImageResp.arrayBuffer())
+      const firstEightBytesHex = ogImageBuffer.subarray(0, 8).toString('hex')
+      const pngCheck = checkPngSignature(firstEightBytesHex, pngSignatureHex)
+      if (!pngCheck.ok) return pngCheck
+
+      // 6. Routing: this same function already runs once per domain in
+      // `domains` (both aiscentra.com and www.aiscentra.com), and
+      // `fetch()` follows redirects by default -- so if www.aiscentra.com
+      // redirects to the apex domain, the root/health/SHA/OG checks
+      // above already exercised the final destination and would have
+      // failed had it not resolved correctly. No separate routing check
+      // is needed to make this blocking; it already is.
+
+      return {
+        ok: true,
+        detail: 'root + health + sha + og-tag + og-image + png-signature all confirmed',
+      }
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) }
     }
@@ -149,6 +216,16 @@ async function main(): Promise<void> {
 
   console.log(`Domain cutover status: ${result.status}`)
   console.log(JSON.stringify(safe, null, 2))
+
+  if (result.status === 'ROLLBACK INCOMPLETE — MANUAL RECOVERY REQUIRED') {
+    console.error(
+      '::error::Rollback did not fully succeed. The following domains require MANUAL recovery ' +
+        'to their recorded previous holder:',
+    )
+    for (const m of safe.diagnostics.manualRecoveryDomains) {
+      console.error(`::error::  ${m.domain} -> ${m.previousHolderDeploymentId}`)
+    }
+  }
 
   if (result.status !== 'CUTOVER_SUCCESS') {
     process.exitCode = 1
