@@ -73,9 +73,6 @@ env:
   PRODUCTION_ALIAS_1: aiscentra.com
   PRODUCTION_ALIAS_2: www.aiscentra.com
   PNG_SIGNATURE_HEX: '89504e470d0a1a0a'
-  # Bounded promotion-alias polling (Section 2.8).
-  PROMOTE_POLL_MAX_ATTEMPTS: '10'
-  PROMOTE_POLL_SLEEP_SECONDS: '6'
 
 jobs:
   # ---------------------------------------------------------------------
@@ -793,98 +790,77 @@ jobs:
           echo "Full staged smoke (root/health/PNG) re-confirmed immediately before promotion. All TOCTOU re-checks passed."
 
   # ---------------------------------------------------------------------
-  # Job 8: promotion. Uses the documented `vercel promote` CLI command
-  # only, then polls a bounded number of times for both aliases to
-  # actually appear (promotion/alias assignment can be asynchronous) --
-  # never polls indefinitely, never redeploys/aliases/rolls back as a
-  # fallback.
+  # Job 8: explicit domain cutover (replaces the previous `vercel
+  # promote`-based approach). `vercel promote` can report "Success!" and
+  # mark a deployment `target: "production"` internally without the
+  # public domain aliases (aiscentra.com / www.aiscentra.com) actually
+  # having moved -- confirmed empirically during a real release attempt.
+  # Promotion status and domain-alias assignment are two separate
+  # Vercel-side facts. This job instead: determines each domain's current
+  # holder, explicitly reassigns both domains via `vercel alias set`,
+  # independently re-verifies both (Vercel-side + live HTTP + commit SHA)
+  # within a bounded timeout, and automatically rolls every domain back
+  # to its recorded previous holder on any partial failure or
+  # unconfirmed verification. All decision logic lives in
+  # scripts/release/domain-cutover.ts, covered by
+  # scripts/release/__tests__/domain-cutover.test.ts; this job only
+  # wires it to the real Vercel CLI via scripts/release/run-domain-cutover.ts.
   # ---------------------------------------------------------------------
-  promote:
-    name: Promote staged deployment to production
+  domain-cutover:
+    name: Explicit domain cutover (aiscentra.com / www.aiscentra.com)
     needs: [validate, staged-deploy, deployment-metadata-gate, pre-promotion-recheck]
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: vercel promote (documented CLI command)
+      - name: Checkout (for scripts/release only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install exact dependencies (npm ci)
+        run: npm ci
+
+      - name: Run explicit domain cutover
+        id: cutover
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          DEPLOYMENT_ID: ${{ needs.deployment-metadata-gate.outputs.deployment_id }}
-        run: |
-          set -euo pipefail
-
-          npx --yes vercel@${VERCEL_CLI_VERSION} promote "$DEPLOYMENT_ID" \
-            --yes \
-            --timeout 5m
-
-      - name: Bounded poll until both production aliases are confirmed
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_SLUG: welvers-projects
+          VERCEL_CLI_VERSION: 58.4.4
+          STAGED_DEPLOYMENT_ID: ${{ needs.deployment-metadata-gate.outputs.deployment_id }}
           COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
-          DEPLOYMENT_ID: ${{ needs.deployment-metadata-gate.outputs.deployment_id }}
-        run: |
-          set -euo pipefail
+          CUTOVER_ARTIFACT_PATH: /tmp/domain-cutover-artifact.json
+        run: npx tsx scripts/release/run-domain-cutover.ts
 
-          ATTEMPT=1
-          CONFIRMED=0
-
-          while [ "$ATTEMPT" -le "$PROMOTE_POLL_MAX_ATTEMPTS" ]; do
-            echo "Promotion poll attempt $ATTEMPT/$PROMOTE_POLL_MAX_ATTEMPTS..."
-
-            HTTP_STATUS="$(curl -sS -o /tmp/promoted.json -w '%{http_code}' \
-              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
-              "https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}?teamId=${VERCEL_ORG_ID}")"
-
-            if [ "$HTTP_STATUS" != "200" ]; then
-              echo "::error::Promotion poll lookup failed with HTTP $HTTP_STATUS (terminal, not retried). STOP."
-              exit 1
-            fi
-
-            SYSTEM_SHA="$(jq -r '.meta.githubCommitSha // empty' /tmp/promoted.json)"
-            if [ "$SYSTEM_SHA" != "$COMMIT_SHA" ]; then
-              echo "::error::Post-promotion system githubCommitSha ($SYSTEM_SHA) != release commit_sha ($COMMIT_SHA) (terminal). STOP."
-              exit 1
-            fi
-
-            # NOTE: jq -e treats a `false` filter result as exit code 1,
-            # which under `set -e` would terminate this script on the
-            # very first poll attempt where an alias is not yet present
-            # -- `false` here is an expected, non-terminal polling state,
-            # not an error. Use plain `jq -r` and compare the resulting
-            # string explicitly instead, so `false` simply continues the
-            # loop to the next bounded attempt.
-            HAS_ALIAS_1="$(jq -r --arg a "$PRODUCTION_ALIAS_1" '(.alias // []) | index($a) != null' /tmp/promoted.json)"
-            HAS_ALIAS_2="$(jq -r --arg a "$PRODUCTION_ALIAS_2" '(.alias // []) | index($a) != null' /tmp/promoted.json)"
-
-            if [ "$HAS_ALIAS_1" = "true" ] && [ "$HAS_ALIAS_2" = "true" ]; then
-              CONFIRMED=1
-              break
-            fi
-
-            ATTEMPT=$((ATTEMPT + 1))
-            if [ "$ATTEMPT" -le "$PROMOTE_POLL_MAX_ATTEMPTS" ]; then
-              sleep "$PROMOTE_POLL_SLEEP_SECONDS"
-            fi
-          done
-
-          if [ "$CONFIRMED" != "1" ]; then
-            echo "::error::Both production aliases were not confirmed within $PROMOTE_POLL_MAX_ATTEMPTS bounded polling attempts. STOP -- no further automatic action."
-            exit 1
-          fi
-
-          echo "Promotion confirmed: deployment_id=$DEPLOYMENT_ID systemSha=$SYSTEM_SHA aliases=[$PRODUCTION_ALIAS_1,$PRODUCTION_ALIAS_2] after $ATTEMPT attempt(s)."
-          rm -f /tmp/promoted.json
+      - name: Upload domain cutover diagnostic artifact (no secrets)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: domain-cutover-diagnostics
+          path: /tmp/domain-cutover-artifact.json
+          if-no-files-found: warn
+          retention-days: 90
 
   # ---------------------------------------------------------------------
-  # Job 9: post-promotion smoke against the real production aliases,
-  # using ordinary system curl (not vercel curl) since these are public
-  # aliases requiring no protection-bypass. Same substantive checks as
-  # pre-promotion, including the PNG signature. No automatic rollback on
-  # failure -- the job fails loudly instead. Also records a safe routing
-  # check for www.aiscentra.com without any mutating action.
+  # Job 9: post-cutover smoke against the real production aliases, using
+  # ordinary system curl (not vercel curl) since these are public
+  # aliases requiring no protection-bypass. This is an ADDITIONAL,
+  # independent observability pass on top of domain-cutover's own
+  # internal verification (which already confirmed root/health/SHA
+  # before this job ever runs) -- it adds the Open Graph/PNG check,
+  # which domain-cutover's verifyDomain does not cover. domain-cutover
+  # has already performed its own rollback-on-failure internally by the
+  # time this job runs; this job does not attempt any further rollback,
+  # it only fails loudly if something is still wrong post-cutover.
   # ---------------------------------------------------------------------
   post-promotion-smoke:
-    name: Post-promotion production smoke
-    needs: promote
+    name: Post-cutover production smoke
+    needs: domain-cutover
     runs-on: ubuntu-latest
     environment: production
     steps:
