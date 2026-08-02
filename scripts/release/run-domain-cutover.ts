@@ -160,11 +160,13 @@ async function main(): Promise<void> {
   const alias2 = requireEnv('PRODUCTION_ALIAS_2')
   const artifactPath = requireEnv('CUTOVER_ARTIFACT_PATH')
   const pngSignatureHex = requireEnv('PNG_SIGNATURE_HEX')
-  // Presence-checked only; the value is never read into a variable that
-  // could reach argv, a log line, or the artifact -- the CLI picks it up
-  // from the inherited environment itself.
-  requireEnv('VERCEL_TOKEN')
-  requireEnv('VERCEL_ORG_ID')
+  // Needed now for the direct Vercel REST API call in verifyDomain's SHA
+  // check (see comment there for why the CLI's own `inspect` subcommand
+  // was abandoned). Still never placed in argv, never logged, never
+  // written to the artifact -- used only as an in-process fetch header
+  // and query parameter.
+  const vercelToken = requireEnv('VERCEL_TOKEN')
+  const vercelOrgId = requireEnv('VERCEL_ORG_ID')
 
   const domains = [alias1, alias2]
 
@@ -278,16 +280,34 @@ async function main(): Promise<void> {
       // this check 14 times over ~70s even though the staged
       // deployment's own metadata (confirmed by a separate, independent
       // query directly against its ID) was correct the entire time.
-      // Inspecting by ID sidesteps whatever domain-to-metadata
-      // propagation delay caused that -- there is no domain resolution
-      // step left for this specific check to depend on.
+      //
+      // SECOND real attempt (after switching to `vercel inspect
+      // <deploymentId> --json`) failed differently: the CLI's own
+      // --json output for an inspect-by-ID does not include the `meta`
+      // object at all (got=undefined, confirmed from the actual owner-
+      // provided run output) -- the CLI's JSON shape for this command
+      // is evidently narrower than the full deployment object.
+      //
+      // FIX: call the Vercel REST API directly
+      // (GET /v13/deployments/{id}) instead of going through the CLI's
+      // `inspect` subcommand at all. This is the same endpoint shape
+      // already read successfully, repeatedly, throughout this
+      // project's release-engineering history (via direct API calls
+      // elsewhere in this workflow's own earlier jobs) and is known to
+      // reliably include `.meta.githubCommitSha`.
       let inspectJson: unknown
       try {
-        inspectJson = JSON.parse(
-          await runVercel(['inspect', stagedDeploymentId, '--json'], timeoutMs),
+        const resp = await fetch(
+          `https://api.vercel.com/v13/deployments/${stagedDeploymentId}?teamId=${vercelOrgId}`,
+          {
+            headers: { Authorization: `Bearer ${vercelToken}` },
+            signal: AbortSignal.timeout(timeoutMs),
+          },
         )
+        if (resp.status !== 200) return fail('HTTP_STATUS', `deployments-api ${resp.status}`)
+        inspectJson = await resp.json()
       } catch (err) {
-        return fail(sanitizeError(err, 'COMMAND_FAILED'), 'inspect')
+        return fail(sanitizeError(err, 'COMMAND_FAILED'), 'deployments-api')
       }
       const shaCheck = checkCommitSha(
         (inspectJson as { meta?: { githubCommitSha?: unknown } }).meta?.githubCommitSha,
