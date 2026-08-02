@@ -322,7 +322,46 @@ jobs:
       - name: Print pinned Vercel CLI version
         run: npx --yes vercel@${VERCEL_CLI_VERSION} --version
 
-      - name: Deploy exact checked-out tree as staged production (no domain assignment)
+      - name: Pull production environment variables and project settings
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Real root cause of a repeated production defect: a bare
+          # `vercel deploy` (no --prebuilt) triggered from a third-party
+          # CI runner (GitHub Actions, not Vercel's own Git webhook
+          # integration) does not reliably resolve which Vercel
+          # Environment (Production vs Preview) to inject
+          # NEXT_PUBLIC_*/build-time variables from -- confirmed via a
+          # real release attempt where a Project-level env var
+          # (NEXT_PUBLIC_SUPABASE_URL) was added, then re-added from
+          # scratch, then the deploy step was even given --force, and
+          # the resulting client JS bundle kept the EXACT SAME content
+          # hash every single time, meaning the variable was never
+          # actually reaching the build. Vercel's own official
+          # documentation for exactly this scenario (deploying from
+          # GitHub Actions) prescribes `vercel pull` +
+          # `vercel build` + `vercel deploy --prebuilt`, not a bare
+          # `vercel deploy` -- this explicitly pulls Production
+          # environment variables into a local .vercel/ cache BEFORE
+          # building, removing any ambiguity about which environment's
+          # variables apply to a CLI-triggered (non-git-integration)
+          # build.
+          npx --yes vercel@${VERCEL_CLI_VERSION} pull \
+            --yes \
+            --environment=production \
+            --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG"
+
+      - name: Build the project locally using the pulled production environment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx --yes vercel@${VERCEL_CLI_VERSION} build \
+            --prod \
+            --token "$VERCEL_TOKEN" --scope "$VERCEL_TEAM_SLUG"
+
+      - name: Deploy the prebuilt output as staged production (no domain assignment)
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -353,6 +392,7 @@ jobs:
           # not a high-frequency deploy path.
           set +e
           npx --yes vercel@${VERCEL_CLI_VERSION} deploy \
+            --prebuilt \
             --prod \
             --skip-domain \
             --yes \
