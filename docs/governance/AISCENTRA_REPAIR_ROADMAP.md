@@ -131,8 +131,30 @@ call — not CLI table-text parsing, staged `--skip-domain` deploy with
 custom metadata, deployment metadata gate checking the system
 `githubCommitSha` field, pre-promotion staged smoke via `vercel curl`,
 a TOCTOU re-check repeating every gate immediately before promotion,
-`vercel promote`, and post-promotion smoke with no automatic rollback
+explicit domain cutover via `vercel alias set` with rollback-on-
+partial-failure, and post-cutover smoke with no automatic rollback
 on failure).
+
+**Correction (from real-release-attempt evidence):** the original
+design of this pipeline assumed `vercel promote` itself was the
+mechanism that moved the public domains (`aiscentra.com` /
+`www.aiscentra.com`) onto the newly staged deployment. A real manual
+release attempt confirmed this assumption was false: `vercel promote`
+reported "Success!" and the deployment was marked `target: "production"`
+internally, but the public domain aliases never moved — the previous
+deployment continued serving both domains throughout, confirmed by
+direct inspection of both deployments' `alias` fields and a live fetch
+of `https://aiscentra.com/`. Promotion status and public domain-alias
+assignment are two independent Vercel-side facts. The `promote` job has
+been replaced with an explicit `domain-cutover` job that determines each
+domain's current holder, reassigns both domains via the documented
+`vercel alias set` command, independently re-verifies (Vercel-side
+inspection + live HTTP + expected commit SHA) within a bounded timeout,
+and automatically rolls every domain back to its recorded previous
+holder on any partial failure or unconfirmed verification. The decision
+logic lives in `scripts/release/domain-cutover.ts` (unit-tested,
+`scripts/release/__tests__/domain-cutover.test.ts`), wired to the real
+Vercel CLI via `scripts/release/run-domain-cutover.ts`.
 
 **Token-scope correction (from this task's own explicit instruction):**
 current Vercel documentation confirms personal access tokens are scoped
@@ -165,13 +187,21 @@ contains exactly this one project.
   accessible only to jobs that declare `environment: production` (the
   `validate` and `exact-sha-check` jobs deliberately do not declare it
   and have no secret access).
-- Normal `vercel promote` capability and rollback-to-an-arbitrary-prior-
-  deployment capability remain **unconfirmed for this team's actual
-  Vercel plan** until a real staged release is first exercised — not
-  assumed available by this design. Vercel's own documentation states
-  Hobby-tier accounts can only roll back to the immediately-previous
-  production deployment; this document does not assume a broader plan
-  tier applies here.
+- `vercel promote`'s own capability is no longer load-bearing for this
+  design: a real staged release confirmed `vercel promote` reports
+  success and marks a deployment `target: "production"` internally, but
+  does **not** reliably move the public domain aliases
+  (`aiscentra.com` / `www.aiscentra.com`) — see the correction above.
+  Domain movement now relies on the documented `vercel alias set`
+  command instead, confirmed via `vercel alias --help` to exist and
+  accept a deployment ID/URL and a custom domain as its target. Whether
+  this team's actual Vercel plan tier imposes any further restriction
+  specifically on `vercel alias set` (as opposed to `vercel promote`)
+  has not been separately tested; the workflow's own bounded
+  verification-and-rollback logic (Section above) is designed to fail
+  closed and roll back regardless of the underlying reason for a
+  failed or unconfirmed alias assignment, rather than depending on
+  plan-tier assumptions.
 - A rollback drill is **not** performed, tested, or authorized by this
   task — it requires its own separate, explicit owner authorization at
   the time it is needed, exactly as this design has stated since Phase

@@ -22,6 +22,7 @@ set -Eeuo pipefail
 TEST_DIRS=(
   "supabase/functions/intelligence-agent/__tests__"
   "src/lib/security/__tests__"
+  "scripts/release/__tests__"
 )
 
 TEST_FILES=()
