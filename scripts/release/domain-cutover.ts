@@ -42,8 +42,8 @@
 export type CutoverStatus =
   | 'CUTOVER_SUCCESS'
   | 'ABORTED_NO_HOLDER'
-  | 'DOMAIN_CUTOVER_FAILED_ROLLBACK_ATTEMPTED'
-  | 'PUBLIC_RELEASE_NOT_VERIFIED_ROLLBACK_ATTEMPTED'
+  | 'DOMAIN CUTOVER FAILED — ROLLBACK ATTEMPTED'
+  | 'PUBLIC RELEASE NOT VERIFIED — ROLLBACK ATTEMPTED'
 
 export interface DomainAliasResult {
   domain: string
@@ -155,7 +155,7 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
       result.assignError = assign.error
       await rollbackAssigned(domainResults, setAlias)
       return {
-        status: 'DOMAIN_CUTOVER_FAILED_ROLLBACK_ATTEMPTED',
+        status: 'DOMAIN CUTOVER FAILED — ROLLBACK ATTEMPTED',
         diagnostics: {
           stagedDeploymentId,
           targetCommitSha,
@@ -197,7 +197,7 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
   if (!allVerified) {
     await rollbackAssigned(domainResults, setAlias)
     return {
-      status: 'PUBLIC_RELEASE_NOT_VERIFIED_ROLLBACK_ATTEMPTED',
+      status: 'PUBLIC RELEASE NOT VERIFIED — ROLLBACK ATTEMPTED',
       diagnostics: {
         stagedDeploymentId,
         targetCommitSha,

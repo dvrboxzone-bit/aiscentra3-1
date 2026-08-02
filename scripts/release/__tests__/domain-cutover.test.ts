@@ -108,7 +108,7 @@ describe('planDomainCutover', () => {
       sleep: noopSleep,
     })
 
-    assert.equal(result.status, 'DOMAIN_CUTOVER_FAILED_ROLLBACK_ATTEMPTED')
+    assert.equal(result.status, 'DOMAIN CUTOVER FAILED — ROLLBACK ATTEMPTED')
 
     const first = result.diagnostics.domains.find((d) => d.domain === 'aiscentra.com')
     const second = result.diagnostics.domains.find((d) => d.domain === 'www.aiscentra.com')
@@ -155,7 +155,7 @@ describe('planDomainCutover', () => {
       verifyIntervalMs: 5,
     })
 
-    assert.equal(result.status, 'PUBLIC_RELEASE_NOT_VERIFIED_ROLLBACK_ATTEMPTED')
+    assert.equal(result.status, 'PUBLIC RELEASE NOT VERIFIED — ROLLBACK ATTEMPTED')
     for (const d of result.diagnostics.domains) {
       assert.equal(d.assignSucceeded, true)
       assert.equal(d.rolledBack, true)
