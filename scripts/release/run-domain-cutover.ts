@@ -228,7 +228,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const verifyDomain: VerifyDomainFn = async (domain, expectedCommitSha, timeoutMs) => {
+  const verifyDomain: VerifyDomainFn = async (
+    domain,
+    expectedCommitSha,
+    timeoutMs,
+    stagedDeploymentId,
+  ) => {
     if (timeoutMs <= 0) return { ok: false, detail: safeDetail('TIMEOUT', domain) }
     const fail = (code: SafeErrorCode, ctx?: string): { ok: false; detail: string } => ({
       ok: false,
@@ -264,10 +269,23 @@ async function main(): Promise<void> {
       const healthCheck = checkHealthJson(healthJson)
       if (!healthCheck.ok) return { ok: false, detail: healthCheck.detail }
 
-      // 3. Exact commit SHA, re-read from Vercel's own record.
+      // 3. Exact commit SHA. Read by STAGED DEPLOYMENT ID, not by domain
+      // string. Confirmed via a real release attempt: `vercel inspect
+      // <domain>` correctly and immediately reflects which deployment ID
+      // now holds the alias (used by getCurrentHolder, above, and by
+      // this same check historically) -- but its `.meta.githubCommitSha`
+      // field lagged behind for a custom domain specifically, failing
+      // this check 14 times over ~70s even though the staged
+      // deployment's own metadata (confirmed by a separate, independent
+      // query directly against its ID) was correct the entire time.
+      // Inspecting by ID sidesteps whatever domain-to-metadata
+      // propagation delay caused that -- there is no domain resolution
+      // step left for this specific check to depend on.
       let inspectJson: unknown
       try {
-        inspectJson = JSON.parse(await runVercel(['inspect', domain, '--json'], timeoutMs))
+        inspectJson = JSON.parse(
+          await runVercel(['inspect', stagedDeploymentId, '--json'], timeoutMs),
+        )
       } catch (err) {
         return fail(sanitizeError(err, 'COMMAND_FAILED'), 'inspect')
       }
