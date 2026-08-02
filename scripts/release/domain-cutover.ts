@@ -184,6 +184,7 @@ export interface VerifyDomainFn {
     domain: string,
     expectedCommitSha: string,
     timeoutMs: number,
+    stagedDeploymentId: string,
   ): Promise<{ ok: boolean; detail?: string | undefined }>
 }
 
@@ -377,7 +378,12 @@ export async function planDomainCutover(input: PlanDomainCutoverInput): Promise<
     for (const domain of domains) {
       let v: { ok: boolean; detail?: string | undefined }
       try {
-        v = await verifyDomain(domain, targetCommitSha, budgetFor(verifyDeadline))
+        v = await verifyDomain(
+          domain,
+          targetCommitSha,
+          budgetFor(verifyDeadline),
+          stagedDeploymentId,
+        )
       } catch (err) {
         v = { ok: false, detail: safeDetail(sanitizeError(err, 'UNKNOWN'), domain) }
       }
@@ -535,7 +541,21 @@ export function checkCommitSha(
   expectedSha: string,
 ): { ok: boolean; detail?: string } {
   if (actualSha !== expectedSha) {
-    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'githubCommitSha') }
+    // Commit SHAs are public, non-sensitive values (unlike tokens/errors
+    // sanitized elsewhere in this module) -- showing the actual mismatch
+    // here is real debugging information, not a redaction gap. A prior
+    // release attempt's diagnostic said only "CONTENT_MISMATCH:
+    // githubCommitSha" with no values, which made the real root cause
+    // (a domain-metadata propagation delay, not a wrong deployment)
+    // needlessly slow to find from the artifact alone.
+    const actual = typeof actualSha === 'string' ? actualSha : String(actualSha)
+    return {
+      ok: false,
+      detail: safeDetail(
+        'CONTENT_MISMATCH',
+        `githubCommitSha got=${actual} expected=${expectedSha}`,
+      ),
+    }
   }
   return { ok: true }
 }
