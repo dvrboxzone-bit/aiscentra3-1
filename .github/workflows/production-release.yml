@@ -335,11 +335,28 @@ jobs:
           # Deployment URL; stderr carries progress/error text. Capture
           # them separately -- merging with 2>&1 destroys that contract
           # and makes the final line unreliable as a URL source.
+          #
+          # --force: without it, Vercel can recognize "same source, same
+          # commit" across repeated manual dispatches of this exact
+          # commit_sha (which happened repeatedly during real release
+          # attempts) and reuse a previous deployment/build rather than
+          # performing a genuine fresh build. Confirmed in practice: a
+          # Project-level environment variable was added between two
+          # dispatches of the identical commit, but the resulting client
+          # JS bundle kept the exact same content hash, meaning the
+          # newly-added variable was never actually re-inlined. --force
+          # does NOT retain build cache unless combined with
+          # --with-cache (which we deliberately do not pass), so this
+          # guarantees a genuinely fresh build every dispatch, at the
+          # cost of build time -- an explicit, intentional trade-off
+          # given this workflow is a manual, infrequent release gate,
+          # not a high-frequency deploy path.
           set +e
           npx --yes vercel@${VERCEL_CLI_VERSION} deploy \
             --prod \
             --skip-domain \
             --yes \
+            --force \
             --meta aiscentraReleaseSha="$COMMIT_SHA" \
             --meta githubActionsRunId="$RUN_ID" \
             1>/tmp/deploy-stdout.txt 2>/tmp/deploy-stderr.txt
