@@ -790,27 +790,53 @@ jobs:
           echo "Full staged smoke (root/health/PNG) re-confirmed immediately before promotion. All TOCTOU re-checks passed."
 
   # ---------------------------------------------------------------------
-  # Job 8: explicit domain cutover (replaces the previous `vercel
-  # promote`-based approach). `vercel promote` can report "Success!" and
+  # Job 8 (final job): explicit domain cutover, now the SOLE production-
+  # mutating and verifying boundary. Replaces the previous `vercel
+  # promote`-based approach: `vercel promote` can report "Success!" and
   # mark a deployment `target: "production"` internally without the
   # public domain aliases (aiscentra.com / www.aiscentra.com) actually
   # having moved -- confirmed empirically during a real release attempt.
-  # Promotion status and domain-alias assignment are two separate
-  # Vercel-side facts. This job instead: determines each domain's current
-  # holder, explicitly reassigns both domains via `vercel alias set`,
-  # independently re-verifies both (Vercel-side + live HTTP + commit SHA)
-  # within a bounded timeout, and automatically rolls every domain back
-  # to its recorded previous holder on any partial failure or
-  # unconfirmed verification. All decision logic lives in
-  # scripts/release/domain-cutover.ts, covered by
+  # A SECOND confirmed defect (post-cutover) has also been closed here:
+  # a separate `post-promotion-smoke` job used to run AFTER this job had
+  # already succeeded and switched both public domains, with its own
+  # Open Graph/PNG checks able to fail the release with NO rollback
+  # wired to them at all -- domains could be left switched to a broken
+  # deployment on a failed run. That job has been REMOVED; every one of
+  # its checks (root, health, exact commit SHA, required Open Graph tag,
+  # Open Graph image HTTP status, content-type, PNG signature, and
+  # implicit www routing via redirect-following fetch) now runs INSIDE
+  # this job's own bounded verify-then-rollback loop. There is no longer
+  # any check, anywhere in this workflow, that can fail a release after
+  # domain mutation without triggering rollback.
+  #
+  # This job: determines each domain's current holder SEPARATELY (never
+  # assumed shared between domains), explicitly reassigns both domains
+  # via `vercel alias set`, independently re-verifies both (Vercel-side +
+  # live HTTP + commit SHA + Open Graph + PNG signature) within a bounded
+  # timeout, and automatically rolls every domain back to its own
+  # recorded previous holder on any partial assignment failure or
+  # unconfirmed verification. If a rollback attempt itself fails for one
+  # domain, the other domain's rollback is still attempted, and the
+  # overall result is the distinct status `ROLLBACK INCOMPLETE — MANUAL
+  # RECOVERY REQUIRED`, naming exactly which domain(s) need manual
+  # operator recovery and to which previous deployment ID. All decision
+  # logic lives in scripts/release/domain-cutover.ts, covered by
   # scripts/release/__tests__/domain-cutover.test.ts; this job only
-  # wires it to the real Vercel CLI via scripts/release/run-domain-cutover.ts.
+  # wires it to the real Vercel CLI and real HTTP checks via
+  # scripts/release/run-domain-cutover.ts.
   # ---------------------------------------------------------------------
   domain-cutover:
     name: Explicit domain cutover (aiscentra.com / www.aiscentra.com)
     needs: [validate, staged-deploy, deployment-metadata-gate, pre-promotion-recheck]
     runs-on: ubuntu-latest
     environment: production
+    # Last-resort backstop only. This does NOT replace the runner's own
+    # internal absolute deadline and reserved rollback budget -- those
+    # exist so a hang is followed by a real reconciliation and rollback
+    # INSIDE the process. This job-level timeout merely guarantees the
+    # runner cannot occupy an executor indefinitely if everything else
+    # fails at once.
+    timeout-minutes: 20
     steps:
       - name: Checkout (for scripts/release only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -829,8 +855,11 @@ jobs:
       - name: Run explicit domain cutover
         id: cutover
         env:
+          # Credentials are supplied to the Vercel CLI ONLY through the
+          # environment -- never via argv, which Node embeds in
+          # err.message/err.cmd and would leak into every error path.
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_SLUG: welvers-projects
+          VERCEL_ORG_ID: ${{ env.VERCEL_ORG_ID }}
           VERCEL_CLI_VERSION: 58.4.4
           STAGED_DEPLOYMENT_ID: ${{ needs.deployment-metadata-gate.outputs.deployment_id }}
           COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
@@ -838,148 +867,21 @@ jobs:
         run: npx tsx scripts/release/run-domain-cutover.ts
 
       - name: Upload domain cutover diagnostic artifact (no secrets)
+        # DOCUMENTED EXCEPTION -- the only continue-on-error in this
+        # workflow. This step runs AFTER the domains have already been
+        # switched and independently verified. Delivery of a diagnostic
+        # file is not a production-quality signal: if the upload service
+        # fails, the release is still good and there is nothing to roll
+        # back. Without this, an upload failure would mark a verified,
+        # successful production cutover as a failed release with no
+        # rollback -- exactly the class of defect this job exists to
+        # prevent. The artifact's *content* is still produced and logged
+        # by the step above regardless.
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: domain-cutover-diagnostics
           path: /tmp/domain-cutover-artifact.json
           if-no-files-found: warn
           retention-days: 90
-
-  # ---------------------------------------------------------------------
-  # Job 9: post-cutover smoke against the real production aliases, using
-  # ordinary system curl (not vercel curl) since these are public
-  # aliases requiring no protection-bypass. This is an ADDITIONAL,
-  # independent observability pass on top of domain-cutover's own
-  # internal verification (which already confirmed root/health/SHA
-  # before this job ever runs) -- it adds the Open Graph/PNG check,
-  # which domain-cutover's verifyDomain does not cover. domain-cutover
-  # has already performed its own rollback-on-failure internally by the
-  # time this job runs; this job does not attempt any further rollback,
-  # it only fails loudly if something is still wrong post-cutover.
-  # ---------------------------------------------------------------------
-  post-promotion-smoke:
-    name: Post-cutover production smoke
-    needs: domain-cutover
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - name: Root path (HTTP 200, recognizable AIscentra HTML)
-        run: |
-          set -euo pipefail
-
-          set +e
-          curl -sS -o /tmp/prod-root.html -w '%{http_code}' \
-            "https://${PRODUCTION_ALIAS_1}/" > /tmp/prod-root-status.txt 2>/tmp/prod-root-stderr.txt
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::Production root curl failed (exit $CURL_EXIT). Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          STATUS="$(cat /tmp/prod-root-status.txt)"
-          echo "Production root: HTTP $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Production root returned HTTP $STATUS. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          if ! grep -qi "aiscentra" /tmp/prod-root.html; then
-            echo "::error::Production root did not return recognizable AIscentra HTML. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          rm -f /tmp/prod-root.html /tmp/prod-root-status.txt /tmp/prod-root-stderr.txt
-
-      - name: Health path (HTTP 200, valid JSON, status=ok, database=ok, fail-closed jq -e)
-        run: |
-          set -euo pipefail
-
-          set +e
-          curl -sS -o /tmp/prod-health.json -w '%{http_code}' \
-            "https://${PRODUCTION_ALIAS_1}/api/health" > /tmp/prod-health-status.txt 2>/tmp/prod-health-stderr.txt
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::Production health curl failed (exit $CURL_EXIT). Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          STATUS="$(cat /tmp/prod-health-status.txt)"
-          echo "Production health: HTTP $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Production health returned HTTP $STATUS. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          if ! jq -e '.status == "ok"' /tmp/prod-health.json > /dev/null; then
-            echo "::error::Production health .status != ok, or invalid JSON. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          if ! jq -e '.checks.database == "ok"' /tmp/prod-health.json > /dev/null; then
-            echo "::error::Production health .checks.database != ok. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          echo "  status=ok database=ok"
-          rm -f /tmp/prod-health.json /tmp/prod-health-status.txt /tmp/prod-health-stderr.txt
-
-      - name: Open Graph image (HTTP 200, image/png, PNG signature)
-        run: |
-          set -euo pipefail
-
-          set +e
-          curl -sS -o /tmp/prod-og.png -D /tmp/prod-og-headers.txt -w '%{http_code}' \
-            "https://${PRODUCTION_ALIAS_1}/opengraph-image" > /tmp/prod-og-status.txt 2>/tmp/prod-og-stderr.txt
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::Production Open Graph curl failed (exit $CURL_EXIT). Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          STATUS="$(cat /tmp/prod-og-status.txt)"
-          echo "Production Open Graph: HTTP $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Production Open Graph returned HTTP $STATUS. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          CONTENT_TYPE="$(awk 'BEGIN{IGNORECASE=1} /^content-type:/{print $2; exit}' /tmp/prod-og-headers.txt | tr -d '\r')"
-          if [[ "$CONTENT_TYPE" != image/png* ]]; then
-            echo "::error::Production Open Graph content-type '$CONTENT_TYPE' != image/png. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          PNG_SIGNATURE="$(head -c8 /tmp/prod-og.png | xxd -p | head -c16)"
-          if [ "$PNG_SIGNATURE" != "$PNG_SIGNATURE_HEX" ]; then
-            echo "::error::Production Open Graph PNG signature mismatch. Production smoke failed; rollback was NOT authorized or performed."
-            exit 1
-          fi
-
-          echo "  content-type=$CONTENT_TYPE, PNG signature confirmed"
-          rm -f /tmp/prod-og.png /tmp/prod-og-headers.txt /tmp/prod-og-status.txt /tmp/prod-og-stderr.txt
-
-      - name: Safe routing check for www.aiscentra.com (record only, no mutation)
-        run: |
-          set -euo pipefail
-
-          set +e
-          WWW_STATUS="$(curl -sS -o /dev/null -D /tmp/www-headers.txt -w '%{http_code}' \
-            "https://${PRODUCTION_ALIAS_2}/" 2>/tmp/www-stderr.txt)"
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "www.aiscentra.com routing check: curl failed (exit $CURL_EXIT) -- recorded, not treated as a release-blocking failure since this is a supplementary check."
-          else
-            REDIRECT_TARGET="$(awk 'BEGIN{IGNORECASE=1} /^location:/{print $2; exit}' /tmp/www-headers.txt | tr -d '\r')"
-            echo "www.aiscentra.com routing check: HTTP $WWW_STATUS, redirect target: ${REDIRECT_TARGET:-<none>}"
-          fi
-
-          rm -f /tmp/www-headers.txt /tmp/www-stderr.txt
