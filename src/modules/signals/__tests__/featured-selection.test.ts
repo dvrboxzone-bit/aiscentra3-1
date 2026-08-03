@@ -140,6 +140,46 @@ describe('selectFeaturedSignals', () => {
     assert.ok(result.some((s) => s.signal_score >= 41 && s.signal_score < 61))
   })
 
+  test('absolute tier order: Strong always fully precedes Signal, even when diversity would prefer otherwise', () => {
+    // All 3 Strong signals share one category (MODELS) -- diversity
+    // alone would want to interleave a different-category Signal-tier
+    // signal to break up the run, but tier order must win: all 3
+    // Strong signals must appear before any Signal-tier signal, even
+    // though the 3rd Strong signal is same-category as the 1st and 2nd.
+    const strong = [
+      withDate(1, { id: 'strong-1', category: 'MODELS', signal_score: 95 }),
+      withDate(2, { id: 'strong-2', category: 'MODELS', signal_score: 90 }),
+      withDate(3, { id: 'strong-3', category: 'MODELS', signal_score: 85 }),
+    ]
+    const signalTier = [
+      withDate(4, { id: 'mid-1', category: 'RESEARCH', signal_score: 75 }),
+      withDate(5, { id: 'mid-2', category: 'REGULATION', signal_score: 65 }),
+      withDate(6, { id: 'mid-3', category: 'COMPANIES', signal_score: 61 }),
+    ]
+    const result = selectFeaturedSignals([...strong, ...signalTier])
+    assert.deepEqual(
+      result.map((s) => s.id),
+      ['strong-1', 'strong-2', 'strong-3', 'mid-1', 'mid-2', 'mid-3'],
+      'all Strong-tier signals must precede all Signal-tier signals regardless of category repetition',
+    )
+  })
+
+  test('a signal scoring exactly 40 is excluded (Weak tier starts at 41)', () => {
+    const signals = [
+      withDate(1, { signal_score: 41 }),
+      withDate(2, { signal_score: 40 }),
+      withDate(3, { signal_score: 45 }),
+      withDate(4, { signal_score: 50 }),
+    ]
+    const result = selectFeaturedSignals(signals)
+    assert.equal(result.length, 3, 'only the 3 signals scoring >=41 qualify')
+    assert.equal(
+      result.some((s) => s.signal_score === 40),
+      false,
+      'a signal scoring exactly 40 must never be included',
+    )
+  })
+
   test('category diversity: no more than 2 consecutive signals from the same category', () => {
     const signals = [
       withDate(1, { category: 'MODELS', signal_score: 91 }),

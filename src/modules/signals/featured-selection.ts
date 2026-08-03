@@ -5,26 +5,33 @@
  * unit-tested deterministically. getFeaturedSignals() in queries.ts is
  * a thin wrapper that fetches candidates and calls this.
  *
- * Rules (owner task, Part 3):
+ * Rules (owner task, Part 3; refined per owner follow-up on the
+ * priority-cascade interpretation):
  * 1. Target count: 6 (within the requested 5-7 range) — scarcity is a
  *    deliberate signal of value, not a limitation to work around.
  * 2. Tier priority, used as a FALLBACK-FILL cascade, not an exclusive
  *    filter: Strong (81-100) fills first; if that doesn't reach the
  *    target count, Signal (61-80) fills next; Weak (41-60) is only
- *    added if the combined Strong+Signal count is still below 5. This
- *    interpretation is an explicit assumption (see report) — the
- *    alternative reading ("show ONLY Strong signals whenever any exist,
- *    regardless of count") would frequently leave the homepage showing
- *    far fewer than 5-7 signals given current score distribution
- *    (0 signals currently score >=81), contradicting the stated goal
- *    of a populated, non-empty homepage.
+ *    added if the combined Strong+Signal count is still below 5.
+ *    CONFIRMED by owner: this fallback-fill reading is correct over the
+ *    alternative ("show ONLY Strong whenever any exist") — the
+ *    alternative would frequently leave the homepage showing far fewer
+ *    than 5-7 signals given the current score distribution (0 signals
+ *    currently score >=81).
+ * 2a. ABSOLUTE tier order is guaranteed: category diversity (rule 5,
+ *    below) is applied STRICTLY WITHIN each tier and can never cause a
+ *    lower-tier (e.g. Signal) candidate to be placed ahead of a
+ *    higher-tier (e.g. Strong) candidate that hasn't been placed yet.
+ *    Each tier is fully processed, in order, before the next tier's
+ *    candidates are even considered -- diversity can reorder within a
+ *    tier's own candidates, never across a tier boundary.
  * 3. Anything scoring below 40 is never included, at any tier.
  * 4. Within a tier, newest first (by created_at).
  * 5. Category diversity: no more than 2 consecutive signals from the
- *    same category. This is a soft preference, not a hard filter — if
- *    honoring it would require dropping a real signal with no
- *    remaining alternative, the constraint is relaxed rather than
- *    losing content.
+ *    same category, applied within a single tier only (see 2a). This is
+ *    a soft preference, not a hard filter — if honoring it would
+ *    require dropping a real signal with no remaining in-tier
+ *    alternative, the constraint is relaxed rather than losing content.
  * 6. Fewer than 3 qualifying signals overall -> show nothing from this
  *    function; the caller renders a placeholder instead.
  */
@@ -41,19 +48,19 @@ function byNewestFirst(a: Signal, b: Signal): number {
 }
 
 /**
- * Enforces "no more than 2 consecutive signals from the same category"
- * as a soft preference. At each step, scans the remaining candidates
- * (in priority order) for the first one that would NOT violate the
- * constraint against the last two already-placed signals. If every
- * remaining candidate would violate it (no alternative exists), the
- * constraint is relaxed for that one placement rather than dropping a
- * real signal -- re-checked at every single placement, including ones
- * made after an earlier relaxation, so a violation is never silently
- * reintroduced by a later backfill step.
+ * Fills `result` (mutated in place) from `tierCandidates` only, up to
+ * `targetCount` total, enforcing "no more than 2 consecutive same
+ * category" as a soft preference scoped to THIS tier's own candidates.
+ * Never reaches outside `tierCandidates` -- this is what guarantees
+ * rule 2a: a lower tier's candidates are never even visible to this
+ * function while an earlier tier is still being filled.
  */
-function applyCategoryDiversity(candidates: Signal[], targetCount: number): Signal[] {
-  const remaining = [...candidates]
-  const result: Signal[] = []
+function fillTierWithDiversity(
+  tierCandidates: Signal[],
+  result: Signal[],
+  targetCount: number,
+): void {
+  const remaining = [...tierCandidates]
 
   while (result.length < targetCount && remaining.length > 0) {
     const lastTwo = result.slice(-2)
@@ -62,17 +69,15 @@ function applyCategoryDiversity(candidates: Signal[], targetCount: number): Sign
 
     let pickIndex = remaining.findIndex((s) => !violates(s))
     if (pickIndex === -1) {
-      // Every remaining candidate would violate the constraint -- no
-      // alternative exists, so relax it for this one placement rather
-      // than losing a real signal.
+      // Every remaining candidate IN THIS TIER would violate the
+      // constraint -- relax it for this one placement rather than
+      // losing a real signal. Still never pulls from another tier.
       pickIndex = 0
     }
 
     const [picked] = remaining.splice(pickIndex, 1)
     if (picked) result.push(picked)
   }
-
-  return result
 }
 
 /**
@@ -95,12 +100,18 @@ export function selectFeaturedSignals(
     .sort(byNewestFirst)
   // Anything scoring below WEAK_MIN (40) is never a candidate at all.
 
-  const primary = [...strong, ...mid]
-  const candidateOrder = primary.length < 5 ? [...primary, ...weak] : primary
+  const primaryCount = strong.length + mid.length
+  const includeWeak = primaryCount < 5
+  const totalQualifying = primaryCount + (includeWeak ? weak.length : 0)
 
-  if (candidateOrder.length < MIN_SIGNALS_FOR_PLACEHOLDER) {
+  if (totalQualifying < MIN_SIGNALS_FOR_PLACEHOLDER) {
     return []
   }
 
-  return applyCategoryDiversity(candidateOrder, targetCount)
+  const result: Signal[] = []
+  fillTierWithDiversity(strong, result, targetCount)
+  fillTierWithDiversity(mid, result, targetCount)
+  if (includeWeak) fillTierWithDiversity(weak, result, targetCount)
+
+  return result
 }
