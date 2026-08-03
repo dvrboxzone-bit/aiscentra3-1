@@ -21,22 +21,34 @@ async function ObservatoryStatus(): Promise<React.JSX.Element> {
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
         <div className="flex items-center gap-3">
           <Pulse size="sm" />
-          <span className="font-mono text-xs tracking-wider text-text-muted">OBSERVATORY ACTIVE</span>
+          <span className="font-mono text-xs tracking-wider text-text-muted">
+            OBSERVATORY ACTIVE
+          </span>
         </div>
         <div className="flex items-center gap-6">
-          <Stat label="SIGNALS"  value={stats.total} />
+          <Stat label="SIGNALS" value={stats.total} />
           <Stat label="CRITICAL" value={stats.critical} highlight />
-          <Stat label="HIGH"     value={stats.high} />
+          <Stat label="HIGH" value={stats.high} />
         </div>
       </div>
     </div>
   )
 }
 
-function Stat({ label, value, highlight }: { label: string; value: number; highlight?: boolean }): React.JSX.Element {
+function Stat({
+  label,
+  value,
+  highlight,
+}: {
+  label: string
+  value: number
+  highlight?: boolean
+}): React.JSX.Element {
   return (
     <div className="flex items-baseline gap-1.5">
-      <span className={`font-mono text-sm tabular-nums ${highlight ? 'text-text-primary' : 'text-text-secondary'}`}>
+      <span
+        className={`font-mono text-sm tabular-nums ${highlight ? 'text-text-primary' : 'text-text-secondary'}`}
+      >
         {value}
       </span>
       <span className="font-mono text-xs text-text-muted">{label}</span>
@@ -59,14 +71,17 @@ function ObservatoryHero(): React.JSX.Element {
         aria-hidden="true"
       />
       <div className="relative mx-auto max-w-7xl px-6 py-16 md:py-24">
-        <p className="mb-3 font-mono text-xs tracking-[0.3em] text-text-muted">INTELLIGENCE OBSERVATORY</p>
+        <p className="mb-3 font-mono text-xs tracking-[0.3em] text-text-muted">
+          INTELLIGENCE OBSERVATORY
+        </p>
         <h1 className="mb-4 text-3xl font-light tracking-tight text-text-primary md:text-5xl">
-          What matters in AI<br />
+          What matters in AI
+          <br />
           <span className="text-text-muted">right now.</span>
         </h1>
         <p className="max-w-xl text-sm leading-relaxed text-text-muted md:text-base">
-          AIscentra monitors the global AI ecosystem, detects meaningful signals,
-          and transforms fragmented information into structured intelligence.
+          AIscentra monitors the global AI ecosystem, detects meaningful signals, and transforms
+          fragmented information into structured intelligence.
         </p>
       </div>
     </section>
@@ -81,9 +96,14 @@ async function FeaturedSignals(): Promise<React.JSX.Element> {
   if (signals.length === 0) {
     return (
       <section>
-        <SectionHeader label="CRITICAL & HIGH" title="Featured Signals" href="/signals" linkLabel="All signals" />
+        <SectionHeader
+          label="FEATURED"
+          title="Featured Signals"
+          href="/signals"
+          linkLabel="All signals"
+        />
         <div className="px-6 py-10 text-center">
-          <p className="text-sm text-text-muted">Signal Engine initializing — first signals arriving soon.</p>
+          <p className="text-sm text-text-muted">AIscentra is watching. New signals incoming.</p>
         </div>
       </section>
     )
@@ -91,7 +111,12 @@ async function FeaturedSignals(): Promise<React.JSX.Element> {
 
   return (
     <section>
-      <SectionHeader label="CRITICAL & HIGH" title="Featured Signals" href="/signals" linkLabel="All signals" />
+      <SectionHeader
+        label="FEATURED"
+        title="Featured Signals"
+        href="/signals"
+        linkLabel="All signals"
+      />
       <div className="grid gap-px bg-observatory-border md:grid-cols-3">
         {signals.map((signal) => (
           <SignalCard key={signal.id} signal={signal} variant="featured" className="border-0" />
@@ -114,9 +139,7 @@ async function LatestSignals(): Promise<React.JSX.Element> {
           <p className="text-sm text-text-muted">No signals detected yet.</p>
         </div>
       ) : (
-        signals.map((signal) => (
-          <SignalCard key={signal.id} signal={signal} variant="default" />
-        ))
+        signals.map((signal) => <SignalCard key={signal.id} signal={signal} variant="default" />)
       )}
     </section>
   )
@@ -141,7 +164,10 @@ async function CategoryActivity(): Promise<React.JSX.Element> {
           </div>
         ) : (
           categories.map(([category, count]) => (
-            <div key={category} className="flex items-center justify-between border-b border-observatory-border px-6 py-3">
+            <div
+              key={category}
+              className="flex items-center justify-between border-b border-observatory-border px-6 py-3"
+            >
               <a
                 href={`/signals?category=${category}`}
                 className="font-mono text-xs text-text-muted transition-colors hover:text-text-secondary"
@@ -164,7 +190,9 @@ function AssistantEntry(): React.JSX.Element {
     <section className="border-t border-observatory-border">
       <div className="mx-auto max-w-7xl px-6 py-12">
         <div className="border border-observatory-border bg-observatory-surface p-8 text-center">
-          <p className="mb-2 font-mono text-xs tracking-wider text-text-muted">OBSERVATORY ASSISTANT</p>
+          <p className="mb-2 font-mono text-xs tracking-wider text-text-muted">
+            OBSERVATORY ASSISTANT
+          </p>
           <h2 className="mb-3 text-xl font-light text-text-primary">Ask the Observatory</h2>
           <p className="mb-6 text-sm text-text-muted">
             Query signals, events and intelligence using natural language.
@@ -184,8 +212,16 @@ function AssistantEntry(): React.JSX.Element {
 
 // ── Shared Section Header ─────────────────────────────────────────────────────
 
-function SectionHeader({ label, title, href, linkLabel }: {
-  label: string; title: string; href: string; linkLabel: string
+function SectionHeader({
+  label,
+  title,
+  href,
+  linkLabel,
+}: {
+  label: string
+  title: string
+  href: string
+  linkLabel: string
 }): React.JSX.Element {
   return (
     <div className="flex items-baseline justify-between border-b border-observatory-border px-6 py-4">
@@ -193,7 +229,10 @@ function SectionHeader({ label, title, href, linkLabel }: {
         <p className="mb-0.5 font-mono text-xs tracking-wider text-text-muted">{label}</p>
         <h2 className="text-base font-medium text-text-primary">{title}</h2>
       </div>
-      <a href={href} className="font-mono text-xs tracking-wider text-text-muted transition-colors hover:text-text-secondary">
+      <a
+        href={href}
+        className="font-mono text-xs tracking-wider text-text-muted transition-colors hover:text-text-secondary"
+      >
         {linkLabel.toUpperCase()} →
       </a>
     </div>
