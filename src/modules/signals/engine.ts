@@ -18,6 +18,7 @@
  */
 import { agentCompleteJSON } from '@/lib/ai/agent'
 import { AIProviderError } from '@/lib/ai/client'
+import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EnrichmentOutputSchema,
@@ -172,6 +173,7 @@ export async function processObservation(
   sourceTrustScore: number,
   sourceName: string,
   sourceType: string = '',
+  deadlineAt: number,
 ): Promise<SignalEngineResult> {
   const supabase = createAdminClient()
 
@@ -277,6 +279,7 @@ export async function processObservation(
       ],
       SISOutputSchema,
       { temperature: 0, maxTokens: 400 },
+      deadlineAt,
     )
     sisResult = computeSIS(
       sisRaw as Parameters<typeof computeSIS>[0],
@@ -286,6 +289,11 @@ export async function processObservation(
   } catch (err) {
     // Re-throw rate limit — batch handler will retry
     if (err instanceof AIProviderError && err.statusCode === 429) throw err
+    // Re-throw deadline exceeded — batch handler must requeue this
+    // observation and stop the batch, never silently proceed as if SIS
+    // just wasn't available (the whole point of the shared deadline is
+    // that continuing further work is not safe here).
+    if (err instanceof AIDeadlineExceededError) throw err
     // SIS failure → proceed without SIS (V1 fallback)
     console.warn('[engine] SIS evaluation failed, proceeding without:', err)
   }
@@ -352,9 +360,14 @@ export async function processObservation(
       ],
       EnrichmentOutputSchema,
       { temperature: 0.2, maxTokens: 1024 },
+      deadlineAt,
     )
   } catch (err) {
     if (err instanceof AIProviderError && err.statusCode === 429) throw err
+    // Re-throw deadline exceeded — must never be recorded as a
+    // permanent processing_error (see the identical comment on the SIS
+    // call site above for the full rationale).
+    if (err instanceof AIDeadlineExceededError) throw err
     const message = err instanceof Error ? err.message : 'Enrichment failed'
     return { observationId: observation.id, outcome: 'error', reason: message }
   }

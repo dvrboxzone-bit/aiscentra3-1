@@ -33,17 +33,17 @@ import type { ReasoningInput, ReasoningResult, ReasoningClaim, ClaimType } from 
 const ClaimTypeSchema = z.enum(['FACT', 'INFERENCE', 'GAP', 'HYPOTHESIS'])
 
 const ReasoningClaimSchema = z.object({
-  type:        ClaimTypeSchema,
-  statement:   z.string().min(1),
+  type: ClaimTypeSchema,
+  statement: z.string().min(1),
   evidenceIds: z.array(z.string()).default([]),
-  confidence:  z.number().int().min(0).max(10),
+  confidence: z.number().int().min(0).max(10),
 })
 
 const GroqReasoningOutputSchema = z.object({
-  summary:        z.string().min(1),
-  claims:         z.array(ReasoningClaimSchema).default([]),
+  summary: z.string().min(1),
+  claims: z.array(ReasoningClaimSchema).default([]),
   gapsIdentified: z.array(z.string()).default([]),
-  confidence:     z.number().int().min(0).max(10),
+  confidence: z.number().int().min(0).max(10),
 })
 
 type GroqReasoningOutput = z.infer<typeof GroqReasoningOutputSchema>
@@ -89,29 +89,55 @@ RULES:
 function buildReasoningPrompt(input: ReasoningInput): string {
   const { task, context } = input
 
-  const observationsBlock = context.observations.length > 0
-    ? context.observations.map(o => `  - [${o.id}] "${o.title}" (source: ${o.sourceName}): ${o.summary}`).join('\n')
-    : '  (none)'
+  const observationsBlock =
+    context.observations.length > 0
+      ? context.observations
+          .map((o) => `  - [${o.id}] "${o.title}" (source: ${o.sourceName}): ${o.summary}`)
+          .join('\n')
+      : '  (none)'
 
-  const signalsBlock = context.signals.length > 0
-    ? context.signals.map(s => `  - [${s.id}] "${s.title}" (${s.category}, score ${s.signalScore}, ${s.intelligenceType}): ${s.description}`).join('\n')
-    : '  (none)'
+  const signalsBlock =
+    context.signals.length > 0
+      ? context.signals
+          .map(
+            (s) =>
+              `  - [${s.id}] "${s.title}" (${s.category}, score ${s.signalScore}, ${s.intelligenceType}): ${s.description}`,
+          )
+          .join('\n')
+      : '  (none)'
 
-  const graphBlock = context.graphNodes.length > 0
-    ? context.graphNodes.map(g => `  - [${g.id}] ${g.nodeType}: "${g.label}"${g.description ? ` — ${g.description}` : ''}`).join('\n')
-    : '  (none)'
+  const graphBlock =
+    context.graphNodes.length > 0
+      ? context.graphNodes
+          .map(
+            (g) =>
+              `  - [${g.id}] ${g.nodeType}: "${g.label}"${g.description ? ` — ${g.description}` : ''}`,
+          )
+          .join('\n')
+      : '  (none)'
 
-  const memoryBlock = context.memoryEntries.length > 0
-    ? context.memoryEntries.map(m => `  - [${m.id}] ${m.memoryType}: "${m.title}" — ${m.summary} (confidence ${m.confidence})`).join('\n')
-    : '  (none)'
+  const memoryBlock =
+    context.memoryEntries.length > 0
+      ? context.memoryEntries
+          .map(
+            (m) =>
+              `  - [${m.id}] ${m.memoryType}: "${m.title}" — ${m.summary} (confidence ${m.confidence})`,
+          )
+          .join('\n')
+      : '  (none)'
 
-  const entitiesBlock = context.entities.length > 0
-    ? context.entities.map(e => `  - [${e.id}] ${e.entityType}: "${e.canonicalName}"${e.description ? ` — ${e.description}` : ''}`).join('\n')
-    : '  (none)'
+  const entitiesBlock =
+    context.entities.length > 0
+      ? context.entities
+          .map(
+            (e) =>
+              `  - [${e.id}] ${e.entityType}: "${e.canonicalName}"${e.description ? ` — ${e.description}` : ''}`,
+          )
+          .join('\n')
+      : '  (none)'
 
-  const gapsBlock = context.gaps.length > 0
-    ? context.gaps.map(g => `  - ${g}`).join('\n')
-    : '  (none)'
+  const gapsBlock =
+    context.gaps.length > 0 ? context.gaps.map((g) => `  - ${g}`).join('\n') : '  (none)'
 
   return `TASK QUERY: "${task.query}"
 TASK TYPE: ${task.type}
@@ -148,14 +174,26 @@ export class GroqReasoningEngine implements ReasoningEngine {
 
     const prompt = buildReasoningPrompt(input)
 
+    // Same shared-deadline contour as the Next.js app's /api/enrich/batch
+    // (see src/lib/ai/deadline.ts). This Edge Function runs in Deno, a
+    // separate deployment target from Vercel, so there is no
+    // `maxDuration` export here -- 60s/10s buffer mirrors the same
+    // conservative default used elsewhere in this project. Full
+    // Intelligence Agent deadline/timeout tuning is explicitly a later
+    // phase (per the owner's own stated sequencing); this keeps the
+    // shared agent.ts contract satisfied without expanding this PR's
+    // scope into that phase.
+    const deadlineAt = Date.now() + 60_000 - 10_000
+
     const rawOutput = await agentCompleteJSON(
       'analyzer',
       [
         { role: 'system', content: REASONING_SYSTEM_PROMPT },
-        { role: 'user',   content: prompt },
+        { role: 'user', content: prompt },
       ],
       GroqReasoningOutputSchema,
       { temperature: 0.2, maxTokens: 2000 },
+      deadlineAt,
     )
 
     // agentCompleteJSON<T> returns T & { _modelUsed?: string } — re-validate
@@ -165,20 +203,20 @@ export class GroqReasoningEngine implements ReasoningEngine {
 
     // Runtime-owned metadata (taskId, reasonedAt) — never produced by the LLM,
     // exactly mirroring how MockReasoningEngine assembles these fields.
-    const claims: ReasoningClaim[] = output.claims.map(c => ({
-      type:        c.type as ClaimType,
-      statement:   c.statement,
+    const claims: ReasoningClaim[] = output.claims.map((c) => ({
+      type: c.type as ClaimType,
+      statement: c.statement,
       evidenceIds: c.evidenceIds,
-      confidence:  c.confidence,
+      confidence: c.confidence,
     }))
 
     return {
-      taskId:         input.task.id,
-      summary:        output.summary,
+      taskId: input.task.id,
+      summary: output.summary,
       claims,
       gapsIdentified: output.gapsIdentified,
-      confidence:     output.confidence,
-      reasonedAt:     new Date().toISOString(),
+      confidence: output.confidence,
+      reasonedAt: new Date().toISOString(),
     }
   }
 }

@@ -24,6 +24,7 @@ TEST_DIRS=(
   "src/lib/security/__tests__"
   "scripts/release/__tests__"
   "src/modules/signals/__tests__"
+  "src/lib/ai/__tests__"
 )
 
 TEST_FILES=()

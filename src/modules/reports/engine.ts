@@ -29,7 +29,10 @@ export interface ReportResult {
 
 // ── Signal Brief ──────────────────────────────────────────────────────────────
 
-export async function generateSignalBrief(signal: Signal): Promise<ReportResult> {
+export async function generateSignalBrief(
+  signal: Signal,
+  deadlineAt: number,
+): Promise<ReportResult> {
   const supabase = createAdminClient()
 
   // Check if brief already exists for this signal
@@ -47,13 +50,15 @@ export async function generateSignalBrief(signal: Signal): Promise<ReportResult>
 
   let output
   try {
-    output = await agentCompleteJSON('writer', 
+    output = await agentCompleteJSON(
+      'writer',
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
-        { role: 'user',   content: buildSignalBriefPrompt(signal) },
+        { role: 'user', content: buildSignalBriefPrompt(signal) },
       ],
       ReportOutputSchema,
       { temperature: 0, maxTokens: 1500 },
+      deadlineAt,
     )
   } catch (err) {
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
@@ -63,16 +68,16 @@ export async function generateSignalBrief(signal: Signal): Promise<ReportResult>
   const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
-      title:        output.title,
-      summary:      output.summary,
-      content:      output.content,
-      report_type:  'SIGNAL_BRIEF',
-      signal_ids:   [signal.id],
-      event_ids:    [],
+      title: output.title,
+      summary: output.summary,
+      content: output.content,
+      report_type: 'SIGNAL_BRIEF',
+      signal_ids: [signal.id],
+      event_ids: [],
       published_at: new Date().toISOString(),
       metadata: {
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
-        generated_at:     new Date().toISOString(),
+        generated_at: new Date().toISOString(),
       },
     })
     .select('id')
@@ -87,7 +92,10 @@ export async function generateSignalBrief(signal: Signal): Promise<ReportResult>
 
 // ── Event Analysis ────────────────────────────────────────────────────────────
 
-export async function generateEventAnalysis(event: Event): Promise<ReportResult> {
+export async function generateEventAnalysis(
+  event: Event,
+  deadlineAt: number,
+): Promise<ReportResult> {
   const supabase = createAdminClient()
 
   // Check if analysis already exists for this event
@@ -114,13 +122,15 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
 
   let output
   try {
-    output = await agentCompleteJSON('writer', 
+    output = await agentCompleteJSON(
+      'writer',
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
-        { role: 'user',   content: buildEventAnalysisPrompt(event, signal) },
+        { role: 'user', content: buildEventAnalysisPrompt(event, signal) },
       ],
       ReportOutputSchema,
       { temperature: 0, maxTokens: 2000 },
+      deadlineAt,
     )
   } catch (err) {
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
@@ -130,16 +140,16 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
   const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
-      title:        output.title,
-      summary:      output.summary,
-      content:      output.content,
-      report_type:  'EVENT_ANALYSIS',
-      signal_ids:   signal ? [signal.id] : [],
-      event_ids:    [event.id],
+      title: output.title,
+      summary: output.summary,
+      content: output.content,
+      report_type: 'EVENT_ANALYSIS',
+      signal_ids: signal ? [signal.id] : [],
+      event_ids: [event.id],
       published_at: new Date().toISOString(),
       metadata: {
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
-        generated_at:     new Date().toISOString(),
+        generated_at: new Date().toISOString(),
       },
     })
     .select('id')
@@ -154,13 +164,13 @@ export async function generateEventAnalysis(event: Event): Promise<ReportResult>
 
 // ── Weekly Review ─────────────────────────────────────────────────────────────
 
-export async function generateWeeklyReview(): Promise<ReportResult> {
-  const supabase  = createAdminClient()
-  const weekEnd   = new Date()
+export async function generateWeeklyReview(deadlineAt: number): Promise<ReportResult> {
+  const supabase = createAdminClient()
+  const weekEnd = new Date()
   const weekStart = new Date(weekEnd.getTime() - 7 * 86400000)
 
   const weekStartStr = weekStart.toISOString().slice(0, 10)
-  const weekEndStr   = weekEnd.toISOString().slice(0, 10)
+  const weekEndStr = weekEnd.toISOString().slice(0, 10)
 
   // Check if weekly review already exists for this week
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -192,7 +202,7 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
       .limit(10),
   ])
 
-  const events  = (eventsRes.data  ?? []) as Event[]
+  const events = (eventsRes.data ?? []) as Event[]
   const signals = (signalsRes.data ?? []) as Signal[]
 
   // Need at least some data to generate a meaningful review
@@ -202,13 +212,18 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
 
   let output
   try {
-    output = await agentCompleteJSON('writer', 
+    output = await agentCompleteJSON(
+      'writer',
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
-        { role: 'user',   content: buildWeeklyReviewPrompt(events, signals, weekStartStr, weekEndStr) },
+        {
+          role: 'user',
+          content: buildWeeklyReviewPrompt(events, signals, weekStartStr, weekEndStr),
+        },
       ],
       ReportOutputSchema,
       { temperature: 0, maxTokens: 2500 },
+      deadlineAt,
     )
   } catch (err) {
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
@@ -218,18 +233,18 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
   const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
-      title:        output.title,
-      summary:      output.summary,
-      content:      output.content,
-      report_type:  'WEEKLY_REVIEW',
-      signal_ids:   signals.map((s) => s.id),
-      event_ids:    events.map((e)  => e.id),
+      title: output.title,
+      summary: output.summary,
+      content: output.content,
+      report_type: 'WEEKLY_REVIEW',
+      signal_ids: signals.map((s) => s.id),
+      event_ids: events.map((e) => e.id),
       published_at: new Date().toISOString(),
       metadata: {
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
-        generated_at:     new Date().toISOString(),
-        week_start:       weekStartStr,
-        week_end:         weekEndStr,
+        generated_at: new Date().toISOString(),
+        week_start: weekStartStr,
+        week_end: weekEndStr,
       },
     })
     .select('id')
@@ -244,10 +259,13 @@ export async function generateWeeklyReview(): Promise<ReportResult> {
 
 // ── Trend Report ──────────────────────────────────────────────────────────────
 
-export async function generateTrendReport(category: SignalCategory): Promise<ReportResult> {
+export async function generateTrendReport(
+  category: SignalCategory,
+  deadlineAt: number,
+): Promise<ReportResult> {
   const supabase = createAdminClient()
   const since30d = new Date(Date.now() - 30 * 86400000).toISOString()
-  const period   = 'Last 30 Days'
+  const period = 'Last 30 Days'
 
   // Check if trend report exists for this category this month
   const monthStart = new Date()
@@ -281,18 +299,23 @@ export async function generateTrendReport(category: SignalCategory): Promise<Rep
   const signals = (signalsData ?? []) as Signal[]
 
   if (signals.length < 3) {
-    return { outcome: 'skipped', reason: `Insufficient signals in ${category} for trend analysis (need 3+)` }
+    return {
+      outcome: 'skipped',
+      reason: `Insufficient signals in ${category} for trend analysis (need 3+)`,
+    }
   }
 
   let output
   try {
-    output = await agentCompleteJSON('writer', 
+    output = await agentCompleteJSON(
+      'writer',
       [
         { role: 'system', content: REPORT_SYSTEM_PROMPT },
-        { role: 'user',   content: buildTrendReportPrompt(signals, category, period) },
+        { role: 'user', content: buildTrendReportPrompt(signals, category, period) },
       ],
       ReportOutputSchema,
       { temperature: 0, maxTokens: 2000 },
+      deadlineAt,
     )
   } catch (err) {
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
@@ -302,16 +325,16 @@ export async function generateTrendReport(category: SignalCategory): Promise<Rep
   const { data: report, error } = await (supabase as any)
     .from('reports')
     .insert({
-      title:        output.title,
-      summary:      output.summary,
-      content:      output.content,
-      report_type:  'TREND_REPORT',
-      signal_ids:   signals.map((s) => s.id),
-      event_ids:    [],
+      title: output.title,
+      summary: output.summary,
+      content: output.content,
+      report_type: 'TREND_REPORT',
+      signal_ids: signals.map((s) => s.id),
+      event_ids: [],
       published_at: new Date().toISOString(),
       metadata: {
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
-        generated_at:     new Date().toISOString(),
+        generated_at: new Date().toISOString(),
         category,
         period,
       },

@@ -30,6 +30,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Same shared-deadline contour as /api/enrich/batch (see
+  // src/lib/ai/deadline.ts), sized to this route's own maxDuration=10.
+  const deadlineAt = Date.now() + maxDuration * 1000 - 2_000
+
   let body: { observationId?: string } = {}
   try {
     body = (await request.json()) as { observationId?: string }
@@ -78,7 +82,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const sourceName = (source?.name as string | undefined) ?? 'Unknown Source'
 
   // Process the observation through the Signal Engine
-  const result = await processObservation(observation, trustScore, sourceName)
+  const result = await processObservation(observation, trustScore, sourceName, '', deadlineAt)
 
   // Mark observation as processed (success or failure)
   await markObservationProcessed(
@@ -88,7 +92,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   )
 
   // Log result for monitoring
-  console.log(`[enrich] obs=${observation.id} outcome=${result.outcome}`, result.scores ?? result.reason ?? '')
+  console.log(
+    `[enrich] obs=${observation.id} outcome=${result.outcome}`,
+    result.scores ?? result.reason ?? '',
+  )
 
   return NextResponse.json(result)
 }

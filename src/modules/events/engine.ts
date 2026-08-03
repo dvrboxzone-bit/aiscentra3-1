@@ -24,7 +24,10 @@ export interface EventEngineResult {
   reason?: string
 }
 
-export async function processSignalIntoEvent(signal: Signal): Promise<EventEngineResult> {
+export async function processSignalIntoEvent(
+  signal: Signal,
+  deadlineAt: number,
+): Promise<EventEngineResult> {
   const supabase = createAdminClient()
 
   // ── Guard: check for existing event on this signal ────────────────────────
@@ -38,8 +41,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   if (existing?.id) {
     return {
       signalId: signal.id,
-      outcome:  'rejected_duplicate',
-      reason:   `Event already exists for signal ${signal.id}`,
+      outcome: 'rejected_duplicate',
+      reason: `Event already exists for signal ${signal.id}`,
     }
   }
 
@@ -47,7 +50,7 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   let entityNames: string[] = []
   if (signal.entity_ids.length > 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: entities } = await (supabase as any)
+    const { data: entities } = await (supabase as any)
       .from('entities')
       .select('name')
       .in('id', signal.entity_ids)
@@ -55,10 +58,10 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   }
 
   // ── Fetch original observation content ────────────────────────────────────
-  let observationContent = signal.description  // fallback
+  let observationContent = signal.description // fallback
   if (signal.observation_ids.length > 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: obs } = await (supabase as any)
+    const { data: obs } = await (supabase as any)
       .from('observations')
       .select('content')
       .eq('id', signal.observation_ids[0])
@@ -68,38 +71,37 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
 
   // ── AI Enrichment ─────────────────────────────────────────────────────────
   const prompt = buildEventPrompt({
-    signalTitle:        signal.title,
-    signalDescription:  signal.description,
-    signalCategory:     signal.category,
-    signalScore:        signal.signal_score,
-    confidenceScore:    signal.confidence_score,
+    signalTitle: signal.title,
+    signalDescription: signal.description,
+    signalCategory: signal.category,
+    signalScore: signal.signal_score,
+    confidenceScore: signal.confidence_score,
     entityNames,
     observationContent,
   })
 
   let enriched
   try {
-    enriched = await agentCompleteJSON('analyzer', 
+    enriched = await agentCompleteJSON(
+      'analyzer',
       [
         { role: 'system', content: EVENT_ENRICHMENT_SYSTEM_PROMPT },
-        { role: 'user',   content: prompt },
+        { role: 'user', content: prompt },
       ],
       EventEnrichmentSchema,
       { temperature: 0, maxTokens: 1000 },
+      deadlineAt,
     )
   } catch (err) {
     return {
       signalId: signal.id,
-      outcome:  'error',
-      reason:   err instanceof Error ? err.message : 'Enrichment failed',
+      outcome: 'error',
+      reason: err instanceof Error ? err.message : 'Enrichment failed',
     }
   }
 
   // ── Validate forecast framing ─────────────────────────────────────────────
-  if (
-    !enriched.forecast.startsWith('Expected:') &&
-    !enriched.forecast.startsWith('Watch for:')
-  ) {
+  if (!enriched.forecast.startsWith('Expected:') && !enriched.forecast.startsWith('Watch for:')) {
     // Fix it rather than reject — prepend the required prefix
     enriched = {
       ...enriched,
@@ -118,7 +120,7 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
       .trim()
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: entity } = await (supabase as any)
+    const { data: entity } = await (supabase as any)
       .from('entities')
       .select('id')
       .eq('canonical_name', canonicalName)
@@ -134,21 +136,21 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   const { data: event, error: eventError } = await (supabase as any)
     .from('events')
     .insert({
-      signal_id:           signal.id,
-      title:               enriched.title,
-      summary:             enriched.summary,
-      impact_summary:      enriched.impact_summary,
-      forecast:            enriched.forecast,
-      forecast_outcome:    'UNRESOLVED',
-      impact_score:        enriched.impact_score,
-      event_type:          enriched.event_type,
-      timeline_date:       enriched.timeline_date,
+      signal_id: signal.id,
+      title: enriched.title,
+      summary: enriched.summary,
+      impact_summary: enriched.impact_summary,
+      forecast: enriched.forecast,
+      forecast_outcome: 'UNRESOLVED',
+      impact_score: enriched.impact_score,
+      event_type: enriched.event_type,
+      timeline_date: enriched.timeline_date,
       affected_entity_ids: affectedEntityIds,
-      manual_override:     false,
+      manual_override: false,
       metadata: {
         enrichment_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
-        enriched_at:      new Date().toISOString(),
-        source_signal_score:     signal.signal_score,
+        enriched_at: new Date().toISOString(),
+        source_signal_score: signal.signal_score,
         source_confidence_score: signal.confidence_score,
       },
     })
@@ -158,8 +160,8 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
   if (eventError || !event?.id) {
     return {
       signalId: signal.id,
-      outcome:  'error',
-      reason:   `Event insert failed: ${eventError?.message ?? 'unknown'}`,
+      outcome: 'error',
+      reason: `Event insert failed: ${eventError?.message ?? 'unknown'}`,
     }
   }
 
@@ -170,7 +172,7 @@ export async function processSignalIntoEvent(signal: Signal): Promise<EventEngin
 
   return {
     signalId: signal.id,
-    outcome:  'event_created',
-    eventId:  event.id as string,
+    outcome: 'event_created',
+    eventId: event.id as string,
   }
 }

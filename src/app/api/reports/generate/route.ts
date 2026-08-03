@@ -33,6 +33,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Same shared-deadline contour as /api/enrich/batch (see
+  // src/lib/ai/deadline.ts), sized to this route's own maxDuration=10.
+  const deadlineAt = Date.now() + maxDuration * 1000 - 2_000
+
   const body = (await request.json()) as {
     type: string
     signalId?: string
@@ -49,7 +53,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
       const { data } = await supabase.from('signals').select('*').eq('id', body.signalId).single()
       if (!data) return NextResponse.json({ error: 'Signal not found' }, { status: 404 })
-      const result = await generateSignalBrief(data as Signal)
+      const result = await generateSignalBrief(data as Signal, deadlineAt)
       return NextResponse.json(result)
     }
 
@@ -59,12 +63,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
       const { data } = await supabase.from('events').select('*').eq('id', body.eventId).single()
       if (!data) return NextResponse.json({ error: 'Event not found' }, { status: 404 })
-      const result = await generateEventAnalysis(data as Event)
+      const result = await generateEventAnalysis(data as Event, deadlineAt)
       return NextResponse.json(result)
     }
 
     case 'WEEKLY_REVIEW': {
-      const result = await generateWeeklyReview()
+      const result = await generateWeeklyReview(deadlineAt)
       return NextResponse.json(result)
     }
 
@@ -72,7 +76,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (!body.category) {
         return NextResponse.json({ error: 'category required' }, { status: 400 })
       }
-      const result = await generateTrendReport(body.category as SignalCategory)
+      const result = await generateTrendReport(body.category as SignalCategory, deadlineAt)
       return NextResponse.json(result)
     }
 

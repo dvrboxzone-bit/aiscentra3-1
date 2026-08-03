@@ -111,6 +111,7 @@ export interface AdminDependencies {
     content: string
     sourceName: string
     sourceType: string
+    deadlineAt: number
   }) => Promise<unknown>
   /** Classifies whether a thrown error represents a rate-limit condition, without exposing its raw content. */
   isRateLimitError: (err: unknown) => boolean
@@ -133,7 +134,7 @@ const productionAdminDependencies: AdminDependencies = {
       .limit(3)
     return { data: (data ?? null) as ObservationWithSource[] | null, error }
   },
-  callAI: async ({ title, content, sourceName, sourceType }) => {
+  callAI: async ({ title, content, sourceName, sourceType, deadlineAt }) => {
     const { agentCompleteJSON } = await import('@/lib/ai/agent')
     const raw = await agentCompleteJSON(
       'classifier',
@@ -143,6 +144,7 @@ const productionAdminDependencies: AdminDependencies = {
       ],
       SISOutputSchema,
       { temperature: 0, maxTokens: 400 },
+      deadlineAt,
     )
     return raw
   },
@@ -183,6 +185,10 @@ export function createAdminPostHandler(deps: AdminDependencies) {
       console.error(`[api/admin/simulate-engine-v2] ${guard.internalReason}`)
       return guard.response
     }
+
+    // Same shared-deadline contour as /api/enrich/batch (see
+    // src/lib/ai/deadline.ts), sized to this route's own maxDuration=60.
+    const deadlineAt = Date.now() + maxDuration * 1000 - 10_000
 
     const client = await deps.loadAdminClient()
 
@@ -230,6 +236,7 @@ export function createAdminPostHandler(deps: AdminDependencies) {
           content: obs.content,
           sourceName,
           sourceType,
+          deadlineAt,
         })
         const sis = computeSIS(sisRaw as Parameters<typeof computeSIS>[0], obs.title, obs.content)
         item.sis_final = sis.sis.final

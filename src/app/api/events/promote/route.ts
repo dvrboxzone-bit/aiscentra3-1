@@ -28,22 +28,26 @@ function isAuthorized(request: Request): boolean {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  // Same shared-deadline contour as /api/enrich/batch (see
+  // src/lib/ai/deadline.ts), sized to this route's own maxDuration=10.
+  const deadlineAt = Date.now() + maxDuration * 1000 - 2_000
+
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   let body: { signalId?: string } = {}
-  try { body = (await request.json()) as { signalId?: string } } catch { /* empty body ok */ }
+  try {
+    body = (await request.json()) as { signalId?: string }
+  } catch {
+    /* empty body ok */
+  }
 
   const supabase = createAdminClient()
   let signal: Signal | null = null
 
   if (body.signalId) {
-    const { data } = await supabase
-      .from('signals')
-      .select('*')
-      .eq('id', body.signalId)
-      .single()
+    const { data } = await supabase.from('signals').select('*').eq('id', body.signalId).single()
     signal = data as Signal | null
   } else {
     const eligible = await fetchEligibleSignals(1)
@@ -59,7 +63,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!eligCheck.eligible) {
     return NextResponse.json({
       message: 'Signal not eligible',
-      reason:  eligCheck.reason,
+      reason: eligCheck.reason,
       signalId: signal.id,
     })
   }
@@ -68,13 +72,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   const rateCheck = await checkRateLimits(signal.category)
   if (!rateCheck.allowed) {
     return NextResponse.json({
-      message:       'Rate limit reached',
+      message: 'Rate limit reached',
       categoryCount: rateCheck.categoryCount,
-      totalCount:    rateCheck.totalCount,
+      totalCount: rateCheck.totalCount,
     })
   }
 
-  const result = await processSignalIntoEvent(signal)
+  const result = await processSignalIntoEvent(signal, deadlineAt)
 
   return NextResponse.json(result)
 }

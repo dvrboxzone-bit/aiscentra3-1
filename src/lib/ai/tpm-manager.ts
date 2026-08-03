@@ -13,7 +13,14 @@
  * - Before each request: check if estimated tokens fit in remaining budget
  * - If not: wait until window resets
  * - Sequential queue: one request at a time per model (no parallel calls)
+ *
+ * Both the TPM wait and the sequential queue below are threaded with
+ * the shared AI-call deadline (see ./deadline.ts) -- neither may wait
+ * past it. A previous version of this file had no deadline awareness
+ * at all, letting a single stalled or heavily rate-limited call
+ * silently consume the caller's entire remaining time budget.
  */
+import { ensureTimeLeft, sleepWithDeadline } from './deadline'
 
 // ── TPM limits per model ──────────────────────────────────────────────────────
 
@@ -101,6 +108,7 @@ export function checkTPMBudget(model: string, estimatedTokens: number): BudgetCh
 export async function waitForTPMBudget(
   model: string,
   estimatedTokens: number,
+  deadlineAt: number,
   maxWaitMs: number = 120_000,
 ): Promise<void> {
   const start = Date.now()
@@ -108,6 +116,8 @@ export async function waitForTPMBudget(
   while (true) {
     const check = checkTPMBudget(model, estimatedTokens)
     if (check.allowed) return
+
+    ensureTimeLeft(deadlineAt, check.waitMs, `waitForTPMBudget:${model}`)
 
     if (Date.now() - start > maxWaitMs) {
       console.warn(`[tpm-manager] Max wait exceeded for ${model}, proceeding anyway`)
@@ -117,7 +127,7 @@ export async function waitForTPMBudget(
     console.info(
       `[tpm-manager] TPM budget: ${check.usedTokens}/${check.limitTokens} used. Waiting ${check.waitMs}ms for ${model}`,
     )
-    await new Promise((r) => setTimeout(r, check.waitMs))
+    await sleepWithDeadline(check.waitMs, deadlineAt, `waitForTPMBudget:${model}`)
   }
 }
 
@@ -132,7 +142,11 @@ export function recordActualTokens(model: string, inputTokens: number, outputTok
 
 const modelQueues = new Map<string, Promise<void>>()
 
-export async function withModelQueue<T>(model: string, fn: () => Promise<T>): Promise<T> {
+export async function withModelQueue<T>(
+  model: string,
+  fn: () => Promise<T>,
+  deadlineAt: number,
+): Promise<T> {
   const prev = modelQueues.get(model) ?? Promise.resolve()
 
   let resolve!: () => void
@@ -142,6 +156,10 @@ export async function withModelQueue<T>(model: string, fn: () => Promise<T>): Pr
   modelQueues.set(model, next)
 
   await prev
+  // Re-check after the queue wait -- the previous in-flight call for
+  // this model is itself now deadline-bound and cannot wait forever,
+  // but this check stays explicit rather than assuming that.
+  ensureTimeLeft(deadlineAt, 1_000, `withModelQueue:${model}:post-queue-wait`)
   try {
     return await fn()
   } finally {

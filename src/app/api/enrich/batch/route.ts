@@ -9,15 +9,40 @@
  *   - DB overhead per observation: ~1s
  *   - Safe batch size: floor(60s / 7s) = 8 observations
  *   - Safety margin 10% → BATCH_SIZE = 7
+ * (BATCH_SIZE itself is explicitly out of scope for this change --
+ * unchanged at 3.)
  *
  * Autonomy:
- *   Processes observations in a loop until queue is empty OR time budget is
- *   exhausted. No manual re-triggers needed mid-queue.
+ *   Processes observations in a loop until queue is empty OR the shared
+ *   deadline is reached. No manual re-triggers needed mid-queue.
+ *
+ * Deadline contour (real incident fix):
+ *   A single absolute `deadlineAt` (epoch ms) is created ONCE here and
+ *   threaded through the entire AI call chain (processObservation →
+ *   agentCompleteJSON → withRetry → withModelQueue → waitForTPMBudget →
+ *   callProvider's fetch, see src/lib/ai/deadline.ts for the full
+ *   rationale). Previously, this route's own TIME_BUDGET check only ran
+ *   BETWEEN observations and could not stop an already-in-flight call --
+ *   agent.ts's retry/backoff logic (5s/10s/20s/40s schedule, no time-
+ *   budget awareness) could legitimately spend 75+ seconds on a single
+ *   observation, confirmed live via Vercel's runtime error log ("Task
+ *   timed out after 60 seconds" on this exact route, recurring since
+ *   2026-07-28). DEADLINE_BUFFER_MS below leaves at least 10s between
+ *   the deadline and Vercel's actual kill point, specifically so a
+ *   deadline-triggered requeue and this function's own JSON response
+ *   have time to complete.
  *
  * HTTP 429 handling:
  *   429 = rate_limit from AI provider — temporary, NOT an error.
  *   Observation is returned to queue via markObservationForRetry() with 60s backoff.
  *   It will be picked up in the next batch run automatically.
+ *
+ * AI_DEADLINE_EXCEEDED handling:
+ *   The deadline was reached mid-call (any layer) — also temporary, NOT
+ *   a processing error. The in-flight observation is requeued with a
+ *   short, distinct backoff (DEADLINE_RETRY_MS), and the whole batch
+ *   loop stops immediately so this invocation can return a controlled
+ *   JSON response instead of being force-killed by Vercel.
  *
  * Called by: /api/cron/pipeline (daily Vercel Cron)
  * Also available for manual drain.
@@ -27,6 +52,7 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation } from '@/modules/signals/engine'
 import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
 import { AIProviderError } from '@/lib/ai/client'
+import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import type { ObservationRow } from '@/modules/observations/queries'
 
 export const maxDuration = 60
@@ -36,10 +62,10 @@ export const dynamic = 'force-dynamic'
 // Direct models: llama-3.3-70b (12K TPM) + llama-3.1-8b (fallback)
 // Each enrichment: ~1000-1500 tokens → max 8-12 requests/minute safely
 // Conservative: 1 request per 6s = 10 requests/minute (20% headroom)
-// TIME_BUDGET 54s → max 9 requests but we cap at 3 for stability
-const BATCH_SIZE = 3 // 3 observations per run — conservative for stability
-const TIME_BUDGET = 54_000 // 54s — leave 6s buffer before Vercel kills function
-const AI_RETRY_MS = 30_000 // 30s backoff after 429
+const BATCH_SIZE = 3 // 3 observations per run — conservative for stability. UNCHANGED.
+const DEADLINE_BUFFER_MS = 10_000 // >=10s between deadline and Vercel's actual kill, for requeue + response
+const AI_RETRY_MS = 30_000 // 30s backoff after 429 (no Retry-After header available)
+const DEADLINE_RETRY_MS = 10_000 // short backoff after AI_DEADLINE_EXCEEDED -- distinct from rate-limit backoff
 const INTER_REQUEST_MS = 6_000 // 6s between requests — 10 RPM effective rate
 
 function isAuthorized(request: Request): boolean {
@@ -55,6 +81,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const startedAt = Date.now()
+  const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
   const supabase = createAdminClient()
 
   const stats = {
@@ -63,12 +90,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     rejected: 0,
     retried: 0,
     errors: 0,
-    stopped_reason: 'queue_empty' as 'queue_empty' | 'time_budget' | 'rate_limited',
+    stopped_reason: 'queue_empty' as
+      | 'queue_empty'
+      | 'time_budget'
+      | 'rate_limited'
+      | 'deadline_exceeded',
     // Detailed error breakdown per analysis report
     error_breakdown: {
       rate_limit: 0,
       server_error: 0,
       timeout: 0,
+      deadline_exceeded: 0,
       json_parse: 0,
       validation: 0,
       database: 0,
@@ -76,10 +108,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     },
   }
 
-  // ── Autonomous loop — runs until queue empty or time budget exhausted ───────
+  // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
   while (true) {
-    const elapsed = Date.now() - startedAt
-    if (elapsed >= TIME_BUDGET) {
+    if (Date.now() >= deadlineAt) {
       stats.stopped_reason = 'time_budget'
       break
     }
@@ -114,8 +145,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     // ── Process each observation ─────────────────────────────────────────────
     for (const observation of ready) {
-      const remaining = TIME_BUDGET - (Date.now() - startedAt)
-      if (remaining < 8_000) {
+      if (msUntilDeadline(deadlineAt) < 8_000) {
         // Less than 8s left — not enough for another AI call
         stats.stopped_reason = 'time_budget'
         break
@@ -133,7 +163,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         const trustScore = source?.trust_score ?? 0.5
         const sourceName = source?.name ?? 'Unknown Source'
 
-        const result = await processObservation(observation, trustScore, sourceName)
+        const result = await processObservation(observation, trustScore, sourceName, '', deadlineAt)
 
         await markObservationProcessed(
           observation.id,
@@ -149,11 +179,28 @@ export async function POST(request: Request): Promise<NextResponse> {
         console.log(`[enrich/batch] ${observation.id} → ${result.outcome}`)
 
         // Inter-request delay — prevents TPM/RPM exhaustion on direct models
-        const timeLeft = TIME_BUDGET - (Date.now() - startedAt)
-        if (timeLeft > INTER_REQUEST_MS + 8_000) {
+        if (msUntilDeadline(deadlineAt) > INTER_REQUEST_MS + 8_000) {
           await new Promise((r) => setTimeout(r, INTER_REQUEST_MS))
         }
       } catch (err) {
+        // AI_DEADLINE_EXCEEDED: temporary, like rate-limit -- requeue with
+        // a short, distinct backoff and stop the whole batch immediately
+        // so this invocation can return a controlled response instead of
+        // being force-killed by Vercel. Checked BEFORE the AIProviderError
+        // branch below since AIDeadlineExceededError is a sibling type,
+        // not a subclass, and must never fall through to the generic
+        // "mark as permanent processing_error" path.
+        if (err instanceof AIDeadlineExceededError) {
+          stats.error_breakdown.deadline_exceeded++
+          await markObservationForRetry(observation.id, DEADLINE_RETRY_MS)
+          stats.retried++
+          stats.stopped_reason = 'deadline_exceeded'
+          console.warn(
+            `[enrich/batch] deadline_exceeded — ${observation.id} queued for retry in ${DEADLINE_RETRY_MS}ms (${err.context})`,
+          )
+          break
+        }
+
         // Classify error
         const isRateLimit = err instanceof AIProviderError && err.isRateLimit
         const isServerErr = err instanceof AIProviderError && err.isServerError
@@ -198,8 +245,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
     }
 
-    // If we hit rate limit, stop the loop — next cron run will continue
-    if (stats.stopped_reason === 'rate_limited') break
+    // If we hit rate limit or the deadline, stop the loop entirely --
+    // next run (rate limit) or the requeue's own backoff (deadline)
+    // will pick this back up.
+    if (stats.stopped_reason === 'rate_limited' || stats.stopped_reason === 'deadline_exceeded')
+      break
   }
 
   const duration = Date.now() - startedAt
