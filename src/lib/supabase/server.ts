@@ -9,7 +9,8 @@
  */
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { env, serverEnv } from '@/config/env'
+import { env } from '@/config/env'
+import { serverEnv } from '@/config/server-env'
 import type { Database } from './types'
 
 export async function createClient(): Promise<ReturnType<typeof createServerClient<Database>>> {

@@ -30,24 +30,12 @@
  * NEXT_PUBLIC_SUPABASE_URL") that persisted across four separate,
  * otherwise-correct release-engineering fixes.
  *
- * requireEnv()/optionalEnv() below remain fine to use for SERVER-ONLY
- * variables (serverEnv, getGroqApiKey, getCronSecret) -- those never
- * need build-time client-bundle inlining at all; a real Node process
- * reads process.env dynamically at runtime on the server without this
- * restriction. The restriction applies specifically to values exposed
- * to the browser.
+ * requireStaticEnv()/optionalEnv() below are fine for values used in
+ * this file. Genuinely server-only secrets (SUPABASE_SERVICE_ROLE_KEY,
+ * GROQ_API_KEY, CRON_SECRET, ADMIN_EMAIL) live in ./server-env.ts, a
+ * separate file never imported by client-bundled code -- see that
+ * file's docstring for why the split itself matters, not just naming.
  */
-
-function requireEnv(key: string): string {
-  const value = process.env[key]
-  if (!value) {
-    throw new Error(
-      `[AIscentra] Missing required environment variable: ${key}\n` +
-        `Copy .env.example to .env.local and fill in the value.`,
-    )
-  }
-  return value
-}
 
 function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback
@@ -137,32 +125,12 @@ export const env = {
   IS_DEV: process.env.NODE_ENV === 'development',
 } as const
 
-// ── Server-only ───────────────────────────────────────────────────────────────
-export const serverEnv = {
-  SUPABASE_SERVICE_ROLE_KEY: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
-  // OpenRouter — preserved for future, optional
-  OPENROUTER_API_KEY: optionalEnv('OPENROUTER_API_KEY', ''),
-  OPENROUTER_MODEL: optionalEnv('OPENROUTER_MODEL', ''),
-  ADMIN_EMAIL: requireEnv('ADMIN_EMAIL'),
-} as const
-
-/**
- * GROQ_API_KEY — lazy runtime getter.
- * Not evaluated at build time. Set in Vercel Environment Variables.
- */
-export function getGroqApiKey(): string {
-  const value = process.env['GROQ_API_KEY']
-  if (!value) throw new Error('[AIscentra] GROQ_API_KEY is not set in environment variables.')
-  return value
-}
-
-/**
- * CRON_SECRET — lazy runtime getter.
- * Not evaluated at build time. Set in Vercel Environment Variables.
- */
-export function getCronSecret(): string {
-  const value = process.env['CRON_SECRET']
-  if (!value)
-    throw new Error('[AIscentra] CRON_SECRET is not set. Add it to Vercel Environment Variables.')
-  return value
-}
+// Server-only variables (serverEnv, getGroqApiKey, getCronSecret) now
+// live in ./server-env.ts -- a SEPARATE file, never imported by
+// src/lib/supabase/client.ts or any other client-bundled module. See
+// that file's docstring for why this split is a real, load-bearing
+// architectural boundary (a real incident, not just organization):
+// this module is imported by client.ts, and ES modules execute every
+// top-level statement on load regardless of which export is actually
+// used -- keeping server-only secrets in a separate file makes it
+// structurally impossible for them to be evaluated in the browser.
