@@ -9,15 +9,46 @@
  *   - DB overhead per observation: ~1s
  *   - Safe batch size: floor(60s / 7s) = 8 observations
  *   - Safety margin 10% → BATCH_SIZE = 7
+ * (BATCH_SIZE itself is explicitly out of scope for this change --
+ * unchanged at 3.)
  *
  * Autonomy:
- *   Processes observations in a loop until queue is empty OR time budget is
- *   exhausted. No manual re-triggers needed mid-queue.
+ *   Processes observations in a loop until queue is empty OR the shared
+ *   deadline is reached. No manual re-triggers needed mid-queue.
+ *
+ * Deadline contour (real incident fix):
+ *   A single absolute `deadlineAt` (epoch ms) is created ONCE here and
+ *   threaded through the entire AI call chain (processObservation →
+ *   agentCompleteJSON → withRetry → withModelQueue → waitForTPMBudget →
+ *   callProvider's fetch, see src/lib/ai/deadline.ts for the full
+ *   rationale). Previously, this route's own TIME_BUDGET check only ran
+ *   BETWEEN observations and could not stop an already-in-flight call --
+ *   agent.ts's retry/backoff logic (MAX_RETRIES=3, 4 attempts with
+ *   5s/10s/20s backoff between them, no time-budget awareness) could
+ *   legitimately spend up to 35s of backoff alone on a single model,
+ *   up to ~70s across a 2-model fallback chain for one AI call, and up
+ *   to ~140s across the two AI calls processObservation makes per
+ *   observation (SIS classifier stage, then main enrichment/parser
+ *   stage) -- confirmed live via Vercel's runtime error log ("Task
+ *   timed out after 60 seconds" on this exact route, recurring since
+ *   2026-07-28). DEADLINE_BUFFER_MS below leaves at least 10s between
+ *   the deadline and Vercel's actual kill point, specifically so a
+ *   deadline-triggered requeue and this function's own JSON response
+ *   have time to complete. Already-processed observations from earlier
+ *   in the same run are not lost by this failure mode -- each one is
+ *   marked processed (or requeued) individually before the next starts.
  *
  * HTTP 429 handling:
  *   429 = rate_limit from AI provider — temporary, NOT an error.
  *   Observation is returned to queue via markObservationForRetry() with 60s backoff.
  *   It will be picked up in the next batch run automatically.
+ *
+ * AI_DEADLINE_EXCEEDED handling:
+ *   The deadline was reached mid-call (any layer) — also temporary, NOT
+ *   a processing error. The in-flight observation is requeued with a
+ *   short, distinct backoff (DEADLINE_RETRY_MS), and the whole batch
+ *   loop stops immediately so this invocation can return a controlled
+ *   JSON response instead of being force-killed by Vercel.
  *
  * Called by: /api/cron/pipeline (daily Vercel Cron)
  * Also available for manual drain.
@@ -27,6 +58,7 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation } from '@/modules/signals/engine'
 import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
 import { AIProviderError } from '@/lib/ai/client'
+import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import type { ObservationRow } from '@/modules/observations/queries'
 
 export const maxDuration = 60
@@ -36,11 +68,222 @@ export const dynamic = 'force-dynamic'
 // Direct models: llama-3.3-70b (12K TPM) + llama-3.1-8b (fallback)
 // Each enrichment: ~1000-1500 tokens → max 8-12 requests/minute safely
 // Conservative: 1 request per 6s = 10 requests/minute (20% headroom)
-// TIME_BUDGET 54s → max 9 requests but we cap at 3 for stability
-const BATCH_SIZE = 3 // 3 observations per run — conservative for stability
-const TIME_BUDGET = 54_000 // 54s — leave 6s buffer before Vercel kills function
-const AI_RETRY_MS = 30_000 // 30s backoff after 429
+const BATCH_SIZE = 3 // 3 observations per run — conservative for stability. UNCHANGED.
+const DEADLINE_BUFFER_MS = 10_000 // >=10s between deadline and Vercel's actual kill, for requeue + response
+const AI_RETRY_MS = 30_000 // 30s backoff after 429 (no Retry-After header available)
+const DEADLINE_RETRY_MS = 10_000 // short backoff after AI_DEADLINE_EXCEEDED -- distinct from rate-limit backoff
 const INTER_REQUEST_MS = 6_000 // 6s between requests — 10 RPM effective rate
+
+export interface BatchStats {
+  processed: number
+  signal_created: number
+  rejected: number
+  retried: number
+  errors: number
+  stopped_reason:
+    | 'queue_empty'
+    | 'time_budget'
+    | 'rate_limited'
+    | 'deadline_exceeded'
+    | 'requeue_failed'
+  error_breakdown: {
+    rate_limit: number
+    server_error: number
+    timeout: number
+    deadline_exceeded: number
+    requeue_failed: number
+    json_parse: number
+    validation: number
+    database: number
+    unknown: number
+  }
+}
+
+function freshStats(): BatchStats {
+  return {
+    processed: 0,
+    signal_created: 0,
+    rejected: 0,
+    retried: 0,
+    errors: 0,
+    stopped_reason: 'queue_empty',
+    error_breakdown: {
+      rate_limit: 0,
+      server_error: 0,
+      timeout: 0,
+      deadline_exceeded: 0,
+      requeue_failed: 0,
+      json_parse: 0,
+      validation: 0,
+      database: 0,
+      unknown: 0,
+    },
+  }
+}
+
+/**
+ * Dependencies for processBatchOfObservations, injected purely for
+ * testability -- the real POST handler below constructs the real
+ * Supabase-backed versions and passes them through unchanged. This is
+ * the minimal seam needed to test the loop's stop/continue behavior
+ * (deadline exceeded, rate limit, requeue failure) without mocking
+ * Supabase's full query-builder chain for every call it makes.
+ */
+export interface BatchProcessingDeps {
+  fetchSourceInfo: (sourceId: string) => Promise<{ trustScore: number; sourceName: string }>
+  processObservation: typeof processObservation
+  markObservationProcessed: typeof markObservationProcessed
+  markObservationForRetry: typeof markObservationForRetry
+  /** Overridable for tests that need to observe/skip the real 6s inter-request delay. */
+  sleep?: (ms: number) => Promise<void>
+}
+
+/**
+ * Processes one already-fetched batch of ready observations
+ * sequentially, stopping early on a deadline hit, a rate limit, or a
+ * requeue write failure -- extracted from the POST handler below so
+ * this stop/continue behavior (points 7-8 of the task this was
+ * written for: "after deadline, batch stops and the next observation
+ * is not processed"; "same honest behavior for 429") is directly
+ * testable with a fixed, injected observation list instead of needing
+ * to mock Supabase's SELECT query.
+ */
+export async function processBatchOfObservations(
+  ready: ObservationRow[],
+  deadlineAt: number,
+  deps: BatchProcessingDeps,
+): Promise<BatchStats> {
+  const stats = freshStats()
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+
+  for (const observation of ready) {
+    if (msUntilDeadline(deadlineAt) < 8_000) {
+      // Less than 8s left — not enough for another AI call
+      stats.stopped_reason = 'time_budget'
+      break
+    }
+
+    try {
+      const { trustScore, sourceName } = await deps.fetchSourceInfo(observation.source_id)
+
+      const result = await deps.processObservation(
+        observation,
+        trustScore,
+        sourceName,
+        '',
+        deadlineAt,
+      )
+
+      await deps.markObservationProcessed(
+        observation.id,
+        result.signalId ?? null,
+        result.outcome === 'error' ? result.reason : undefined,
+      )
+
+      stats.processed++
+      if (result.outcome === 'signal_created') stats.signal_created++
+      else if (result.outcome.startsWith('rejected')) stats.rejected++
+      else stats.errors++
+
+      console.log(`[enrich/batch] ${observation.id} → ${result.outcome}`)
+
+      // Inter-request delay — prevents TPM/RPM exhaustion on direct models
+      if (msUntilDeadline(deadlineAt) > INTER_REQUEST_MS + 8_000) {
+        await sleep(INTER_REQUEST_MS)
+      }
+    } catch (err) {
+      // AI_DEADLINE_EXCEEDED: temporary, like rate-limit -- requeue with
+      // a short, distinct backoff and stop the whole batch immediately
+      // so this invocation can return a controlled response instead of
+      // being force-killed by Vercel. Checked BEFORE the AIProviderError
+      // branch below since AIDeadlineExceededError is a sibling type,
+      // not a subclass, and must never fall through to the generic
+      // "mark as permanent processing_error" path.
+      if (err instanceof AIDeadlineExceededError) {
+        stats.error_breakdown.deadline_exceeded++
+        try {
+          await deps.markObservationForRetry(observation.id, DEADLINE_RETRY_MS)
+          stats.retried++
+          stats.stopped_reason = 'deadline_exceeded'
+          console.warn(
+            `[enrich/batch] deadline_exceeded — ${observation.id} queued for retry in ${DEADLINE_RETRY_MS}ms (${err.context})`,
+          )
+        } catch (requeueErr) {
+          // The requeue write itself failed -- do NOT report
+          // retried++ or stopped_reason='deadline_exceeded' for an
+          // observation that was never actually put back in the
+          // queue (it would silently look successful in stats while
+          // the observation is either stuck processed=false with no
+          // retry_after, or in an unknown state). Surface this
+          // distinctly instead of pretending it succeeded.
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after deadline_exceeded for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        break
+      }
+
+      // Classify error
+      const isRateLimit = err instanceof AIProviderError && err.isRateLimit
+      const isServerErr = err instanceof AIProviderError && err.isServerError
+      const errMsg = err instanceof Error ? err.message : String(err)
+
+      // Update error breakdown
+      if (isRateLimit) stats.error_breakdown.rate_limit++
+      else if (isServerErr) stats.error_breakdown.server_error++
+      else if (errMsg.includes('JSON')) stats.error_breakdown.json_parse++
+      else if (errMsg.includes('schema') || errMsg.includes('validation'))
+        stats.error_breakdown.validation++
+      else stats.error_breakdown.unknown++
+
+      if (isRateLimit) {
+        // 429 = temporary provider limit — NOT a processing error.
+        // agent.ts already retried within-chain with exponential
+        // backoff; if the WHOLE chain (all fallback models) was still
+        // rate-limited, agent.ts now surfaces the largest Retry-After
+        // it saw (see AIProviderError.retryAfterMs) instead of losing
+        // that signal in a generic Error — use it when present, since
+        // the provider's own stated reset time is more accurate than
+        // a fixed guess.
+        const retryDelayMs =
+          (err instanceof AIProviderError ? err.retryAfterMs : undefined) ?? AI_RETRY_MS
+        try {
+          await deps.markObservationForRetry(observation.id, retryDelayMs)
+          stats.retried++
+          stats.stopped_reason = 'rate_limited'
+          console.warn(
+            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${retryDelayMs}ms`,
+          )
+        } catch (requeueErr) {
+          // See identical comment on the deadline_exceeded branch
+          // above: never report retried++ for a requeue write that
+          // did not actually succeed.
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after rate_limit for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        break
+      }
+
+      // Real error — mark and continue to next observation
+      await deps
+        .markObservationProcessed(
+          observation.id,
+          null,
+          `[${isServerErr ? 'server_error' : 'error'}] ${errMsg.slice(0, 500)}`,
+        )
+        .catch(() => {})
+      stats.errors++
+      console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
+    }
+  }
+
+  return stats
+}
 
 function isAuthorized(request: Request): boolean {
   const secret = process.env['CRON_SECRET']
@@ -55,32 +298,34 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const startedAt = Date.now()
+  const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
   const supabase = createAdminClient()
 
-  const stats = {
-    processed: 0,
-    signal_created: 0,
-    rejected: 0,
-    retried: 0,
-    errors: 0,
-    stopped_reason: 'queue_empty' as 'queue_empty' | 'time_budget' | 'rate_limited',
-    // Detailed error breakdown per analysis report
-    error_breakdown: {
-      rate_limit: 0,
-      server_error: 0,
-      timeout: 0,
-      json_parse: 0,
-      validation: 0,
-      database: 0,
-      unknown: 0,
+  const deps: BatchProcessingDeps = {
+    fetchSourceInfo: async (sourceId: string) => {
+      const { data: source } = (await supabase
+        .from('sources')
+        .select('trust_score, name, type')
+        .eq('id', sourceId)
+        .single()) as {
+        data: { trust_score: number | null; name: string | null; type: string | null } | null
+      }
+      return {
+        trustScore: source?.trust_score ?? 0.5,
+        sourceName: source?.name ?? 'Unknown Source',
+      }
     },
+    processObservation,
+    markObservationProcessed,
+    markObservationForRetry,
   }
 
-  // ── Autonomous loop — runs until queue empty or time budget exhausted ───────
+  const combinedStats = freshStats()
+
+  // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
   while (true) {
-    const elapsed = Date.now() - startedAt
-    if (elapsed >= TIME_BUDGET) {
-      stats.stopped_reason = 'time_budget'
+    if (Date.now() >= deadlineAt) {
+      combinedStats.stopped_reason = 'time_budget'
       break
     }
 
@@ -108,104 +353,43 @@ export async function POST(request: Request): Promise<NextResponse> {
     })
 
     if (ready.length === 0) {
-      stats.stopped_reason = 'queue_empty'
+      combinedStats.stopped_reason = 'queue_empty'
       break
     }
 
-    // ── Process each observation ─────────────────────────────────────────────
-    for (const observation of ready) {
-      const remaining = TIME_BUDGET - (Date.now() - startedAt)
-      if (remaining < 8_000) {
-        // Less than 8s left — not enough for another AI call
-        stats.stopped_reason = 'time_budget'
-        break
-      }
+    const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
 
-      try {
-        const { data: source } = (await supabase
-          .from('sources')
-          .select('trust_score, name, type')
-          .eq('id', observation.source_id)
-          .single()) as {
-          data: { trust_score: number | null; name: string | null; type: string | null } | null
-        }
-
-        const trustScore = source?.trust_score ?? 0.5
-        const sourceName = source?.name ?? 'Unknown Source'
-
-        const result = await processObservation(observation, trustScore, sourceName)
-
-        await markObservationProcessed(
-          observation.id,
-          result.signalId ?? null,
-          result.outcome === 'error' ? result.reason : undefined,
-        )
-
-        stats.processed++
-        if (result.outcome === 'signal_created') stats.signal_created++
-        else if (result.outcome.startsWith('rejected')) stats.rejected++
-        else stats.errors++
-
-        console.log(`[enrich/batch] ${observation.id} → ${result.outcome}`)
-
-        // Inter-request delay — prevents TPM/RPM exhaustion on direct models
-        const timeLeft = TIME_BUDGET - (Date.now() - startedAt)
-        if (timeLeft > INTER_REQUEST_MS + 8_000) {
-          await new Promise((r) => setTimeout(r, INTER_REQUEST_MS))
-        }
-      } catch (err) {
-        // Classify error
-        const isRateLimit = err instanceof AIProviderError && err.isRateLimit
-        const isServerErr = err instanceof AIProviderError && err.isServerError
-        const errMsg = err instanceof Error ? err.message : String(err)
-
-        // Update error breakdown
-        if (isRateLimit) stats.error_breakdown.rate_limit++
-        else if (isServerErr) stats.error_breakdown.server_error++
-        else if (errMsg.includes('JSON')) stats.error_breakdown.json_parse++
-        else if (errMsg.includes('schema') || errMsg.includes('validation'))
-          stats.error_breakdown.validation++
-        else stats.error_breakdown.unknown++
-
-        if (isRateLimit) {
-          // 429 = temporary provider limit — NOT a processing error.
-          // agent.ts already retried within-chain with exponential
-          // backoff; if the WHOLE chain (all fallback models) was still
-          // rate-limited, agent.ts now surfaces the largest Retry-After
-          // it saw (see AIProviderError.retryAfterMs) instead of losing
-          // that signal in a generic Error — use it when present, since
-          // the provider's own stated reset time is more accurate than
-          // a fixed guess.
-          const retryDelayMs =
-            (err instanceof AIProviderError ? err.retryAfterMs : undefined) ?? AI_RETRY_MS
-          await markObservationForRetry(observation.id, retryDelayMs)
-          stats.retried++
-          stats.stopped_reason = 'rate_limited'
-          console.warn(
-            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${retryDelayMs}ms`,
-          )
-          break
-        }
-
-        // Real error — mark and continue to next observation
-        await markObservationProcessed(
-          observation.id,
-          null,
-          `[${isServerErr ? 'server_error' : 'error'}] ${errMsg.slice(0, 500)}`,
-        ).catch(() => {})
-        stats.errors++
-        console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
-      }
+    combinedStats.processed += batchStats.processed
+    combinedStats.signal_created += batchStats.signal_created
+    combinedStats.rejected += batchStats.rejected
+    combinedStats.retried += batchStats.retried
+    combinedStats.errors += batchStats.errors
+    combinedStats.stopped_reason = batchStats.stopped_reason
+    for (const key of Object.keys(batchStats.error_breakdown) as Array<
+      keyof BatchStats['error_breakdown']
+    >) {
+      combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
     }
 
-    // If we hit rate limit, stop the loop — next cron run will continue
-    if (stats.stopped_reason === 'rate_limited') break
+    // If we hit rate limit, the deadline, or a requeue write failure,
+    // stop the loop entirely -- next run (rate limit) or the requeue's
+    // own backoff (deadline) will pick this back up. A requeue failure
+    // is stopped for safety even though we don't know the observation's
+    // exact resulting state -- continuing to process further
+    // observations while one is in an uncertain state is not worth the
+    // risk.
+    if (
+      combinedStats.stopped_reason === 'rate_limited' ||
+      combinedStats.stopped_reason === 'deadline_exceeded' ||
+      combinedStats.stopped_reason === 'requeue_failed'
+    )
+      break
   }
 
   const duration = Date.now() - startedAt
 
   return NextResponse.json({
-    ...stats,
+    ...combinedStats,
     duration_ms: duration,
     timestamp: new Date().toISOString(),
   })

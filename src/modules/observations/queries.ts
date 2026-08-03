@@ -5,30 +5,30 @@
 import { createAdminClient } from '@/lib/supabase/server'
 
 export interface ObservationRow {
-  id:                   string
-  source_id:            string
-  title:                string
-  content:              string
-  url:                  string
-  published_at:         string
-  collected_at:         string
-  metadata:             Record<string, unknown>
-  processed:            boolean
-  processing_error:     string | null
-  signal_id:            string | null
+  id: string
+  source_id: string
+  title: string
+  content: string
+  url: string
+  published_at: string
+  collected_at: string
+  metadata: Record<string, unknown>
+  processed: boolean
+  processing_error: string | null
+  signal_id: string | null
   qualification_result: string | null
-  rejection_code:       string | null
-  rejection_reason:     string | null
-  rejection_detail:     Record<string, unknown>
-  qualification_score:  number | null
-  dry_run_result:       Record<string, unknown>
-  engine_version:       string
-  created_at:           string
+  rejection_code: string | null
+  rejection_reason: string | null
+  rejection_detail: Record<string, unknown>
+  qualification_score: number | null
+  dry_run_result: Record<string, unknown>
+  engine_version: string
+  created_at: string
 }
 
 export async function getUnprocessedObservations(limit = 8): Promise<ObservationRow[]> {
   const supabase = createAdminClient()
-  const now      = new Date().toISOString()
+  const now = new Date().toISOString()
 
   const { data, error } = await supabase
     .from('observations')
@@ -52,43 +52,139 @@ export async function getUnprocessedObservations(limit = 8): Promise<Observation
 }
 
 export async function markObservationProcessed(
-  id:       string,
+  id: string,
   signalId: string | null,
-  error?:   string,
+  error?: string,
 ): Promise<void> {
   const supabase = createAdminClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabase as any)
     .from('observations')
     .update({
-      processed:        true,
-      signal_id:        signalId,
+      processed: true,
+      signal_id: signalId,
       processing_error: error ?? null,
     })
     .eq('id', id)
 }
 
+/**
+ * Minimal shape markObservationForRetry actually calls -- deliberately
+ * loose (matching this file's own existing `any`-cast convention for
+ * every real Supabase call) so a test can supply a small hand-written
+ * mock without depending on Supabase's full generic client types.
+ */
+export interface RetryQueryClient {
+  from(table: string): {
+    select: (columns: string) => {
+      eq: (
+        col: string,
+        val: string,
+      ) => {
+        single: () => Promise<{ data: unknown; error: { message: string } | null }>
+      }
+    }
+    update: (values: Record<string, unknown>) => {
+      eq: (
+        col: string,
+        val: string,
+      ) => {
+        select: (
+          columns: string,
+        ) => Promise<{ data: Array<{ id: string }> | null; error: { message: string } | null }>
+      }
+    }
+  }
+}
+
+/**
+ * Requeues an observation for a later retry attempt. Returns the
+ * confirmed-updated row's own id -- callers can treat a resolved
+ * Promise as proof the row was actually found and updated, not merely
+ * that the request didn't error. Throws if the read, the update
+ * itself, or the confirmation (zero rows matched) fails.
+ *
+ * `client` is optional purely for testability -- every real call site
+ * omits it and gets the real createAdminClient(), unchanged.
+ */
 export async function markObservationForRetry(
-  id:           string,
+  id: string,
   retryAfterMs: number = 60_000,
-): Promise<void> {
-  const supabase = createAdminClient()
-  const retryAt  = new Date(Date.now() + retryAfterMs).toISOString()
+  client?: RetryQueryClient,
+): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (supabase as any)
+  const supabase = (client ?? createAdminClient()) as any
+  const retryAt = new Date(Date.now() + retryAfterMs).toISOString()
+
+  // Real bug fixed here: the previous version wrote
+  // `metadata: { retry_after: retryAt }` directly, wholesale replacing
+  // the entire metadata JSONB column and silently discarding any other
+  // fields already stored there (e.g. feed_url, set by the collector).
+  // Read the existing value first and merge, never overwrite.
+  const { data: existing, error: readError } = (await supabase
+    .from('observations')
+    .select('metadata')
+    .eq('id', id)
+    .single()) as {
+    data: { metadata: Record<string, unknown> | null } | null
+    error: { message: string } | null
+  }
+
+  if (readError) {
+    throw new Error(
+      `[markObservationForRetry] failed to read existing metadata for ${id} before requeue: ${readError.message}`,
+    )
+  }
+
+  const existingMetadata = existing?.metadata ?? {}
+
+  // Real bug fixed here: the previous version never inspected the
+  // Supabase response at all -- a failed update was silently treated
+  // as success by every caller, which could report `retried++` for an
+  // observation that was never actually requeued (still marked
+  // processed=false with no retry_after, but the caller believed it
+  // was safely back in the queue). Chaining `.select('id')` after
+  // `.update()` returns the actually-affected row(s), so a WHERE clause
+  // that silently matched zero rows (wrong id, already deleted, RLS
+  // blocked it) is distinguishable from a genuine PostgREST error --
+  // Supabase does not itself treat "matched 0 rows" as an error
+  // condition, so without this explicit check that case would have
+  // continued to look identical to success.
+  const { data: updated, error: updateError } = (await supabase
     .from('observations')
     .update({
-      processed:        false,
+      processed: false,
       processing_error: null,
-      metadata:         { retry_after: retryAt },
+      metadata: { ...existingMetadata, retry_after: retryAt },
     })
     .eq('id', id)
+    .select('id')) as { data: Array<{ id: string }> | null; error: { message: string } | null }
+
+  if (updateError) {
+    throw new Error(`[markObservationForRetry] failed to requeue ${id}: ${updateError.message}`)
+  }
+
+  if (!updated || updated.length === 0) {
+    throw new Error(
+      `[markObservationForRetry] update matched zero rows for ${id} -- observation may not exist`,
+    )
+  }
+
+  const confirmedId = updated[0]?.id
+  if (!confirmedId) {
+    // Defensive: should be unreachable given the length check above,
+    // but never fabricate a confirmation id that wasn't actually
+    // returned by Supabase.
+    throw new Error(`[markObservationForRetry] update response for ${id} did not include a row id`)
+  }
+
+  return confirmedId
 }
 
 export async function markObservationRejected(
-  id:               string,
-  rejectionCode:    string,
-  rejectionReason:  string,
+  id: string,
+  rejectionCode: string,
+  rejectionReason: string,
   qualificationScore: number,
 ): Promise<void> {
   const supabase = createAdminClient()
@@ -96,13 +192,13 @@ export async function markObservationRejected(
   await (supabase as any)
     .from('observations')
     .update({
-      processed:            true,
-      processing_error:     null,
+      processed: true,
+      processing_error: null,
       qualification_result: 'DISCARD',
-      rejection_code:       rejectionCode,
-      rejection_reason:     rejectionReason,
-      qualification_score:  qualificationScore,
-      engine_version:       'v2.0',
+      rejection_code: rejectionCode,
+      rejection_reason: rejectionReason,
+      qualification_score: qualificationScore,
+      engine_version: 'v2.0',
     })
     .eq('id', id)
 }
@@ -116,8 +212,14 @@ export async function getObservationStats(): Promise<{
   const supabase = createAdminClient()
   const [total, processed, errors] = await Promise.all([
     supabase.from('observations').select('id', { count: 'exact', head: true }),
-    supabase.from('observations').select('id', { count: 'exact', head: true }).eq('processed', true),
-    supabase.from('observations').select('id', { count: 'exact', head: true }).not('processing_error', 'is', null),
+    supabase
+      .from('observations')
+      .select('id', { count: 'exact', head: true })
+      .eq('processed', true),
+    supabase
+      .from('observations')
+      .select('id', { count: 'exact', head: true })
+      .not('processing_error', 'is', null),
   ])
   const t = total.count ?? 0
   const p = processed.count ?? 0

@@ -41,6 +41,7 @@
  */
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { checkHardRejection, V2_THRESHOLDS } from '@/modules/signals/pre-qualification'
 import {
   SISOutputSchema,
@@ -111,6 +112,7 @@ export interface AdminDependencies {
     content: string
     sourceName: string
     sourceType: string
+    deadlineAt: number
   }) => Promise<unknown>
   /** Classifies whether a thrown error represents a rate-limit condition, without exposing its raw content. */
   isRateLimitError: (err: unknown) => boolean
@@ -133,7 +135,7 @@ const productionAdminDependencies: AdminDependencies = {
       .limit(3)
     return { data: (data ?? null) as ObservationWithSource[] | null, error }
   },
-  callAI: async ({ title, content, sourceName, sourceType }) => {
+  callAI: async ({ title, content, sourceName, sourceType, deadlineAt }) => {
     const { agentCompleteJSON } = await import('@/lib/ai/agent')
     const raw = await agentCompleteJSON(
       'classifier',
@@ -143,6 +145,7 @@ const productionAdminDependencies: AdminDependencies = {
       ],
       SISOutputSchema,
       { temperature: 0, maxTokens: 400 },
+      deadlineAt,
     )
     return raw
   },
@@ -183,6 +186,10 @@ export function createAdminPostHandler(deps: AdminDependencies) {
       console.error(`[api/admin/simulate-engine-v2] ${guard.internalReason}`)
       return guard.response
     }
+
+    // Same shared-deadline contour as /api/enrich/batch (see
+    // src/lib/ai/deadline.ts), sized to this route's own maxDuration=60.
+    const deadlineAt = Date.now() + maxDuration * 1000 - 10_000
 
     const client = await deps.loadAdminClient()
 
@@ -230,6 +237,7 @@ export function createAdminPostHandler(deps: AdminDependencies) {
           content: obs.content,
           sourceName,
           sourceType,
+          deadlineAt,
         })
         const sis = computeSIS(sisRaw as Parameters<typeof computeSIS>[0], obs.title, obs.content)
         item.sis_final = sis.sis.final
@@ -241,6 +249,23 @@ export function createAdminPostHandler(deps: AdminDependencies) {
         item.decision_changed =
           !!obs.signal_id !== (sis.decision === 'SIGNAL' || sis.decision === 'WEAK_SIGNAL')
       } catch (err) {
+        // A deadline failure must stop this loop immediately -- making
+        // another AI call for the next observation after the shared
+        // deadline has already been reached would just fail again
+        // (or worse, silently exceed the route's own maxDuration).
+        // Recorded distinctly from a real provider/rate-limit failure
+        // so this simulation's own summary stays honest about why
+        // remaining observations (if any) were never attempted.
+        if (err instanceof AIDeadlineExceededError) {
+          item.v2_decision = 'ERROR'
+          item.engine_justification = 'Deadline exceeded — remaining observations not attempted'
+          console.error('[api/admin/simulate-engine-v2] deadline exceeded, stopping simulation', {
+            observationId: obs.id,
+          })
+          results.push(item)
+          break
+        }
+
         const isRateLimited = deps.isRateLimitError(err)
         item.v2_decision = isRateLimited ? 'RATE_LIMITED' : 'ERROR'
         // Client-facing engine_justification is a FIXED, safe string —

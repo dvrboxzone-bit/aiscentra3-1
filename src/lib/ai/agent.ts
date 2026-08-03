@@ -19,6 +19,7 @@ import {
 } from './client'
 import { withModelQueue } from './tpm-manager'
 import { getModelChain, type AgentRole } from './models'
+import { ensureTimeLeft, sleepWithDeadline, AIDeadlineExceededError } from './deadline'
 
 export type { AgentRole, AIMessage, AIOptions, AIResult }
 
@@ -53,13 +54,22 @@ function classifyError(err: unknown): ErrorKind {
 
 // ── Core retry wrapper ────────────────────────────────────────────────────────
 
-async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, label: string, deadlineAt: number): Promise<T> {
   let lastErr: unknown
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    ensureTimeLeft(deadlineAt, 1_000, `withRetry:${label}:attempt-${attempt}`)
     try {
       return await fn()
     } catch (err) {
+      // A deadline failure from a deeper layer (TPM wait, model queue,
+      // or the fetch's own AbortSignal) is never retried -- it is not
+      // classified as retryable below anyway (classifyError only
+      // recognizes AIProviderError/SyntaxError/ZodError), but this is
+      // stated explicitly so the reason is visible in the code, not
+      // just an emergent side effect of classification order.
+      if (err instanceof AIDeadlineExceededError) throw err
+
       lastErr = err
       const kind = classifyError(err)
 
@@ -75,7 +85,7 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
       const delay = backoffMs(attempt, retryAfterMs)
 
       console.warn(`[${label}] ${kind} — retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`)
-      await new Promise((r) => setTimeout(r, delay))
+      await sleepWithDeadline(delay, deadlineAt, `withRetry:${label}:backoff`)
     }
   }
 
@@ -88,6 +98,7 @@ export async function agentComplete(
   role: AgentRole,
   messages: AIMessage[],
   options: AIOptions = {},
+  deadlineAt: number,
 ): Promise<AIResult & { modelUsed: string; errorKind?: ErrorKind }> {
   const chain = getModelChain(role)
   const errors: string[] = []
@@ -95,15 +106,30 @@ export async function agentComplete(
   let maxRetryAfterMs: number | undefined
 
   for (const ref of chain) {
+    ensureTimeLeft(deadlineAt, 2_000, `agentComplete:${role}:before-${ref.provider}/${ref.model}`)
     const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
       const result = await withRetry(
-        () => withModelQueue(ref.model, () => callProvider(ref, messages, options)),
+        () =>
+          withModelQueue(
+            ref.model,
+            () => callProvider(ref, messages, options, deadlineAt),
+            deadlineAt,
+          ),
         label,
+        deadlineAt,
       )
       console.info(`[agent:${role}] ✓ ${ref.provider}/${ref.model} — ${result.tokensUsed} tokens`)
       return { ...result, modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
+      // A deadline failure must propagate immediately, not be recorded
+      // as "this model failed, try the next one" -- there is no time
+      // left for a next model either, and doing so would silently
+      // convert a time-budget failure into a generic chain-exhaustion
+      // error, losing the distinction the caller needs to requeue
+      // correctly rather than mark this permanently failed.
+      if (err instanceof AIDeadlineExceededError) throw err
+
       const kind = classifyError(err)
       kinds.push(kind)
       if (err instanceof AIProviderError && err.retryAfterMs) {
@@ -142,6 +168,7 @@ export async function agentCompleteJSON<T>(
   messages: AIMessage[],
   schema: z.ZodType<T>,
   options: AIOptions = {},
+  deadlineAt: number,
 ): Promise<T & { _modelUsed?: string }> {
   const chain = getModelChain(role)
   const errors: string[] = []
@@ -149,15 +176,30 @@ export async function agentCompleteJSON<T>(
   let maxRetryAfterMs: number | undefined
 
   for (const ref of chain) {
+    ensureTimeLeft(
+      deadlineAt,
+      2_000,
+      `agentCompleteJSON:${role}:before-${ref.provider}/${ref.model}`,
+    )
     const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
       const result = await withRetry(
-        () => withModelQueue(ref.model, () => callProviderJSON(ref, messages, schema, options)),
+        () =>
+          withModelQueue(
+            ref.model,
+            () => callProviderJSON(ref, messages, schema, options, deadlineAt),
+            deadlineAt,
+          ),
         label,
+        deadlineAt,
       )
       console.info(`[agent:${role}] ✓ JSON ${ref.provider}/${ref.model}`)
       return { ...result, _modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
+      // See agentComplete's identical comment above: a deadline failure
+      // must propagate immediately, not be treated as "try next model".
+      if (err instanceof AIDeadlineExceededError) throw err
+
       const kind = classifyError(err)
       kinds.push(kind)
       if (err instanceof AIProviderError && err.retryAfterMs) {
