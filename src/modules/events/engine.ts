@@ -8,6 +8,7 @@
  * Signal (PROMOTED) → Enrich → Validate → Create Event → Mark Signal PROMOTED
  */
 import { agentCompleteJSON } from '@/lib/ai/agent'
+import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EventEnrichmentSchema,
@@ -93,6 +94,12 @@ export async function processSignalIntoEvent(
       deadlineAt,
     )
   } catch (err) {
+    // Re-throw deadline exceeded — must never be silently converted
+    // into a normal "enrichment failed" outcome, and the caller must
+    // not attempt any further AI call after this (there is none here
+    // regardless, but this makes the contract explicit and consistent
+    // with Signal Engine's identical handling).
+    if (err instanceof AIDeadlineExceededError) throw err
     return {
       signalId: signal.id,
       outcome: 'error',

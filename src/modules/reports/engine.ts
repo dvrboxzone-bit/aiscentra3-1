@@ -9,6 +9,7 @@
  * "Reports are permanently archived. Never edited after publication."
  */
 import { agentCompleteJSON } from '@/lib/ai/agent'
+import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   ReportOutputSchema,
@@ -61,6 +62,10 @@ export async function generateSignalBrief(
       deadlineAt,
     )
   } catch (err) {
+    // Re-throw deadline exceeded — must never be silently converted
+    // into a normal "enrichment failed" outcome; no further AI call
+    // should follow a deadline failure.
+    if (err instanceof AIDeadlineExceededError) throw err
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
@@ -133,6 +138,10 @@ export async function generateEventAnalysis(
       deadlineAt,
     )
   } catch (err) {
+    // Re-throw deadline exceeded — must never be silently converted
+    // into a normal "enrichment failed" outcome; no further AI call
+    // should follow a deadline failure.
+    if (err instanceof AIDeadlineExceededError) throw err
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
@@ -226,6 +235,10 @@ export async function generateWeeklyReview(deadlineAt: number): Promise<ReportRe
       deadlineAt,
     )
   } catch (err) {
+    // Re-throw deadline exceeded — must never be silently converted
+    // into a normal "enrichment failed" outcome; no further AI call
+    // should follow a deadline failure.
+    if (err instanceof AIDeadlineExceededError) throw err
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 
@@ -318,6 +331,10 @@ export async function generateTrendReport(
       deadlineAt,
     )
   } catch (err) {
+    // Re-throw deadline exceeded — must never be silently converted
+    // into a normal "enrichment failed" outcome; no further AI call
+    // should follow a deadline failure.
+    if (err instanceof AIDeadlineExceededError) throw err
     return { outcome: 'error', reason: err instanceof Error ? err.message : 'Enrichment failed' }
   }
 

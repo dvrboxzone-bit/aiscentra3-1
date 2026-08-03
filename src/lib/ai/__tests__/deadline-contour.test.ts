@@ -346,4 +346,172 @@ describe('agent.ts deadline contour (mocked fetch)', () => {
     // a generic chain-exhaustion error).
     assert.equal(calls, 1)
   })
+
+  test('body-read hangs after headers arrive: the deadline still fires, converts to AIDeadlineExceededError, and no fallback model is attempted', async () => {
+    const { agentComplete } = await import('../agent')
+    let fetchCalls = 0
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      fetchCalls++
+      // Headers/status resolve immediately (this IS what "headers
+      // received" means) -- but reading the body hangs, exactly like a
+      // server that sends a 200 status then stalls mid-stream. Only
+      // this fetch call's own AbortSignal can end the hang, proving
+      // client.ts's body-read guard (not just its fetch()-call guard)
+      // is what catches this.
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: () =>
+          new Promise((_resolve, reject) => {
+            const keepAlive = setInterval(() => {}, 50)
+            init?.signal?.addEventListener('abort', () => {
+              clearInterval(keepAlive)
+              reject(new DOMException('aborted', 'TimeoutError'))
+            })
+            setTimeout(() => {
+              clearInterval(keepAlive)
+              reject(new Error('test safety-net -- AbortSignal never fired for body read'))
+            }, 8_000).unref?.()
+          }),
+        text: () => Promise.resolve(''),
+      } as unknown as Response
+    }) as typeof fetch
+
+    const deadlineAt = Date.now() + 2_500
+    await assert.rejects(
+      agentComplete('classifier', [{ role: 'user', content: 'hi' }], {}, deadlineAt),
+      (err: unknown) => err instanceof AIDeadlineExceededError,
+    )
+    // Exactly one model attempted -- the deadline fired while reading
+    // that first model's response body, and the chain loop must not
+    // have gone on to try the fallback model afterward.
+    assert.equal(
+      fetchCalls,
+      1,
+      'no fallback model should have been attempted after a deadline hit during body read',
+    )
+  })
+})
+
+// ── tpm-manager.ts — withModelQueue deadline & concurrency ─────────────────────
+
+describe('withModelQueue deadline and concurrency', () => {
+  test('a deadline exceeded while waiting for a busy queue throws without blocking the actual holder', async () => {
+    const { withModelQueue } = await import('../tpm-manager')
+    const model = `queue-test-a-${Date.now()}-${Math.random()}`
+    let running = 0
+    let maxConcurrent = 0
+    const track = async <T>(fn: () => Promise<T>): Promise<T> => {
+      running++
+      maxConcurrent = Math.max(maxConcurrent, running)
+      try {
+        return await fn()
+      } finally {
+        running--
+      }
+    }
+
+    // A holds the queue for 1200ms.
+    const aPromise = withModelQueue(
+      model,
+      () => track(() => new Promise((r) => setTimeout(() => r('A'), 1200))),
+      Date.now() + 10_000,
+    )
+    await new Promise((r) => setTimeout(r, 50)) // let A actually start
+
+    // B has a short deadline and must give up waiting for A, not wait
+    // for A's full 1200ms.
+    const bStart = Date.now()
+    await assert.rejects(
+      withModelQueue(model, () => track(() => Promise.resolve('B')), Date.now() + 300),
+      (err: unknown) => err instanceof AIDeadlineExceededError,
+    )
+    const bElapsed = Date.now() - bStart
+    assert.ok(
+      bElapsed < 1_000,
+      `B should give up around its own ~300ms deadline, took ${bElapsed}ms`,
+    )
+
+    // A must complete normally, unaffected by B's early exit.
+    const aResult = await aPromise
+    assert.equal(aResult, 'A')
+    assert.equal(
+      maxConcurrent,
+      1,
+      'A and B must never have run concurrently (B never even called fn())',
+    )
+  })
+
+  test('a call queued after a timed-out waiter still executes once the real holder finishes', async () => {
+    const { withModelQueue } = await import('../tpm-manager')
+    const model = `queue-test-b-${Date.now()}-${Math.random()}`
+
+    const aStart = Date.now()
+    const aPromise = withModelQueue(
+      model,
+      () => new Promise((r) => setTimeout(() => r('A'), 800)),
+      Date.now() + 10_000,
+    )
+    await new Promise((r) => setTimeout(r, 50))
+
+    // B times out waiting for A.
+    await assert.rejects(
+      withModelQueue(model, () => Promise.resolve('B'), Date.now() + 200),
+      (err: unknown) => err instanceof AIDeadlineExceededError,
+    )
+
+    // C, queued logically after B, must still run -- and only once A
+    // actually finishes, not immediately after B's own timeout.
+    const cResult = await withModelQueue(model, () => Promise.resolve('C'), Date.now() + 10_000)
+    const totalElapsed = Date.now() - aStart
+    assert.equal(cResult, 'C')
+    assert.ok(
+      totalElapsed >= 750,
+      `C must not have run before A's real completion (~800ms after A started); total elapsed was ${totalElapsed}ms`,
+    )
+
+    await aPromise
+  })
+
+  test('max concurrency for a given model never exceeds 1, even across a timed-out waiter', async () => {
+    const { withModelQueue } = await import('../tpm-manager')
+    const model = `queue-test-c-${Date.now()}-${Math.random()}`
+    let running = 0
+    let maxConcurrent = 0
+    const track = async <T>(fn: () => Promise<T>): Promise<T> => {
+      running++
+      maxConcurrent = Math.max(maxConcurrent, running)
+      try {
+        return await fn()
+      } finally {
+        running--
+      }
+    }
+
+    const aPromise = withModelQueue(
+      model,
+      () => track(() => new Promise((r) => setTimeout(() => r('A'), 600))),
+      Date.now() + 10_000,
+    )
+    await new Promise((r) => setTimeout(r, 20))
+
+    const bPromise = withModelQueue(
+      model,
+      () => track(() => Promise.resolve('B')),
+      Date.now() + 150,
+    ).catch((e: unknown) => e)
+    const cPromise = withModelQueue(
+      model,
+      () => track(() => Promise.resolve('C')),
+      Date.now() + 10_000,
+    )
+
+    const [aRes, bRes, cRes] = await Promise.all([aPromise, bPromise, cPromise])
+    assert.equal(aRes, 'A')
+    assert.ok(bRes instanceof AIDeadlineExceededError)
+    assert.equal(cRes, 'C')
+    assert.equal(maxConcurrent, 1, 'no two fn() calls for the same model may ever run concurrently')
+  })
 })

@@ -41,6 +41,7 @@
  */
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { checkHardRejection, V2_THRESHOLDS } from '@/modules/signals/pre-qualification'
 import {
   SISOutputSchema,
@@ -248,6 +249,23 @@ export function createAdminPostHandler(deps: AdminDependencies) {
         item.decision_changed =
           !!obs.signal_id !== (sis.decision === 'SIGNAL' || sis.decision === 'WEAK_SIGNAL')
       } catch (err) {
+        // A deadline failure must stop this loop immediately -- making
+        // another AI call for the next observation after the shared
+        // deadline has already been reached would just fail again
+        // (or worse, silently exceed the route's own maxDuration).
+        // Recorded distinctly from a real provider/rate-limit failure
+        // so this simulation's own summary stays honest about why
+        // remaining observations (if any) were never attempted.
+        if (err instanceof AIDeadlineExceededError) {
+          item.v2_decision = 'ERROR'
+          item.engine_justification = 'Deadline exceeded — remaining observations not attempted'
+          console.error('[api/admin/simulate-engine-v2] deadline exceeded, stopping simulation', {
+            observationId: obs.id,
+          })
+          results.push(item)
+          break
+        }
+
         const isRateLimited = deps.isRateLimitError(err)
         item.v2_decision = isRateLimited ? 'RATE_LIMITED' : 'ERROR'
         // Client-facing engine_justification is a FIXED, safe string —

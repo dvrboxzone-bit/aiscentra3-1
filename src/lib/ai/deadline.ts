@@ -10,17 +10,31 @@
  * Real incident this fixes: enrich/batch's own TIME_BUDGET (54s) check
  * only ran BETWEEN observations, and only checked "do I have >=8s left
  * before STARTING the next one" -- it had no way to stop an
- * already-in-flight call. agent.ts's retry/backoff logic
- * (MAX_RETRIES=3, backoff schedule 5s/10s/20s/40s, capped at 60s) had
- * zero awareness of any outer time budget: a single observation could
- * legitimately spend 75+ seconds just sleeping between retries across
- * two fallback models before ever throwing -- confirmed live via
- * Vercel's own runtime error log: "Task timed out after 60 seconds" on
- * /api/enrich/batch, recurring since 2026-07-28. A single stalled
- * observation could consume the ENTIRE remaining budget and take the
- * whole batch (and every other queued observation in that invocation)
- * down with it when Vercel force-killed the function -- no requeue, no
- * controlled response, nothing recorded.
+ * already-in-flight call. agent.ts's retry/backoff logic (MAX_RETRIES=3,
+ * meaning 4 attempts with backoff between them: 5s/10s/20s, capped at
+ * 60s per wait) had zero awareness of any outer time budget. Corrected
+ * math (an earlier version of this comment overstated this at "75+
+ * seconds" by incorrectly including a 4th, non-existent wait after the
+ * final attempt): a single model's backoff alone totals 5+10+20=35s
+ * (there is no wait after the last of the 4 attempts). A role with a
+ * 2-model fallback chain (e.g. classifier: MINI then PRIMARY) could
+ * therefore spend up to ~70s on backoff alone across both models for
+ * ONE AI call. processObservation makes up to two such AI calls per
+ * observation (the SIS classifier stage, then the main
+ * enrichment/parser stage) -- so, worst case, backoff alone could
+ * reach roughly 140s for a single observation before ever throwing --
+ * confirmed live via Vercel's own runtime error log: "Task timed out
+ * after 60 seconds" on /api/enrich/batch, recurring since 2026-07-28.
+ * A single stalled observation could consume the ENTIRE remaining
+ * budget and take the whole batch (and every other queued observation
+ * in that invocation) down with it when Vercel force-killed the
+ * function -- no requeue, no controlled response, nothing recorded.
+ * Already-processed and already-signal-created observations from
+ * earlier in the same batch run are not lost by this failure mode --
+ * each observation is marked processed (or requeued) individually as
+ * it completes, before the next one starts; only the one in-flight
+ * observation at the moment of the force-kill, and any not yet
+ * attempted in that invocation, were affected.
  *
  * Every layer in the chain now checks the SAME deadline before doing
  * any work that could block for a meaningful amount of time (a retry

@@ -20,7 +20,12 @@
  * at all, letting a single stalled or heavily rate-limited call
  * silently consume the caller's entire remaining time budget.
  */
-import { ensureTimeLeft, sleepWithDeadline } from './deadline'
+import {
+  ensureTimeLeft,
+  sleepWithDeadline,
+  msUntilDeadline,
+  AIDeadlineExceededError,
+} from './deadline'
 
 // ── TPM limits per model ──────────────────────────────────────────────────────
 
@@ -139,6 +144,29 @@ export function recordActualTokens(model: string, inputTokens: number, outputTok
 
 // ── Sequential queue per model ────────────────────────────────────────────────
 // Ensures only one request at a time per model — prevents burst parallel calls
+//
+// Real bugs fixed here (found in review of the initial deadline-contour
+// PR, before this queue had ever been exercised under real contention):
+//
+// 1. The wait for the previous holder's turn had NO deadline bound at
+//    all -- a caller with a short remaining budget would wait for
+//    however long an EARLIER caller's (possibly much longer) deadline
+//    allowed, rather than giving up on its own.
+// 2. If a waiting caller's OWN deadline expired while it was waiting,
+//    it threw -- but never called its own `resolve()`, because that
+//    only happened in the try/finally around fn(), which was never
+//    reached. Every LATER caller queued behind it would then wait on a
+//    promise that could never resolve, deadlocking the entire queue for
+//    that model forever.
+// 3. There was no explicit guarantee that a timed-out waiter's early
+//    exit could not let some later caller start running concurrently
+//    with the actual still-in-flight previous fn() -- correctness here
+//    requires forwarding the queue's "done" signal to the true
+//    predecessor's completion, not to whichever caller happened to give
+//    up first.
+// 4. Map entries were never cleaned up -- every distinct model string
+//    ever passed in (including the fresh, random ones used in this
+//    file's own tests) accumulated in `modelQueues` indefinitely.
 
 const modelQueues = new Map<string, Promise<void>>()
 
@@ -147,22 +175,64 @@ export async function withModelQueue<T>(
   fn: () => Promise<T>,
   deadlineAt: number,
 ): Promise<T> {
-  const prev = modelQueues.get(model) ?? Promise.resolve()
+  const prevTail = modelQueues.get(model) ?? Promise.resolve()
 
-  let resolve!: () => void
-  const next = new Promise<void>((r) => {
-    resolve = r
+  // This caller's own completion signal, used by whoever queues up
+  // next for this model. Resolves ONLY once the real work that ends up
+  // running (see below) actually finishes -- success or failure --
+  // regardless of whether THIS caller itself gives up early on its own
+  // deadline while waiting. That is what guarantees strict one-at-a-
+  // time execution even across a timed-out waiter: the next caller in
+  // line must never start while a still-in-flight previous fn() is
+  // running, and must never wait on a promise nothing will ever
+  // resolve.
+  let markDone!: () => void
+  const myTail = new Promise<void>((r) => {
+    markDone = r
   })
-  modelQueues.set(model, next)
+  modelQueues.set(model, myTail)
 
-  await prev
-  // Re-check after the queue wait -- the previous in-flight call for
-  // this model is itself now deadline-bound and cannot wait forever,
-  // but this check stays explicit rather than assuming that.
+  // Wait for the previous holder's turn to end, bounded by THIS
+  // caller's own deadline -- an earlier queued caller's (possibly
+  // longer) deadline must never force this caller to wait past its own
+  // budget.
+  let queueWaitTimedOut = false
+  await Promise.race([
+    prevTail,
+    new Promise<void>((resolve) => {
+      setTimeout(() => {
+        queueWaitTimedOut = true
+        resolve()
+      }, msUntilDeadline(deadlineAt))
+    }),
+  ])
+
+  if (queueWaitTimedOut) {
+    // Give up now -- this caller's own deadline is gone before it ever
+    // got a turn. Forward completion to whoever queues up after us once
+    // the ACTUAL previous work finishes (not now) -- prevTail is the
+    // real predecessor's completion signal, and the invariant "only one
+    // fn() runs per model at a time" depends on the next caller still
+    // waiting for that, not for this early exit.
+    prevTail.then(markDone, markDone)
+    throw new AIDeadlineExceededError(
+      `[deadline] withModelQueue:${model}: gave up waiting for the model queue`,
+      `withModelQueue:${model}:queue-wait`,
+      deadlineAt,
+    )
+  }
+
   ensureTimeLeft(deadlineAt, 1_000, `withModelQueue:${model}:post-queue-wait`)
   try {
     return await fn()
   } finally {
-    resolve()
+    markDone()
+    // Clean up: if nobody has queued up behind us since we registered
+    // myTail, remove this model's entry entirely rather than leaving a
+    // permanently-resolved promise (and the model's string key) in the
+    // map forever.
+    if (modelQueues.get(model) === myTail) {
+      modelQueues.delete(model)
+    }
   }
 }

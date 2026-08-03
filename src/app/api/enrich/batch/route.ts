@@ -23,14 +23,20 @@
  *   callProvider's fetch, see src/lib/ai/deadline.ts for the full
  *   rationale). Previously, this route's own TIME_BUDGET check only ran
  *   BETWEEN observations and could not stop an already-in-flight call --
- *   agent.ts's retry/backoff logic (5s/10s/20s/40s schedule, no time-
- *   budget awareness) could legitimately spend 75+ seconds on a single
- *   observation, confirmed live via Vercel's runtime error log ("Task
+ *   agent.ts's retry/backoff logic (MAX_RETRIES=3, 4 attempts with
+ *   5s/10s/20s backoff between them, no time-budget awareness) could
+ *   legitimately spend up to 35s of backoff alone on a single model,
+ *   up to ~70s across a 2-model fallback chain for one AI call, and up
+ *   to ~140s across the two AI calls processObservation makes per
+ *   observation (SIS classifier stage, then main enrichment/parser
+ *   stage) -- confirmed live via Vercel's runtime error log ("Task
  *   timed out after 60 seconds" on this exact route, recurring since
  *   2026-07-28). DEADLINE_BUFFER_MS below leaves at least 10s between
  *   the deadline and Vercel's actual kill point, specifically so a
  *   deadline-triggered requeue and this function's own JSON response
- *   have time to complete.
+ *   have time to complete. Already-processed observations from earlier
+ *   in the same run are not lost by this failure mode -- each one is
+ *   marked processed (or requeued) individually before the next starts.
  *
  * HTTP 429 handling:
  *   429 = rate_limit from AI provider — temporary, NOT an error.
@@ -94,13 +100,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       | 'queue_empty'
       | 'time_budget'
       | 'rate_limited'
-      | 'deadline_exceeded',
+      | 'deadline_exceeded'
+      | 'requeue_failed',
     // Detailed error breakdown per analysis report
     error_breakdown: {
       rate_limit: 0,
       server_error: 0,
       timeout: 0,
       deadline_exceeded: 0,
+      requeue_failed: 0,
       json_parse: 0,
       validation: 0,
       database: 0,
@@ -192,12 +200,27 @@ export async function POST(request: Request): Promise<NextResponse> {
         // "mark as permanent processing_error" path.
         if (err instanceof AIDeadlineExceededError) {
           stats.error_breakdown.deadline_exceeded++
-          await markObservationForRetry(observation.id, DEADLINE_RETRY_MS)
-          stats.retried++
-          stats.stopped_reason = 'deadline_exceeded'
-          console.warn(
-            `[enrich/batch] deadline_exceeded — ${observation.id} queued for retry in ${DEADLINE_RETRY_MS}ms (${err.context})`,
-          )
+          try {
+            await markObservationForRetry(observation.id, DEADLINE_RETRY_MS)
+            stats.retried++
+            stats.stopped_reason = 'deadline_exceeded'
+            console.warn(
+              `[enrich/batch] deadline_exceeded — ${observation.id} queued for retry in ${DEADLINE_RETRY_MS}ms (${err.context})`,
+            )
+          } catch (requeueErr) {
+            // The requeue write itself failed -- do NOT report
+            // retried++ or stopped_reason='deadline_exceeded' for an
+            // observation that was never actually put back in the
+            // queue (it would silently look successful in stats while
+            // the observation is either stuck processed=false with no
+            // retry_after, or in an unknown state). Surface this
+            // distinctly instead of pretending it succeeded.
+            stats.error_breakdown.requeue_failed++
+            stats.stopped_reason = 'requeue_failed'
+            console.error(
+              `[enrich/batch] requeue_failed after deadline_exceeded for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+            )
+          }
           break
         }
 
@@ -225,12 +248,23 @@ export async function POST(request: Request): Promise<NextResponse> {
           // a fixed guess.
           const retryDelayMs =
             (err instanceof AIProviderError ? err.retryAfterMs : undefined) ?? AI_RETRY_MS
-          await markObservationForRetry(observation.id, retryDelayMs)
-          stats.retried++
-          stats.stopped_reason = 'rate_limited'
-          console.warn(
-            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${retryDelayMs}ms`,
-          )
+          try {
+            await markObservationForRetry(observation.id, retryDelayMs)
+            stats.retried++
+            stats.stopped_reason = 'rate_limited'
+            console.warn(
+              `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${retryDelayMs}ms`,
+            )
+          } catch (requeueErr) {
+            // See identical comment on the deadline_exceeded branch
+            // above: never report retried++ for a requeue write that
+            // did not actually succeed.
+            stats.error_breakdown.requeue_failed++
+            stats.stopped_reason = 'requeue_failed'
+            console.error(
+              `[enrich/batch] requeue_failed after rate_limit for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+            )
+          }
           break
         }
 
@@ -245,10 +279,18 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
     }
 
-    // If we hit rate limit or the deadline, stop the loop entirely --
-    // next run (rate limit) or the requeue's own backoff (deadline)
-    // will pick this back up.
-    if (stats.stopped_reason === 'rate_limited' || stats.stopped_reason === 'deadline_exceeded')
+    // If we hit rate limit, the deadline, or a requeue write failure,
+    // stop the loop entirely -- next run (rate limit) or the requeue's
+    // own backoff (deadline) will pick this back up. A requeue failure
+    // is stopped for safety even though we don't know the observation's
+    // exact resulting state -- continuing to process further
+    // observations while one is in an uncertain state is not worth the
+    // risk.
+    if (
+      stats.stopped_reason === 'rate_limited' ||
+      stats.stopped_reason === 'deadline_exceeded' ||
+      stats.stopped_reason === 'requeue_failed'
+    )
       break
   }
 

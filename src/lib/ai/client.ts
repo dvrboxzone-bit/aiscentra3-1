@@ -68,6 +68,24 @@ const CompletionResponseSchema = z.object({
     .optional(),
 })
 
+// ── Deadline / abort classification ────────────────────────────────────────────
+
+/**
+ * Recognizes every shape an aborted/timed-out fetch or body-read can
+ * take: `AbortSignal.timeout()` throws a `TimeoutError`-named error;
+ * a manually aborted signal typically surfaces as `AbortError`; and
+ * `signal.aborted` is checked directly as a fallback in case a given
+ * runtime throws neither name for a given failure mode (e.g. some body
+ * stream read errors). Any of these, at any point in the response
+ * lifecycle (the initial fetch, reading an error body, reading and
+ * parsing the success body), means the shared deadline was reached
+ * mid-flight -- not a provider failure.
+ */
+function isAbortLikeError(err: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return true
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+}
+
 // ── Core function ─────────────────────────────────────────────────────────────
 
 export async function callProvider(
@@ -102,7 +120,21 @@ export async function callProvider(
   // Real AbortSignal tied to the shared deadline -- a bare
   // `Promise.race` around this fetch would leave the underlying HTTP
   // request running and the connection held open; only an AbortSignal
-  // passed into fetch() itself actually cancels it.
+  // passed into fetch() itself actually cancels it. Kept as a named
+  // variable (not inlined into the fetch call) so the REST of this
+  // function's response lifecycle -- reading an error body, reading and
+  // parsing the success body -- can also check the SAME signal, since
+  // the deadline can just as easily be reached after headers arrive but
+  // while the body is still streaming, not only during the initial
+  // connection.
+  const signal = AbortSignal.timeout(msUntilDeadline(deadlineAt))
+  const deadlineFail = (context: string): AIDeadlineExceededError =>
+    new AIDeadlineExceededError(
+      `[deadline] callProvider:${ref.provider}/${ref.model}: ${context}`,
+      `callProvider:${ref.provider}/${ref.model}:${context}`,
+      deadlineAt,
+    )
+
   let response: Response
   try {
     response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -117,25 +149,26 @@ export async function callProvider(
         max_tokens: maxTokens,
         temperature,
       }),
-      signal: AbortSignal.timeout(msUntilDeadline(deadlineAt)),
+      signal,
     })
   } catch (err) {
-    if (err instanceof Error && err.name === 'TimeoutError') {
-      // AbortSignal.timeout() fired -- the deadline was reached
-      // mid-flight, the request was genuinely cancelled (not merely
-      // stopped awaiting), and this is a temporary condition, not a
-      // provider failure.
-      throw new AIDeadlineExceededError(
-        `[deadline] callProvider:${ref.provider}/${ref.model}: fetch aborted at deadline`,
-        `callProvider:${ref.provider}/${ref.model}:fetch-aborted`,
-        deadlineAt,
-      )
-    }
+    if (isAbortLikeError(err, signal)) throw deadlineFail('fetch-aborted')
     throw err
   }
 
   if (!response.ok) {
-    const body = await response.text()
+    // Headers arrived, but the deadline can still be reached while
+    // reading the error body itself (a stalled/slow body stream on an
+    // already-non-OK response) -- guarded the same way as the initial
+    // fetch, not left to hang unbounded.
+    let body: string
+    try {
+      body = await response.text()
+    } catch (err) {
+      if (isAbortLikeError(err, signal)) throw deadlineFail('error-body-read-aborted')
+      throw err
+    }
+
     const statusCode = response.status
 
     // Parse Retry-After header for 429 — providers often tell us when to retry
@@ -154,7 +187,15 @@ export async function callProvider(
     throw err
   }
 
-  const raw = (await response.json()) as unknown
+  // Same reasoning as the error-body read above -- the success body can
+  // also stall mid-stream after headers/status arrived fine.
+  let raw: unknown
+  try {
+    raw = await response.json()
+  } catch (err) {
+    if (isAbortLikeError(err, signal)) throw deadlineFail('success-body-read-aborted')
+    throw err
+  }
   const parsed = CompletionResponseSchema.safeParse(raw)
 
   if (!parsed.success) {
