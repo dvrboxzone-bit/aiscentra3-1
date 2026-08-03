@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { SeverityBadge, CategoryBadge, ConfidenceBadge } from '@/components/ui/badge'
 import { ScoreBar } from '@/components/ui/score-bar'
+import { SignalIllustration } from '@/components/signals/signal-illustration'
 import { getSignalById } from '@/modules/signals/queries'
 import { getEventsBySignal } from '@/modules/events/queries'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
@@ -47,6 +48,15 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
         <span className="mx-2 text-observatory-border">›</span>
         <span>{formatCategory(signal.category)}</span>
       </nav>
+
+      {/* Illustration */}
+      <div className="mb-8 overflow-hidden border border-observatory-border">
+        <SignalIllustration
+          category={signal.category}
+          title={signal.title}
+          className="h-auto w-full"
+        />
+      </div>
 
       {/* Header */}
       <header className="mb-8 border-b border-observatory-border pb-8">

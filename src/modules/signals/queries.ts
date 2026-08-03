@@ -9,6 +9,7 @@
  */
 import { createClient } from '@/lib/supabase/server'
 import { getSignalSeverity } from '@/types/database'
+import { selectFeaturedSignals } from './featured-selection'
 import type { Signal, SignalCategory, SignalStatus } from '@/types/database'
 
 export interface SignalFilters {
@@ -23,10 +24,7 @@ export interface SignalFilters {
 export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]> {
   const supabase = await createClient()
 
-  let query = supabase
-    .from('signals')
-    .select('*')
-    .order('created_at', { ascending: false })
+  let query = supabase.from('signals').select('*').order('created_at', { ascending: false })
 
   if (filters.category) {
     query = query.eq('category', filters.category)
@@ -56,11 +54,7 @@ export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]>
 export async function getSignalById(id: string): Promise<Signal | null> {
   const supabase = await createClient()
 
-  const { data, error } = await supabase
-    .from('signals')
-    .select('*')
-    .eq('id', id)
-    .single()
+  const { data, error } = await supabase.from('signals').select('*').eq('id', id).single()
 
   if (error) {
     if (error.code === 'PGRST116') return null // Not found
@@ -85,15 +79,20 @@ export async function getSignalStats(): Promise<{
   }
 
   return {
-    total:    signals.length,
+    total: signals.length,
     critical: signals.filter((s) => getSignalSeverity(s.signal_score) === 'CRITICAL').length,
-    high:     signals.filter((s) => getSignalSeverity(s.signal_score) === 'HIGH').length,
+    high: signals.filter((s) => getSignalSeverity(s.signal_score) === 'HIGH').length,
     byCategory,
   }
 }
 
 export async function getFeaturedSignals(): Promise<Signal[]> {
-  return getSignals({ minScore: 60, limit: 3 })
+  // Fetch a broad-enough pool for selectFeaturedSignals to apply the
+  // tier fallback-fill cascade correctly (it needs visibility into
+  // Strong/Signal/Weak candidates together, not a pre-filtered slice).
+  // 200 matches the pool size already used by getSignalStats() below.
+  const pool = await getSignals({ limit: 200 })
+  return selectFeaturedSignals(pool)
 }
 
 export async function getSignalsByEntity(entityId: string): Promise<Signal[]> {
