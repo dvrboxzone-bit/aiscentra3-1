@@ -145,8 +145,8 @@ export function recordActualTokens(model: string, inputTokens: number, outputTok
 // ── Sequential queue per model ────────────────────────────────────────────────
 // Ensures only one request at a time per model — prevents burst parallel calls
 //
-// Real bugs fixed here (found in review of the initial deadline-contour
-// PR, before this queue had ever been exercised under real contention):
+// Real bugs fixed here across two review passes (found before this
+// queue had ever been exercised under real contention):
 //
 // 1. The wait for the previous holder's turn had NO deadline bound at
 //    all -- a caller with a short remaining budget would wait for
@@ -164,11 +164,30 @@ export function recordActualTokens(model: string, inputTokens: number, outputTok
 //    requires forwarding the queue's "done" signal to the true
 //    predecessor's completion, not to whichever caller happened to give
 //    up first.
-// 4. Map entries were never cleaned up -- every distinct model string
-//    ever passed in (including the fresh, random ones used in this
-//    file's own tests) accumulated in `modelQueues` indefinitely.
+// 4. Map entries were never cleaned up.
+// 5. (Second pass) The SAME "never releases" bug as #2 also existed on
+//    the "ready" path: `ensureTimeLeft(...post-queue-wait)` ran BEFORE
+//    the try/finally that calls markDone(), so if the previous holder
+//    finished but this caller's OWN remaining time was then too short
+//    (e.g. the previous holder released at T, this caller's own
+//    deadline is at T+100ms, needing >=1000ms), that check's throw
+//    escaped without ever releasing myTail -- deadlocking every later
+//    caller exactly like bug #2, just reached via a different path.
+//    Fixed by moving ensureTimeLeft inside the try block, so the SAME
+//    finally that guarantees release on a real fn() failure also
+//    guarantees it here.
+// 6. The race between "previous holder finished" and "my own deadline
+//    hit" was tracked via a captured, later-mutated boolean
+//    (`queueWaitTimedOut = true` inside a callback) rather than the
+//    Promise.race's own resolved value -- functionally equivalent, but
+//    an explicit `'ready' | 'timeout'` result read directly off
+//    Promise.race is less error-prone and doesn't leave a dangling
+//    setTimeout uncleared when `prevTail` wins the race first (fixed
+//    below via clearTimeout).
 
 const modelQueues = new Map<string, Promise<void>>()
+
+type QueueWaitResult = 'ready' | 'timeout'
 
 export async function withModelQueue<T>(
   model: string,
@@ -179,13 +198,14 @@ export async function withModelQueue<T>(
 
   // This caller's own completion signal, used by whoever queues up
   // next for this model. Resolves ONLY once the real work that ends up
-  // running (see below) actually finishes -- success or failure --
-  // regardless of whether THIS caller itself gives up early on its own
-  // deadline while waiting. That is what guarantees strict one-at-a-
-  // time execution even across a timed-out waiter: the next caller in
-  // line must never start while a still-in-flight previous fn() is
-  // running, and must never wait on a promise nothing will ever
-  // resolve.
+  // running actually finishes -- success or failure -- regardless of
+  // whether THIS caller itself gives up early on its own deadline
+  // while waiting, or gives up just after waiting due to insufficient
+  // remaining time. That is what guarantees strict one-at-a-time
+  // execution even across a caller that never runs fn() at all: the
+  // next caller in line must never start while a still-in-flight
+  // previous fn() is running, and must never wait on a promise nothing
+  // will ever resolve.
   let markDone!: () => void
   const myTail = new Promise<void>((r) => {
     markDone = r
@@ -195,25 +215,26 @@ export async function withModelQueue<T>(
   // Wait for the previous holder's turn to end, bounded by THIS
   // caller's own deadline -- an earlier queued caller's (possibly
   // longer) deadline must never force this caller to wait past its own
-  // budget.
-  let queueWaitTimedOut = false
-  await Promise.race([
-    prevTail,
-    new Promise<void>((resolve) => {
-      setTimeout(() => {
-        queueWaitTimedOut = true
-        resolve()
-      }, msUntilDeadline(deadlineAt))
-    }),
-  ])
+  // budget. The race's result is read directly as an explicit
+  // 'ready' | 'timeout' value, not inferred from a mutated outer
+  // boolean.
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const timeoutResult: Promise<QueueWaitResult> = new Promise((resolve) => {
+    timeoutHandle = setTimeout(() => resolve('timeout'), msUntilDeadline(deadlineAt))
+  })
+  const readyResult: Promise<QueueWaitResult> = prevTail.then(() => 'ready' as const)
 
-  if (queueWaitTimedOut) {
+  const waitResult = await Promise.race([readyResult, timeoutResult])
+  clearTimeout(timeoutHandle)
+
+  if (waitResult === 'timeout') {
     // Give up now -- this caller's own deadline is gone before it ever
     // got a turn. Forward completion to whoever queues up after us once
     // the ACTUAL previous work finishes (not now) -- prevTail is the
     // real predecessor's completion signal, and the invariant "only one
     // fn() runs per model at a time" depends on the next caller still
-    // waiting for that, not for this early exit.
+    // waiting for that, not for this early exit. The queue must never
+    // be released before the real previous holder actually completes.
     prevTail.then(markDone, markDone)
     throw new AIDeadlineExceededError(
       `[deadline] withModelQueue:${model}: gave up waiting for the model queue`,
@@ -222,8 +243,15 @@ export async function withModelQueue<T>(
     )
   }
 
-  ensureTimeLeft(deadlineAt, 1_000, `withModelQueue:${model}:post-queue-wait`)
+  // waitResult === 'ready': prevTail has already resolved, so from here
+  // on EVERY exit path -- including ensureTimeLeft throwing below, not
+  // just fn() itself failing -- must release myTail via markDone(),
+  // since nothing else will do it for us. Both checks and the actual
+  // work live inside the same try/finally specifically so that
+  // guarantee holds regardless of WHERE within this block something
+  // throws.
   try {
+    ensureTimeLeft(deadlineAt, 1_000, `withModelQueue:${model}:post-queue-wait`)
     return await fn()
   } finally {
     markDone()

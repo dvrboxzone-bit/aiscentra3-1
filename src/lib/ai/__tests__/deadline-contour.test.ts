@@ -514,4 +514,80 @@ describe('withModelQueue deadline and concurrency', () => {
     assert.equal(cRes, 'C')
     assert.equal(maxConcurrent, 1, 'no two fn() calls for the same model may ever run concurrently')
   })
+
+  test('regression: a caller that becomes ready but has <1000ms left still releases the queue for the next caller', async () => {
+    // This is the exact scenario that exposed the "never releases on
+    // the ready path" bug: A finishes BEFORE B's own deadline, so B's
+    // wait resolves as 'ready' (not 'timeout') -- but by the time B
+    // checks its OWN remaining time via ensureTimeLeft(...
+    // post-queue-wait, which requires >=1000ms), B has less than that
+    // left. B must throw AIDeadlineExceededError from that check, but
+    // -- critically -- B must still release the queue (fn() was never
+    // called, so nothing else will call markDone() for B), or every
+    // later caller queued behind B would hang forever, exactly like the
+    // original "timeout path never releases" bug, just reached via a
+    // different path.
+    const { withModelQueue } = await import('../tpm-manager')
+    const model = `queue-test-regression-${Date.now()}-${Math.random()}`
+
+    const aHoldMs = 300
+    const aStart = Date.now()
+    const aPromise = withModelQueue(
+      model,
+      () => new Promise((r) => setTimeout(() => r('A'), aHoldMs)),
+      Date.now() + 10_000,
+    )
+    await new Promise((r) => setTimeout(r, 20)) // let A actually start
+
+    // B's own deadline is set so that by the time A releases (~300ms
+    // from A's own start), B has well under 1000ms of its own budget
+    // left -- exercising the post-queue-wait check specifically, not
+    // the queue-wait timeout branch tested above.
+    const bDeadline = Date.now() + aHoldMs + 200 // ~200ms left once A releases
+    await assert.rejects(
+      withModelQueue(model, () => Promise.resolve('B'), bDeadline),
+      (err: unknown) => {
+        assert.ok(err instanceof AIDeadlineExceededError)
+        assert.match(err.context, /post-queue-wait/)
+        return true
+      },
+    )
+
+    // C, queued after B, must run normally -- not hang -- proving B's
+    // exit on the 'ready'-but-insufficient-time path still released the
+    // queue correctly.
+    const cResult = await Promise.race([
+      withModelQueue(model, () => Promise.resolve('C'), Date.now() + 10_000),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error('C hung -- queue was not released after B')), 3_000),
+      ),
+    ])
+    assert.equal(cResult, 'C')
+
+    const aResult = await aPromise
+    assert.equal(aResult, 'A')
+    void aStart
+  })
+
+  test('an already-expired caller on a free queue throws immediately, and a normal call after it still succeeds', async () => {
+    const { withModelQueue } = await import('../tpm-manager')
+    const model = `queue-test-expired-${Date.now()}-${Math.random()}`
+
+    // Queue is completely free (no prior holder) -- the deadline is
+    // already in the past before this call even starts.
+    const start = Date.now()
+    await assert.rejects(
+      withModelQueue(model, () => Promise.resolve('should-not-run'), Date.now() - 1_000),
+      (err: unknown) => err instanceof AIDeadlineExceededError,
+    )
+    assert.ok(
+      Date.now() - start < 500,
+      'an already-expired deadline on a free queue must fail fast',
+    )
+
+    // A normal, generously-deadlined call right after must succeed --
+    // not be blocked by the immediately-expired one before it.
+    const result = await withModelQueue(model, () => Promise.resolve('normal'), Date.now() + 10_000)
+    assert.equal(result, 'normal')
+  })
 })

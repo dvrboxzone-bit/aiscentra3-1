@@ -14,6 +14,26 @@
 
 set -Eeuo pipefail
 
+# Real, newly-hit issue: src/modules/observations/__tests__/
+# mark-observation-for-retry.test.ts imports the real
+# src/modules/observations/queries.ts module (to exercise the actual
+# markObservationForRetry function, not a reimplementation), which
+# imports createAdminClient from @/lib/supabase/server, which imports
+# config/env.ts -- whose top-level `export const env = {...}` throws
+# immediately at module load if NEXT_PUBLIC_SUPABASE_URL/ANON_KEY are
+# unset, regardless of whether any Supabase call is actually made (the
+# test's own injectable-client parameter means no real Supabase
+# connection is ever attempted). No prior test file in this project
+# touched that import chain, so this was never previously needed.
+# Dummy, non-secret placeholder values -- identical in shape to the
+# ones already used for local `npm run build` throughout this
+# project's own release workflow -- satisfy the module-load-time check
+# without connecting to anything real.
+export NEXT_PUBLIC_SUPABASE_URL="${NEXT_PUBLIC_SUPABASE_URL:-https://placeholder.supabase.co}"
+export NEXT_PUBLIC_SUPABASE_ANON_KEY="${NEXT_PUBLIC_SUPABASE_ANON_KEY:-test-anon-key-placeholder}"
+export SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-test-service-role-placeholder}"
+export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@placeholder.test}"
+
 # Allowed test directories. Each new test area added to the project should
 # be listed here explicitly — this is a deliberate allow-list, not a
 # repo-wide glob, so an unrelated *.test.ts file accidentally created
@@ -25,6 +45,8 @@ TEST_DIRS=(
   "scripts/release/__tests__"
   "src/modules/signals/__tests__"
   "src/lib/ai/__tests__"
+  "src/modules/observations/__tests__"
+  "src/app/api/enrich/batch/__tests__"
 )
 
 TEST_FILES=()

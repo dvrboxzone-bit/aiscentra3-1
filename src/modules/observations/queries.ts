@@ -68,11 +68,52 @@ export async function markObservationProcessed(
     .eq('id', id)
 }
 
+/**
+ * Minimal shape markObservationForRetry actually calls -- deliberately
+ * loose (matching this file's own existing `any`-cast convention for
+ * every real Supabase call) so a test can supply a small hand-written
+ * mock without depending on Supabase's full generic client types.
+ */
+export interface RetryQueryClient {
+  from(table: string): {
+    select: (columns: string) => {
+      eq: (
+        col: string,
+        val: string,
+      ) => {
+        single: () => Promise<{ data: unknown; error: { message: string } | null }>
+      }
+    }
+    update: (values: Record<string, unknown>) => {
+      eq: (
+        col: string,
+        val: string,
+      ) => {
+        select: (
+          columns: string,
+        ) => Promise<{ data: Array<{ id: string }> | null; error: { message: string } | null }>
+      }
+    }
+  }
+}
+
+/**
+ * Requeues an observation for a later retry attempt. Returns the
+ * confirmed-updated row's own id -- callers can treat a resolved
+ * Promise as proof the row was actually found and updated, not merely
+ * that the request didn't error. Throws if the read, the update
+ * itself, or the confirmation (zero rows matched) fails.
+ *
+ * `client` is optional purely for testability -- every real call site
+ * omits it and gets the real createAdminClient(), unchanged.
+ */
 export async function markObservationForRetry(
   id: string,
   retryAfterMs: number = 60_000,
-): Promise<void> {
-  const supabase = createAdminClient()
+  client?: RetryQueryClient,
+): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = (client ?? createAdminClient()) as any
   const retryAt = new Date(Date.now() + retryAfterMs).toISOString()
 
   // Real bug fixed here: the previous version wrote
@@ -80,12 +121,14 @@ export async function markObservationForRetry(
   // the entire metadata JSONB column and silently discarding any other
   // fields already stored there (e.g. feed_url, set by the collector).
   // Read the existing value first and merge, never overwrite.
-  const { data: existing, error: readError } =
-    (await // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any).from('observations').select('metadata').eq('id', id).single()) as {
-      data: { metadata: Record<string, unknown> | null } | null
-      error: { message: string } | null
-    }
+  const { data: existing, error: readError } = (await supabase
+    .from('observations')
+    .select('metadata')
+    .eq('id', id)
+    .single()) as {
+    data: { metadata: Record<string, unknown> | null } | null
+    error: { message: string } | null
+  }
 
   if (readError) {
     throw new Error(
@@ -100,21 +143,42 @@ export async function markObservationForRetry(
   // as success by every caller, which could report `retried++` for an
   // observation that was never actually requeued (still marked
   // processed=false with no retry_after, but the caller believed it
-  // was safely back in the queue).
-  const { error: updateError } =
-    await // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any)
-      .from('observations')
-      .update({
-        processed: false,
-        processing_error: null,
-        metadata: { ...existingMetadata, retry_after: retryAt },
-      })
-      .eq('id', id)
+  // was safely back in the queue). Chaining `.select('id')` after
+  // `.update()` returns the actually-affected row(s), so a WHERE clause
+  // that silently matched zero rows (wrong id, already deleted, RLS
+  // blocked it) is distinguishable from a genuine PostgREST error --
+  // Supabase does not itself treat "matched 0 rows" as an error
+  // condition, so without this explicit check that case would have
+  // continued to look identical to success.
+  const { data: updated, error: updateError } = (await supabase
+    .from('observations')
+    .update({
+      processed: false,
+      processing_error: null,
+      metadata: { ...existingMetadata, retry_after: retryAt },
+    })
+    .eq('id', id)
+    .select('id')) as { data: Array<{ id: string }> | null; error: { message: string } | null }
 
   if (updateError) {
     throw new Error(`[markObservationForRetry] failed to requeue ${id}: ${updateError.message}`)
   }
+
+  if (!updated || updated.length === 0) {
+    throw new Error(
+      `[markObservationForRetry] update matched zero rows for ${id} -- observation may not exist`,
+    )
+  }
+
+  const confirmedId = updated[0]?.id
+  if (!confirmedId) {
+    // Defensive: should be unreachable given the length check above,
+    // but never fabricate a confirmation id that wasn't actually
+    // returned by Supabase.
+    throw new Error(`[markObservationForRetry] update response for ${id} did not include a row id`)
+  }
+
+  return confirmedId
 }
 
 export async function markObservationRejected(
