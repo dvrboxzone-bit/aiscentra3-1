@@ -10,7 +10,7 @@
  * All AI calls in the intelligence pipeline must be asynchronous.
  * This client is server-side only — never import in Client Components.
  */
-import { serverEnv } from '@/config/env'
+import { serverEnv } from '@/config/server-env'
 import { z } from 'zod'
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
@@ -18,17 +18,21 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
 // Response schema validation — prevents untyped AI output entering the system
 const MessageResponseSchema = z.object({
   id: z.string(),
-  choices: z.array(z.object({
-    message: z.object({
-      content: z.string(),
+  choices: z.array(
+    z.object({
+      message: z.object({
+        content: z.string(),
+      }),
+      finish_reason: z.string(),
     }),
-    finish_reason: z.string(),
-  })),
-  usage: z.object({
-    prompt_tokens:     z.number(),
-    completion_tokens: z.number(),
-    total_tokens:      z.number(),
-  }).optional(),
+  ),
+  usage: z
+    .object({
+      prompt_tokens: z.number(),
+      completion_tokens: z.number(),
+      total_tokens: z.number(),
+    })
+    .optional(),
 })
 
 export type OpenRouterMessage = {
@@ -58,22 +62,22 @@ export async function complete(
   messages: OpenRouterMessage[],
   options: OpenRouterOptions = {},
 ): Promise<OpenRouterResult> {
-  const model       = options.model       ?? serverEnv.OPENROUTER_MODEL
-  const maxTokens   = options.maxTokens   ?? 1000
-  const temperature = options.temperature ?? 0  // Deterministic by default
+  const model = options.model ?? serverEnv.OPENROUTER_MODEL
+  const maxTokens = options.maxTokens ?? 1000
+  const temperature = options.temperature ?? 0 // Deterministic by default
 
   const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${serverEnv.OPENROUTER_API_KEY}`,
-      'Content-Type':  'application/json',
-      'HTTP-Referer':  'https://aiscentra.com',
-      'X-Title':       'AIscentra Intelligence Observatory',
+      Authorization: `Bearer ${serverEnv.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://aiscentra.com',
+      'X-Title': 'AIscentra Intelligence Observatory',
     },
     body: JSON.stringify({
       model,
       messages,
-      max_tokens:  maxTokens,
+      max_tokens: maxTokens,
       temperature,
     }),
   })
@@ -86,14 +90,11 @@ export async function complete(
     )
   }
 
-  const raw = await response.json() as unknown
+  const raw = (await response.json()) as unknown
   const parsed = MessageResponseSchema.safeParse(raw)
 
   if (!parsed.success) {
-    throw new OpenRouterError(
-      `Invalid OpenRouter response structure: ${parsed.error.message}`,
-      0,
-    )
+    throw new OpenRouterError(`Invalid OpenRouter response structure: ${parsed.error.message}`, 0)
   }
 
   const content = parsed.data.choices[0]?.message.content
@@ -128,18 +129,12 @@ export async function completeJSON<T>(
   try {
     parsed = JSON.parse(cleaned)
   } catch {
-    throw new OpenRouterError(
-      `AI response was not valid JSON:\n${result.content.slice(0, 200)}`,
-      0,
-    )
+    throw new OpenRouterError(`AI response was not valid JSON:\n${result.content.slice(0, 200)}`, 0)
   }
 
   const validated = schema.safeParse(parsed)
   if (!validated.success) {
-    throw new OpenRouterError(
-      `AI response failed schema validation: ${validated.error.message}`,
-      0,
-    )
+    throw new OpenRouterError(`AI response failed schema validation: ${validated.error.message}`, 0)
   }
 
   return validated.data
