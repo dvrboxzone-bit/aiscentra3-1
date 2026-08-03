@@ -25,7 +25,21 @@ export default function AdminLoginPage(): React.JSX.Element {
     const { error: authError } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/admin`,
+        // Real production bug, confirmed live: this previously pointed
+        // directly at `${origin}/admin`, completely bypassing
+        // /auth/callback -- the ONLY route that actually calls
+        // exchangeCodeForSession(). Supabase's magic-link verify
+        // endpoint redirects the browser straight to whatever
+        // emailRedirectTo says; pointing it at /admin meant the PKCE
+        // code arrived as `/admin?code=...` with nothing in the app
+        // ever exchanging it for a session, so the admin layout's own
+        // getUser() check correctly saw no session and bounced back to
+        // /admin/login every time -- an infinite-seeming loop that was
+        // actually a missing exchange step, not a redirect bug. Fixed
+        // by pointing at /auth/callback, which exchanges the code and
+        // THEN redirects to /admin (its own default `next` value) once
+        // a real session exists.
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     })
 
