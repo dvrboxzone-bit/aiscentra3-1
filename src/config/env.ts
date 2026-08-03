@@ -63,13 +63,70 @@ function requireStaticEnv(name: string, value: string | undefined): string {
   return value
 }
 
+/**
+ * Safe, non-secret-leaking diagnostic summary of a string value:
+ * length, first/last 4 characters, and the char code of the first
+ * character (catches invisible characters -- leading whitespace,
+ * zero-width spaces, BOM, smart quotes copy-pasted from a browser --
+ * that would otherwise be indistinguishable from a correct value in
+ * any log or screenshot, since Vercel masks the full value in its own
+ * dashboard and a masked value looks identical whether it starts with
+ * an invisible corrupt character or not).
+ */
+function describeForDiagnostics(value: string): string {
+  const start = value.slice(0, 4)
+  const end = value.length > 8 ? value.slice(-4) : ''
+  const firstCharCode = value.length > 0 ? value.charCodeAt(0) : 0
+  return `length=${value.length} starts="${start}" ends="${end}" firstCharCode=${firstCharCode}`
+}
+
+/**
+ * Requires a NEXT_PUBLIC_* value AND validates it is actually a
+ * well-formed URL before returning it -- rather than letting a
+ * malformed-but-non-empty value silently pass through requireStaticEnv
+ * and crash much later, deep inside @supabase/supabase-js's own
+ * SupabaseClient constructor (`new URL(this.authUrl)`, unconditional,
+ * for every client construction) with an opaque, Next.js-redacted
+ * `input: '[SENSITIVE]/auth/v1'` and no indication of what was actually
+ * wrong with the value.
+ *
+ * This was a REAL, repeated incident: the exact same "TypeError:
+ * Invalid URL" / "/auth/v1" build failure recurred on /observatory's
+ * static generation even after the Project's NEXT_PUBLIC_SUPABASE_URL
+ * value was deleted and re-added from scratch in the Vercel dashboard --
+ * with no way to see the actual masked value on either side (Vercel
+ * dashboard masks it; so does Next.js's own build-log redaction of
+ * anything it heuristically flags as sensitive). This function makes
+ * the failure diagnosable going forward: if the value is present but
+ * not `new URL()`-parseable, it throws immediately, at the actual
+ * source of the problem, with a safe (non-secret) description of the
+ * value's shape instead of letting a downstream library's opaque
+ * failure be the only signal.
+ */
+function requireStaticUrlEnv(name: string, value: string | undefined): string {
+  const resolved = requireStaticEnv(name, value)
+  try {
+    new URL(resolved)
+  } catch {
+    throw new Error(
+      `[AIscentra] ${name} is set but is not a valid URL (${describeForDiagnostics(resolved)}). ` +
+        `Check this value in Vercel Project Settings -- it must start with https:// and contain ` +
+        `no extra whitespace, quotes, or invisible characters.`,
+    )
+  }
+  return resolved
+}
+
 // ── Public ────────────────────────────────────────────────────────────────────
 // Each NEXT_PUBLIC_* value below is read via a LITERAL, STATIC
 // `process.env.NEXT_PUBLIC_X` expression -- required for Next.js to
 // correctly inline it into the client bundle. Do not refactor these
 // into a dynamic-key helper call; see the module docstring above.
 export const env = {
-  SUPABASE_URL: requireStaticEnv('NEXT_PUBLIC_SUPABASE_URL', process.env.NEXT_PUBLIC_SUPABASE_URL),
+  SUPABASE_URL: requireStaticUrlEnv(
+    'NEXT_PUBLIC_SUPABASE_URL',
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+  ),
   SUPABASE_ANON_KEY: requireStaticEnv(
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
