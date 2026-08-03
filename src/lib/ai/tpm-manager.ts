@@ -227,15 +227,38 @@ export async function withModelQueue<T>(
   const waitResult = await Promise.race([readyResult, timeoutResult])
   clearTimeout(timeoutHandle)
 
+  // Shared release logic, used by BOTH exit paths below: releases this
+  // caller's own queue slot (markDone(), unblocking whoever queues up
+  // next) AND cleans up the map entry if nobody has registered after
+  // us since. Defined once so the 'timeout' path (deferred until the
+  // REAL previous holder actually finishes) and the 'ready' path
+  // (immediate, in a finally) cannot drift out of sync with each
+  // other -- an earlier version of this function only did this
+  // cleanup on the 'ready' path, leaving the map entry (and the
+  // model's string key) behind forever whenever a caller timed out
+  // waiting and was the last one registered when the real predecessor
+  // eventually finished.
+  const release = (): void => {
+    markDone()
+    // If a LATER caller has already registered its own tail for this
+    // model (queued up after us, even though we gave up), that entry
+    // must be left alone -- only remove the map entry if `myTail` is
+    // still the current value, proving nobody has queued up since.
+    if (modelQueues.get(model) === myTail) {
+      modelQueues.delete(model)
+    }
+  }
+
   if (waitResult === 'timeout') {
     // Give up now -- this caller's own deadline is gone before it ever
-    // got a turn. Forward completion to whoever queues up after us once
-    // the ACTUAL previous work finishes (not now) -- prevTail is the
-    // real predecessor's completion signal, and the invariant "only one
-    // fn() runs per model at a time" depends on the next caller still
-    // waiting for that, not for this early exit. The queue must never
-    // be released before the real previous holder actually completes.
-    prevTail.then(markDone, markDone)
+    // got a turn. Release (markDone() + the same cleanup check as the
+    // 'ready' path) only once the ACTUAL previous work finishes (not
+    // now) -- prevTail is the real predecessor's completion signal,
+    // and the invariant "only one fn() runs per model at a time"
+    // depends on the next caller still waiting for that, not for this
+    // early exit. The queue must never be released before the real
+    // previous holder actually completes.
+    prevTail.then(release, release)
     throw new AIDeadlineExceededError(
       `[deadline] withModelQueue:${model}: gave up waiting for the model queue`,
       `withModelQueue:${model}:queue-wait`,
@@ -245,22 +268,25 @@ export async function withModelQueue<T>(
 
   // waitResult === 'ready': prevTail has already resolved, so from here
   // on EVERY exit path -- including ensureTimeLeft throwing below, not
-  // just fn() itself failing -- must release myTail via markDone(),
-  // since nothing else will do it for us. Both checks and the actual
-  // work live inside the same try/finally specifically so that
-  // guarantee holds regardless of WHERE within this block something
-  // throws.
+  // just fn() itself failing -- must release myTail, since nothing
+  // else will do it for us. Both checks and the actual work live
+  // inside the same try/finally specifically so that guarantee holds
+  // regardless of WHERE within this block something throws.
   try {
     ensureTimeLeft(deadlineAt, 1_000, `withModelQueue:${model}:post-queue-wait`)
     return await fn()
   } finally {
-    markDone()
-    // Clean up: if nobody has queued up behind us since we registered
-    // myTail, remove this model's entry entirely rather than leaving a
-    // permanently-resolved promise (and the model's string key) in the
-    // map forever.
-    if (modelQueues.get(model) === myTail) {
-      modelQueues.delete(model)
-    }
+    release()
   }
+}
+
+/**
+ * @internal Test-only accessor into this module's private queue state.
+ * Never used by production code -- exists solely so a test can confirm
+ * a model's `modelQueues` entry was actually cleaned up (not merely
+ * that the returned/thrown Promise settled), without exporting the Map
+ * itself or otherwise widening this module's real public surface.
+ */
+export function __hasModelQueueEntryForTests(model: string): boolean {
+  return modelQueues.has(model)
 }

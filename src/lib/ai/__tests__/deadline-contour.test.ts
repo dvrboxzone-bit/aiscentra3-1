@@ -590,4 +590,61 @@ describe('withModelQueue deadline and concurrency', () => {
     const result = await withModelQueue(model, () => Promise.resolve('normal'), Date.now() + 10_000)
     assert.equal(result, 'normal')
   })
+
+  test('regression: a timed-out waiter cleans up its map entry once the real holder finishes, if it was the last one registered', async () => {
+    // This is the exact scenario the earlier version of the timeout
+    // branch got wrong: it called markDone() once the real predecessor
+    // (A) finished, but never re-ran the "am I still the last
+    // registered entry -> delete it" check that the 'ready' path's
+    // finally block already did -- leaving this model's key in
+    // `modelQueues` forever whenever the timed-out caller (B) was the
+    // last one registered when A eventually completed.
+    const { withModelQueue, __hasModelQueueEntryForTests } = await import('../tpm-manager')
+    const model = `queue-test-cleanup-${Date.now()}-${Math.random()}`
+
+    const aHoldMs = 300
+    const aPromise = withModelQueue(
+      model,
+      () => new Promise((r) => setTimeout(() => r('A'), aHoldMs)),
+      Date.now() + 10_000,
+    )
+    await new Promise((r) => setTimeout(r, 20)) // let A actually start
+
+    // B times out waiting for A -- and, critically, nobody queues up
+    // after B, so B is the last registered entry when A eventually
+    // finishes.
+    await assert.rejects(
+      withModelQueue(model, () => Promise.resolve('B'), Date.now() + 150),
+      (err: unknown) => err instanceof AIDeadlineExceededError,
+    )
+
+    // Immediately after B's own throw, A is still running -- the entry
+    // must still exist (release() for B's timeout path is deferred
+    // until A's real completion, not run now).
+    assert.equal(
+      __hasModelQueueEntryForTests(model),
+      true,
+      'the queue entry must still exist while the real holder (A) is still in flight',
+    )
+
+    // Once A actually finishes, B's deferred release() must fire and
+    // clean up the now-stale entry -- poll briefly rather than a single
+    // fixed sleep, since the exact microtask timing of the deferred
+    // `.then(release, release)` firing after A's own promise settles
+    // is not guaranteed to complete on the very same tick.
+    await aPromise
+    const deadline = Date.now() + 2_000
+    let cleaned = false
+    while (Date.now() < deadline) {
+      if (!__hasModelQueueEntryForTests(model)) {
+        cleaned = true
+        break
+      }
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    assert.ok(
+      cleaned,
+      'the model queue entry must be removed once the real holder finishes and B was the last one registered',
+    )
+  })
 })
