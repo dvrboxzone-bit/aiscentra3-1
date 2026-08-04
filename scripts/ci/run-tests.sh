@@ -47,6 +47,7 @@ TEST_DIRS=(
   "src/lib/ai/__tests__"
   "src/modules/observations/__tests__"
   "src/app/api/enrich/batch/__tests__"
+  "src/modules/assistant/__tests__"
 )
 
 TEST_FILES=()
