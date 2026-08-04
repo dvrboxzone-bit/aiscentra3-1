@@ -580,10 +580,14 @@ describe('/api/admin/simulate-engine-v2 — direct dependency-call evidence via 
 
 function makeFakeAssistantDeps(): {
   deps: AssistantDependencies
-  counts: { retrievalLoader: number; retrieval: number; fetch: number }
+  counts: { retrievalLoader: number; retrieval: number; fetch: number; quota: number }
 } {
-  const counts = { retrievalLoader: 0, retrieval: 0, fetch: 0 }
+  const counts = { retrievalLoader: 0, retrieval: 0, fetch: 0, quota: 0 }
   const deps: AssistantDependencies = {
+    checkQuota: async () => {
+      counts.quota++
+      return { allowed: true, perIpCount: 1, globalCount: 1 }
+    },
     loadRetrieval: async (): Promise<RetrievalModule> => {
       counts.retrievalLoader++
       return {
@@ -682,5 +686,51 @@ describe('/api/assistant — direct dependency-call evidence via injected fakes'
     assert.equal(counts.retrievalLoader, 1)
     assert.equal(counts.retrieval, 1)
     assert.equal(counts.fetch, 1)
+  })
+
+  test('per-IP quota exceeded: 429 with the per-IP message, retrieval/fetch never called', async () => {
+    process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
+    process.env['VERCEL_ENV'] = 'preview'
+    const { deps, counts } = makeFakeAssistantDeps()
+    deps.checkQuota = async () => {
+      counts.quota++
+      return { allowed: false, reason: 'per_ip', perIpCount: 15, globalCount: 40 }
+    }
+    const POST = createAssistantPostHandler(deps)
+    const req = new Request('https://example.invalid/api/assistant', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'a real question here' }),
+    })
+    const res = await POST(req)
+    assert.equal(res.status, 429)
+    const body = (await res.json()) as { error: string }
+    assert.match(body.error, /Daily limit reached/)
+    assert.equal(counts.retrievalLoader, 0, 'retrieval must never load after a quota denial')
+    assert.equal(counts.fetch, 0, 'Groq must never be called after a quota denial')
+    assert.equal(counts.quota, 1)
+  })
+
+  test('global quota exceeded: 429 with the shared-capacity message, framed as temporary infrastructure limit, not a paywall', async () => {
+    process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
+    process.env['VERCEL_ENV'] = 'preview'
+    const { deps, counts } = makeFakeAssistantDeps()
+    deps.checkQuota = async () => {
+      counts.quota++
+      return { allowed: false, reason: 'global', perIpCount: 2, globalCount: 250 }
+    }
+    const POST = createAssistantPostHandler(deps)
+    const req = new Request('https://example.invalid/api/assistant', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'a real question here' }),
+    })
+    const res = await POST(req)
+    assert.equal(res.status, 429)
+    const body = (await res.json()) as { error: string }
+    assert.match(body.error, /shared capacity/)
+    assert.match(body.error, /still fully available/)
+    assert.equal(counts.retrievalLoader, 0, 'retrieval must never load after a quota denial')
+    assert.equal(counts.fetch, 0, 'Groq must never be called after a quota denial')
   })
 })

@@ -29,12 +29,19 @@
  * call, no test state living inside this module as a mutable export.
  *
  * Pattern (once access is allowed):
- * 1. Retrieve relevant context from Observatory (RAG)
- * 2. Build grounded prompt with context
- * 3. Stream response from Groq
- * 4. Never answer from general AI knowledge
+ * 1. Check and increment the daily quota for this client IP (per-IP +
+ *    global caps — see src/modules/assistant/quota.ts)
+ * 2. Retrieve relevant context from Observatory (RAG)
+ * 3. Build grounded prompt with context
+ * 4. Stream response from Groq
+ * 5. Never answer from general AI knowledge
  */
 import { checkPublicAssistantAccess } from '@/lib/security/api-access'
+import {
+  checkAndIncrementQuota,
+  getClientIp,
+  type QuotaCheckResult,
+} from '@/modules/assistant/quota'
 import type { RetrievedContext } from '@/modules/assistant/retrieval'
 
 export const dynamic = 'force-dynamic'
@@ -58,6 +65,8 @@ export interface RetrievalModule {
 export interface AssistantDependencies {
   /** Loads retrieval + prompt modules. In production this transitively imports Supabase — called only after the guard passes. */
   loadRetrieval: () => Promise<RetrievalModule>
+  /** Checks and, if allowed, increments the daily quota for this client IP. Lazily loads the admin Supabase client in production — same reasoning as loadRetrieval above: never imported before the access guard has already passed. */
+  checkQuota: (ip: string) => Promise<QuotaCheckResult>
   /** Performs the Groq chat-completions call. Wrapped so tests can supply a fake streaming Response without any real network call. */
   fetchGroq: (args: { apiKey: string; model: string; messages: ChatMessage[] }) => Promise<Response>
   /** Reads the Groq API key. Production reads process.env directly; tests can override to simulate a missing key. */
@@ -73,6 +82,17 @@ const productionAssistantDependencies: AssistantDependencies = {
     )
     const { ASSISTANT_SYSTEM_PROMPT } = await import('@/modules/assistant/prompt')
     return { retrieveContext, formatContextForPrompt, ASSISTANT_SYSTEM_PROMPT }
+  },
+  checkQuota: async (ip: string) => {
+    // Lazily imported -- same reasoning as loadRetrieval above:
+    // createAdminClient transitively imports config/env.ts, whose
+    // top-level `export const env = {...}` throws eagerly if
+    // NEXT_PUBLIC_SUPABASE_URL is missing, merely by being imported.
+    // A denied (503) request must never trigger that.
+    const { createAdminClient } = await import('@/lib/supabase/server')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches the existing convention in src/modules/observations/queries.ts for the same reason: Supabase's generic client type is not worth fighting for a handful of simple queries against a table with no generated types yet.
+    const client = createAdminClient() as any
+    return checkAndIncrementQuota(client, ip)
   },
   fetchGroq: ({ apiKey, model, messages }) =>
     fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -103,6 +123,30 @@ export function createAssistantPostHandler(deps: AssistantDependencies) {
     if (!guard.allowed) {
       console.error(`[api/assistant] ${guard.internalReason}`)
       return guard.response
+    }
+
+    // ── Quota check — after the access guard, before any retrieval or Groq
+    //    call. Fails open on a database error (see checkAndIncrementQuota's
+    //    own docstring) -- a quota-tracking outage degrades to "no quota
+    //    enforced today," not "Assistant fully down."
+    //
+    //    Placeholder response text below: matches the temporary,
+    //    infrastructure-honest tone agreed for this stage (not the final
+    //    Editorial Voice, which is pending the signal-style-repair work in
+    //    PR #34/#35 landing first) -- explicitly framed as a shared,
+    //    temporary capacity limit, never as a paywall, since this product
+    //    has no paid tiers at all.
+    const clientIp = getClientIp(request)
+    const quota = await deps.checkQuota(clientIp)
+    if (!quota.allowed) {
+      const message =
+        quota.reason === 'global'
+          ? "The Assistant has reached today's shared capacity. Signals, events, and reports are still fully available."
+          : 'Daily limit reached. Resets at midnight UTC.'
+      return new Response(JSON.stringify({ error: message }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
 
     // ── Only now, after the guard passed, load retrieval (which transitively
