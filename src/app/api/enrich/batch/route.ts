@@ -59,6 +59,11 @@ import { processObservation } from '@/modules/signals/engine'
 import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
+import {
+  acquireEnrichmentLock,
+  releaseEnrichmentLock,
+  pruneTokenLedger,
+} from '@/lib/ai/execution-lock'
 import type { ObservationRow } from '@/modules/observations/queries'
 
 export const maxDuration = 60
@@ -301,96 +306,140 @@ export async function POST(request: Request): Promise<NextResponse> {
   const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
   const supabase = createAdminClient()
 
-  const deps: BatchProcessingDeps = {
-    fetchSourceInfo: async (sourceId: string) => {
-      const { data: source } = (await supabase
-        .from('sources')
-        .select('trust_score, name, type')
-        .eq('id', sourceId)
-        .single()) as {
-        data: { trust_score: number | null; name: string | null; type: string | null } | null
-      }
-      return {
-        trustScore: source?.trust_score ?? 0.5,
-        sourceName: source?.name ?? 'Unknown Source',
-      }
-    },
-    processObservation,
-    markObservationProcessed,
-    markObservationForRetry,
-  }
-
-  const combinedStats = freshStats()
-
-  // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
-  while (true) {
-    if (Date.now() >= deadlineAt) {
-      combinedStats.stopped_reason = 'time_budget'
-      break
-    }
-
-    // Fetch next batch of ready observations
-    const { data: rows, error: fetchErr } = await supabase
-      .from('observations')
-      .select('*')
-      .eq('processed', false)
-      .is('processing_error', null)
-      .order('collected_at', { ascending: true })
-      .limit(BATCH_SIZE)
-
-    if (fetchErr) {
-      console.error('[enrich/batch] fetch error:', fetchErr.message)
-      break
-    }
-
-    const observations = (rows ?? []) as ObservationRow[]
-    const now = new Date().toISOString()
-
-    // Filter retry-backoff observations
-    const ready = observations.filter((obs) => {
-      const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
-      return !retryAfter || retryAfter < now
+  // ── Cross-platform execution lock ─────────────────────────────────────────
+  // Every automatic enrichment trigger funnels through THIS route:
+  // the GitHub schedule, a manual GitHub dispatch, and the Vercel cron
+  // (/api/cron/pipeline awaits /api/enrich/batch). Taking the lease
+  // here therefore covers all of them, which GitHub's own
+  // `concurrency:` cannot -- it is blind to the Vercel trigger.
+  //
+  // A losing run exits 200 with acquired_lock=false and, critically,
+  // WITHOUT contacting Groq: an overlapping cycle is a normal outcome
+  // to skip, not an error to report.
+  const lockHolder = `enrich-batch:${startedAt}:${Math.random().toString(36).slice(2, 10)}`
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- repo convention for Supabase RPC calls
+  const lockClient = supabase as any
+  const gotLock = await acquireEnrichmentLock(lockClient, lockHolder)
+  if (!gotLock) {
+    console.warn(`[enrich/batch] another enrichment cycle holds the lock; skipping (${lockHolder})`)
+    return NextResponse.json({
+      skipped: true,
+      reason: 'enrichment_already_running',
+      acquired_lock: false,
+      duration_ms: Date.now() - startedAt,
+      timestamp: new Date().toISOString(),
     })
-
-    if (ready.length === 0) {
-      combinedStats.stopped_reason = 'queue_empty'
-      break
-    }
-
-    const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
-
-    combinedStats.processed += batchStats.processed
-    combinedStats.signal_created += batchStats.signal_created
-    combinedStats.rejected += batchStats.rejected
-    combinedStats.retried += batchStats.retried
-    combinedStats.errors += batchStats.errors
-    combinedStats.stopped_reason = batchStats.stopped_reason
-    for (const key of Object.keys(batchStats.error_breakdown) as Array<
-      keyof BatchStats['error_breakdown']
-    >) {
-      combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
-    }
-
-    // If we hit rate limit, the deadline, or a requeue write failure,
-    // stop the loop entirely -- next run (rate limit) or the requeue's
-    // own backoff (deadline) will pick this back up. A requeue failure
-    // is stopped for safety even though we don't know the observation's
-    // exact resulting state -- continuing to process further
-    // observations while one is in an uncertain state is not worth the
-    // risk.
-    if (
-      combinedStats.stopped_reason === 'rate_limited' ||
-      combinedStats.stopped_reason === 'deadline_exceeded' ||
-      combinedStats.stopped_reason === 'requeue_failed'
-    )
-      break
   }
 
-  const duration = Date.now() - startedAt
+  // Ledger maintenance, run opportunistically now that we hold the
+  // lock. Deliberately NOT a separate cron: an extra schedule would be
+  // one more thing to configure by hand in production, and the ledger
+  // grew unbounded precisely because cleanup existed only as an
+  // uncalled function. Never throws.
+  const prunedRows = await pruneTokenLedger(lockClient)
+  if (prunedRows > 0) {
+    console.info(`[enrich/batch] pruned ${prunedRows} expired token-ledger row(s)`)
+  }
 
-  return NextResponse.json({
-    ...combinedStats,
-    duration_ms: duration,
-    timestamp: new Date().toISOString(),
-  })
+  try {
+    const deps: BatchProcessingDeps = {
+      fetchSourceInfo: async (sourceId: string) => {
+        const { data: source } = (await supabase
+          .from('sources')
+          .select('trust_score, name, type')
+          .eq('id', sourceId)
+          .single()) as {
+          data: { trust_score: number | null; name: string | null; type: string | null } | null
+        }
+        return {
+          trustScore: source?.trust_score ?? 0.5,
+          sourceName: source?.name ?? 'Unknown Source',
+        }
+      },
+      processObservation,
+      markObservationProcessed,
+      markObservationForRetry,
+    }
+
+    const combinedStats = freshStats()
+
+    // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
+    while (true) {
+      if (Date.now() >= deadlineAt) {
+        combinedStats.stopped_reason = 'time_budget'
+        break
+      }
+
+      // Fetch next batch of ready observations
+      const { data: rows, error: fetchErr } = await supabase
+        .from('observations')
+        .select('*')
+        .eq('processed', false)
+        .is('processing_error', null)
+        .order('collected_at', { ascending: true })
+        .limit(BATCH_SIZE)
+
+      if (fetchErr) {
+        console.error('[enrich/batch] fetch error:', fetchErr.message)
+        break
+      }
+
+      const observations = (rows ?? []) as ObservationRow[]
+      const now = new Date().toISOString()
+
+      // Filter retry-backoff observations
+      const ready = observations.filter((obs) => {
+        const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
+        return !retryAfter || retryAfter < now
+      })
+
+      if (ready.length === 0) {
+        combinedStats.stopped_reason = 'queue_empty'
+        break
+      }
+
+      const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
+
+      combinedStats.processed += batchStats.processed
+      combinedStats.signal_created += batchStats.signal_created
+      combinedStats.rejected += batchStats.rejected
+      combinedStats.retried += batchStats.retried
+      combinedStats.errors += batchStats.errors
+      combinedStats.stopped_reason = batchStats.stopped_reason
+      for (const key of Object.keys(batchStats.error_breakdown) as Array<
+        keyof BatchStats['error_breakdown']
+      >) {
+        combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
+      }
+
+      // If we hit rate limit, the deadline, or a requeue write failure,
+      // stop the loop entirely -- next run (rate limit) or the requeue's
+      // own backoff (deadline) will pick this back up. A requeue failure
+      // is stopped for safety even though we don't know the observation's
+      // exact resulting state -- continuing to process further
+      // observations while one is in an uncertain state is not worth the
+      // risk.
+      if (
+        combinedStats.stopped_reason === 'rate_limited' ||
+        combinedStats.stopped_reason === 'deadline_exceeded' ||
+        combinedStats.stopped_reason === 'requeue_failed'
+      )
+        break
+    }
+
+    const duration = Date.now() - startedAt
+
+    return NextResponse.json({
+      ...combinedStats,
+      acquired_lock: true,
+      pruned_ledger_rows: prunedRows,
+      duration_ms: duration,
+      timestamp: new Date().toISOString(),
+    })
+  } finally {
+    // Always released, including on an unexpected throw. Even if this
+    // never runs (process killed mid-flight), the lease expires on its
+    // own -- that is the whole point of a TTL row over an advisory lock.
+    await releaseEnrichmentLock(lockClient, lockHolder)
+  }
 }

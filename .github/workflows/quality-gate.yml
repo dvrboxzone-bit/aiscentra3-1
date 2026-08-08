@@ -103,6 +103,16 @@ jobs:
         # passing control. See docs/audits/API_BOUNDARY_INVENTORY.md.
         run: npm run check:api-inventory
 
+      - name: PostgreSQL integration test (budget atomicity + execution lock)
+        # MANDATORY gate, not evidence-only. The concurrency guarantees
+        # this project depends on -- one budget reservation admitted out
+        # of N concurrent, one enrichment cycle admitted out of two
+        # competing triggers -- cannot be proven by a JS mock. This
+        # boots a throwaway PostgreSQL, applies the real migration and
+        # exercises the real functions over real concurrent connections.
+        # The script fails (never skips) if PostgreSQL is unavailable.
+        run: bash scripts/ci/pg-integration-test.sh
+
       - name: Production build
         run: npm run build
         env:
