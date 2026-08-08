@@ -20,6 +20,12 @@ import {
 import { withModelQueue } from './tpm-manager'
 import { getModelChain, type AgentRole } from './models'
 import { ensureTimeLeft, sleepWithDeadline, AIDeadlineExceededError } from './deadline'
+import {
+  reserveBudgetForCall,
+  consumerForRole,
+  estimateInputTokens,
+  AITokenBudgetExceededError,
+} from './budget-gate'
 
 export type { AgentRole, AIMessage, AIOptions, AIResult }
 
@@ -69,6 +75,10 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, deadlineAt: num
       // stated explicitly so the reason is visible in the code, not
       // just an emergent side effect of classification order.
       if (err instanceof AIDeadlineExceededError) throw err
+      // A budget refusal is not a model failure: trying the next
+      // model in the chain would spend the very budget just
+      // refused. Propagate immediately.
+      if (err instanceof AITokenBudgetExceededError) throw err
 
       lastErr = err
       const kind = classifyError(err)
@@ -107,6 +117,15 @@ export async function agentComplete(
 
   for (const ref of chain) {
     ensureTimeLeft(deadlineAt, 2_000, `agentComplete:${role}:before-${ref.provider}/${ref.model}`)
+    // Budget gate, per ATTEMPT and keyed on the model this attempt
+    // actually uses -- so a role whose primary is 8b but which has
+    // escalated to its 70b fallback is charged to the 70b budget, not
+    // waved through as "cheap". Throws before any Groq contact.
+    await reserveBudgetForCall({
+      model: ref.model,
+      consumer: consumerForRole(role),
+      estimatedTokens: (options.maxTokens ?? 1000) + estimateInputTokens(messages),
+    })
     const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
       const result = await withRetry(
@@ -129,6 +148,10 @@ export async function agentComplete(
       // error, losing the distinction the caller needs to requeue
       // correctly rather than mark this permanently failed.
       if (err instanceof AIDeadlineExceededError) throw err
+      // A budget refusal is not a model failure: trying the next
+      // model in the chain would spend the very budget just
+      // refused. Propagate immediately.
+      if (err instanceof AITokenBudgetExceededError) throw err
 
       const kind = classifyError(err)
       kinds.push(kind)
@@ -181,6 +204,15 @@ export async function agentCompleteJSON<T>(
       2_000,
       `agentCompleteJSON:${role}:before-${ref.provider}/${ref.model}`,
     )
+    // Budget gate, per ATTEMPT and keyed on the model this attempt
+    // actually uses -- so a role whose primary is 8b but which has
+    // escalated to its 70b fallback is charged to the 70b budget, not
+    // waved through as "cheap". Throws before any Groq contact.
+    await reserveBudgetForCall({
+      model: ref.model,
+      consumer: consumerForRole(role),
+      estimatedTokens: (options.maxTokens ?? 1000) + estimateInputTokens(messages),
+    })
     const label = `agent:${role}/${ref.provider}/${ref.model}`
     try {
       const result = await withRetry(
@@ -199,6 +231,10 @@ export async function agentCompleteJSON<T>(
       // See agentComplete's identical comment above: a deadline failure
       // must propagate immediately, not be treated as "try next model".
       if (err instanceof AIDeadlineExceededError) throw err
+      // A budget refusal is not a model failure: trying the next
+      // model in the chain would spend the very budget just
+      // refused. Propagate immediately.
+      if (err instanceof AITokenBudgetExceededError) throw err
 
       const kind = classifyError(err)
       kinds.push(kind)

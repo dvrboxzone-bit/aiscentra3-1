@@ -12,6 +12,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { __setBudgetReserverForTests } from '../budget-gate'
 import {
   AIDeadlineExceededError,
   ensureTimeLeft,
@@ -113,12 +114,21 @@ describe('tpm-manager.ts deadline awareness', () => {
 describe('agent.ts deadline contour (mocked fetch)', () => {
   const originalFetch = globalThis.fetch
   const originalGroqKey = process.env['GROQ_API_KEY']
+  let restoreBudget: (() => void) | undefined
 
   beforeEach(() => {
     process.env['GROQ_API_KEY'] = 'test-key-not-real'
+    // These tests measure elapsed time against millisecond-scale
+    // deadlines. The real budget gate performs a Supabase round trip
+    // per model attempt, whose latency would dominate those
+    // measurements. Substituting a no-op keeps these tests measuring
+    // what they exist to measure; the gate's own wiring is verified
+    // separately in budget-gate.test.ts.
+    restoreBudget = __setBudgetReserverForTests(async () => {})
   })
 
   afterEach(() => {
+    restoreBudget?.()
     globalThis.fetch = originalFetch
     if (originalGroqKey === undefined) delete process.env['GROQ_API_KEY']
     else process.env['GROQ_API_KEY'] = originalGroqKey

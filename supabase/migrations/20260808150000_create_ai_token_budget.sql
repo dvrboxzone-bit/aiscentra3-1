@@ -128,3 +128,41 @@ COMMENT ON FUNCTION public.consume_ai_token_budget IS
    gets only the non-reserved remainder. Serialized per model via
    pg_advisory_xact_lock so concurrent callers cannot both consume the
    same headroom.';
+
+-- ── Ledger cleanup ───────────────────────────────────────────────────────────
+-- Without this the append-only ledger grows unbounded: every Groq call
+-- ever made leaves a row, while only rows inside the rolling window are
+-- ever read.
+--
+-- Retention is deliberately much longer than the accounting window
+-- (default 7 days vs a 24-hour window). Deleting at exactly 24h would
+-- race the budget query itself -- a row could be removed microseconds
+-- before a concurrent consume_ai_token_budget() call summed it, silently
+-- under-counting usage and admitting a request that should have been
+-- refused. A wide margin removes that class of error entirely: nothing
+-- deletable is ever still relevant to a budget decision.
+--
+-- Atomicity is unaffected: this only ever deletes rows that are already
+-- outside every possible window, so it never contends with the advisory
+-- lock for a decision in flight, and it takes no lock of its own.
+CREATE OR REPLACE FUNCTION public.prune_ai_token_usage(
+  p_retention INTERVAL DEFAULT '7 days'
+)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted INT;
+BEGIN
+  DELETE FROM public.ai_token_usage
+  WHERE consumed_at < now() - p_retention;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END;
+$$;
+
+COMMENT ON FUNCTION public.prune_ai_token_usage IS
+  'Deletes ledger rows older than the retention period (default 7 days,
+   far wider than the 24-hour accounting window so pruning can never
+   remove a row a concurrent budget decision still needs). Returns the
+   number of rows deleted.';
