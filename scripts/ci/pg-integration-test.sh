@@ -13,8 +13,11 @@
 # NEVER touches production Supabase -- it starts its own throwaway
 # cluster on a non-default port in a temp directory and destroys it.
 #
-# Skips (exit 0) if PostgreSQL binaries are unavailable, so it can run
-# in environments without them without failing the suite.
+# MANDATORY: this test never skips. If PostgreSQL cannot be installed,
+# cannot be started, or no unprivileged user is available to run it,
+# the script FAILS. A silent SKIP would let the concurrency guarantee
+# regress unnoticed, which is precisely the failure mode this exists to
+# prevent -- an untested lock is an unproven lock.
 
 set -Eeuo pipefail
 
@@ -22,8 +25,17 @@ PGBIN=""
 for d in /usr/lib/postgresql/*/bin; do [[ -x "$d/initdb" ]] && PGBIN="$d"; done
 if [[ -z "$PGBIN" ]] && command -v initdb >/dev/null 2>&1; then PGBIN="$(dirname "$(command -v initdb)")"; fi
 if [[ -z "$PGBIN" ]]; then
-  echo "SKIP: no PostgreSQL binaries found; integration test not run."
-  exit 0
+  echo "PostgreSQL not present -- attempting install (required, not optional)..."
+  if command -v apt-get >/dev/null 2>&1; then
+    (apt-get update -qq && apt-get install -y -qq postgresql postgresql-contrib) >/dev/null 2>&1 || true
+  fi
+  for d in /usr/lib/postgresql/*/bin; do [[ -x "$d/initdb" ]] && PGBIN="$d"; done
+  if [[ -z "$PGBIN" ]] && command -v initdb >/dev/null 2>&1; then PGBIN="$(dirname "$(command -v initdb)")"; fi
+fi
+if [[ -z "$PGBIN" ]]; then
+  echo "FAIL: PostgreSQL is REQUIRED for this gate and could not be installed."
+  echo "      The concurrency guarantee cannot be verified without a real database."
+  exit 1
 fi
 export PATH="$PGBIN:$PATH"
 
@@ -36,7 +48,16 @@ PORT="${PGTEST_PORT:-55432}"
 RUNAS=""
 if [[ "$(id -u)" -eq 0 ]]; then
   for u in claude postgres nobody; do id "$u" >/dev/null 2>&1 && { RUNAS="$u"; break; }; done
-  [[ -n "$RUNAS" ]] || { echo "SKIP: running as root with no unprivileged user available."; rm -rf "$DIR"; exit 0; }
+  if [[ -z "$RUNAS" ]]; then
+    useradd -m pgtestuser >/dev/null 2>&1 || true
+    id pgtestuser >/dev/null 2>&1 && RUNAS="pgtestuser"
+  fi
+  if [[ -z "$RUNAS" ]]; then
+    echo "FAIL: running as root and no unprivileged user could be created."
+    echo "      initdb refuses to run as root, so the gate cannot verify concurrency."
+    rm -rf "$DIR"
+    exit 1
+  fi
   chown -R "$RUNAS" "$DIR"
 fi
 run() { if [[ -n "$RUNAS" ]]; then su "$RUNAS" -c "PATH=$PATH $1"; else bash -c "$1"; fi; }
@@ -141,6 +162,46 @@ $PG -c "INSERT INTO public.ai_token_usage(model,consumer,tokens,consumed_at)
 deleted="$($PG -c "SELECT public.prune_ai_token_usage();")"
 check "one expired row deleted" "1" "$deleted"
 check "in-window row retained" "1" "$($PG -c "SELECT count(*) FROM public.ai_token_usage;")"
+
+echo ""
+echo "TEST 8 — cross-platform execution lock: two competing runs"
+$PG -c "DELETE FROM public.execution_locks;" >/dev/null
+: > "$DIR/lockresults"
+# Simulates a GitHub-triggered run and a Vercel-triggered run starting
+# together -- the exact overlap GitHub's own `concurrency:` cannot
+# prevent, because it cannot see the Vercel trigger at all.
+for holder in github-run vercel-run; do
+  ( $PG -c "SELECT public.acquire_execution_lock('enrichment_cycle','$holder','5 minutes');" >> "$DIR/lockresults" ) &
+done
+wait
+won="$(grep -c '^t$' "$DIR/lockresults" || true)"
+lost="$(grep -c '^f$' "$DIR/lockresults" || true)"
+check "exactly one run acquires the lock" "1" "$won"
+check "the competing run is refused (and must skip Groq entirely)" "1" "$lost"
+
+echo ""
+echo "TEST 9 — lock self-heals after a crashed holder (expiry takeover)"
+$PG -c "DELETE FROM public.execution_locks;
+        INSERT INTO public.execution_locks(lock_name,holder,acquired_at,expires_at)
+        VALUES ('enrichment_cycle','crashed-run', now() - interval '10 minutes', now() - interval '5 minutes');" >/dev/null
+check "expired lease is reclaimed without manual intervention" "t" \
+  "$($PG -c "SELECT public.acquire_execution_lock('enrichment_cycle','new-run','5 minutes');")"
+
+echo ""
+echo "TEST 10 — release is holder-scoped"
+$PG -c "DELETE FROM public.execution_locks;" >/dev/null
+$PG -c "SELECT public.acquire_execution_lock('enrichment_cycle','holder-a','5 minutes');" >/dev/null
+check "a different holder cannot release someone else's lock" "f" \
+  "$($PG -c "SELECT public.release_execution_lock('enrichment_cycle','holder-b');")"
+check "the true holder can release it" "t" \
+  "$($PG -c "SELECT public.release_execution_lock('enrichment_cycle','holder-a');")"
+
+echo ""
+echo "TEST 11 — the lock does not block the budget RPC"
+$PG -c "DELETE FROM public.execution_locks; TRUNCATE public.ai_token_usage;" >/dev/null
+$PG -c "SELECT public.acquire_execution_lock('enrichment_cycle','holder-x','5 minutes');" >/dev/null
+check "budget decisions proceed while the enrichment lock is held" "t" \
+  "$($PG -c "SELECT allowed FROM public.consume_ai_token_budget('test-model','signal_engine',100,100000,0.9);")"
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then

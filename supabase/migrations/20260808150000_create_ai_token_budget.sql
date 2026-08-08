@@ -166,3 +166,91 @@ COMMENT ON FUNCTION public.prune_ai_token_usage IS
    far wider than the 24-hour accounting window so pruning can never
    remove a row a concurrent budget decision still needs). Returns the
    number of rows deleted.';
+
+-- ── Cross-platform enrichment execution lock ─────────────────────────────────
+--
+-- GitHub Actions' `concurrency:` only serializes runs of that ONE
+-- workflow. It cannot see the Vercel cron (vercel.json ->
+-- /api/cron/pipeline -> /api/enrich/batch), so claiming it prevents
+-- overlap would be false: a Vercel-driven enrichment cycle and a
+-- GitHub-driven one can still run simultaneously.
+--
+-- This lock lives in the database, which every trigger already shares,
+-- so it is independent of what launched the run: GitHub schedule,
+-- GitHub manual dispatch, or Vercel cron.
+--
+-- Deliberately a ROW, not pg_advisory_lock: an advisory lock is bound
+-- to a session, and serverless functions do not hold a stable session
+-- across an invocation. A row with an explicit expiry survives the
+-- caller vanishing mid-run (crash, Vercel 60s kill, runner eviction)
+-- and self-heals once the lease lapses -- no manual intervention, no
+-- stuck lock.
+--
+-- It must NOT interact with consume_ai_token_budget's advisory lock:
+-- these are separate mechanisms with separate scopes (one guards a
+-- whole enrichment cycle, the other guards a single budget decision),
+-- and the budget RPC never touches this table.
+CREATE TABLE IF NOT EXISTS public.execution_locks (
+  lock_name   TEXT        PRIMARY KEY,
+  holder      TEXT        NOT NULL,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+
+ALTER TABLE public.execution_locks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role only" ON public.execution_locks
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+COMMENT ON TABLE public.execution_locks IS
+  'Platform-independent execution leases. Used to guarantee only one
+   enrichment cycle runs at a time regardless of whether it was started
+   by GitHub Actions (scheduled or manual) or by the Vercel cron.';
+
+-- Acquires the lease if free or expired. Returns TRUE when acquired.
+-- Expiry-based takeover is what makes a crashed holder self-healing.
+CREATE OR REPLACE FUNCTION public.acquire_execution_lock(
+  p_lock_name TEXT,
+  p_holder    TEXT,
+  p_ttl       INTERVAL DEFAULT '5 minutes'
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_acquired BOOLEAN := FALSE;
+BEGIN
+  -- ON CONFLICT makes the whole claim a single atomic statement, so two
+  -- simultaneous callers cannot both observe the lock as free.
+  INSERT INTO public.execution_locks (lock_name, holder, acquired_at, expires_at)
+  VALUES (p_lock_name, p_holder, now(), now() + p_ttl)
+  ON CONFLICT (lock_name) DO UPDATE
+    SET holder      = EXCLUDED.holder,
+        acquired_at = EXCLUDED.acquired_at,
+        expires_at  = EXCLUDED.expires_at
+    WHERE public.execution_locks.expires_at < now()
+  RETURNING TRUE INTO v_acquired;
+
+  RETURN COALESCE(v_acquired, FALSE);
+END;
+$$;
+
+-- Releases only if still held by this holder, so a run that overran its
+-- lease cannot release a lock a later run has legitimately taken over.
+CREATE OR REPLACE FUNCTION public.release_execution_lock(
+  p_lock_name TEXT,
+  p_holder    TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_released BOOLEAN := FALSE;
+BEGIN
+  DELETE FROM public.execution_locks
+  WHERE lock_name = p_lock_name AND holder = p_holder
+  RETURNING TRUE INTO v_released;
+
+  RETURN COALESCE(v_released, FALSE);
+END;
+$$;
