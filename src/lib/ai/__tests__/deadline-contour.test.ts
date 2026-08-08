@@ -648,3 +648,60 @@ describe('withModelQueue deadline and concurrency', () => {
     )
   })
 })
+
+// ── client.ts — TPM token estimation ──────────────────────────────────────────
+
+describe('estimateRequestTokens (real 429 incident regression)', () => {
+  test('estimates above the real observed cost of the enrichment call', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    // Reconstructs the real enrichment request shape from Groq's own
+    // logs for 2026-08-05..08: ~11,375 characters of prompt, billed at
+    // ~2,492 input tokens, with ~178 output tokens actually emitted
+    // (maxTokens permitted 1024).
+    const messages = [
+      { role: 'system' as const, content: 'x'.repeat(9_055) },
+      { role: 'user' as const, content: 'y'.repeat(2_300) },
+    ]
+    const estimate = estimateRequestTokens(messages, 1024)
+    const realObservedCost = 2_492 + 178
+
+    assert.ok(
+      estimate >= realObservedCost,
+      `estimate ${estimate} must not be below the real observed cost ${realObservedCost} -- ` +
+        `under-estimating is exactly what caused the 2026-08-07 429 incident`,
+    )
+    // The old fixed guess was maxTokens + 1000 = 2024, which sat BELOW
+    // the real cost. Confirm the new estimate is strictly better.
+    assert.ok(estimate > 1024 + 1000, 'must exceed the old fixed guess that caused the incident')
+  })
+
+  test('scales with prompt length — a longer prompt yields a larger estimate', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    const short = estimateRequestTokens([{ role: 'system', content: 'x'.repeat(1_000) }], 500)
+    const long = estimateRequestTokens([{ role: 'system', content: 'x'.repeat(10_000) }], 500)
+    // This is the property whose absence caused the incident: the old
+    // fixed estimate did not move when the system prompt grew by ~500
+    // tokens, so the TPM budget silently stopped matching reality.
+    assert.ok(long > short, 'estimate must grow when the prompt grows')
+  })
+
+  test('budgets worst-case output, not typical output', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    const lowCap = estimateRequestTokens([{ role: 'user', content: 'x'.repeat(400) }], 100)
+    const highCap = estimateRequestTokens([{ role: 'user', content: 'x'.repeat(400) }], 4_000)
+    assert.equal(highCap - lowCap, 3_900, 'maxTokens must pass through to the estimate exactly')
+  })
+
+  test('sums across multiple messages rather than measuring only the first', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    const one = estimateRequestTokens([{ role: 'user', content: 'x'.repeat(4_000) }], 0)
+    const two = estimateRequestTokens(
+      [
+        { role: 'user', content: 'x'.repeat(4_000) },
+        { role: 'user', content: 'x'.repeat(4_000) },
+      ],
+      0,
+    )
+    assert.ok(two > one * 1.9, 'both messages must contribute to the estimate')
+  })
+})
