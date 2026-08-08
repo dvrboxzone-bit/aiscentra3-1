@@ -68,6 +68,67 @@ const CompletionResponseSchema = z.object({
     .optional(),
 })
 
+// ── Token estimation for TPM budgeting ────────────────────────────────────────
+
+/**
+ * Characters-per-token ratio used to estimate input size. 4 is the
+ * long-standing rule of thumb for English text on Llama-family
+ * tokenizers, and matches the same constant already used by
+ * src/modules/signals/engine.ts's own MAX_INPUT_CHARS calculation --
+ * keeping one shared assumption rather than two that can drift.
+ */
+const CHARS_PER_TOKEN = 4
+
+/**
+ * No additional safety multiplier is applied on top of CHARS_PER_TOKEN,
+ * because the 4-chars-per-token ratio ALREADY over-estimates for this
+ * project's actual traffic -- verified against Groq's own logs: the
+ * enrichment request's real prompt measures ~11,375 characters and
+ * Groq bills it at ~2,492 input tokens, i.e. ~4.56 chars/token. Divid-
+ * ing by 4 therefore yields ~2,844 -- about 14% above the true figure.
+ * Stacking a further multiplier on top would double-count the same
+ * headroom and needlessly halve throughput.
+ */
+
+/**
+ * Estimates total tokens (input + worst-case output) for one request,
+ * for TPM budgeting purposes.
+ *
+ * REAL PRODUCTION INCIDENT this fixes: the previous implementation was
+ * a fixed guess, `maxTokens + 1000`, whose comment described the 1000
+ * as "typical_input". For the enrichment call (maxTokens = 1024) that
+ * yields an estimate of 2,024 tokens. Groq's own request logs for
+ * 2026-08-03..08 show the actual cost of that same call is ~2,492
+ * input + ~178 output = ~2,670 tokens -- a 32% underestimate.
+ *
+ * Consequence, confirmed by those logs: with a 12,000 TPM limit and
+ * the manager's own 0.85 safety margin (10,200 effective), the
+ * underestimate let through ~5 requests/minute, which actually consumed
+ * ~13,450 tokens/minute -- above the real 12,000 ceiling. Groq returned
+ * 429 rate_limit_exceeded 19 times on 2026-08-07/08, after four
+ * preceding days with zero. Daily volume was never the problem (peak 49
+ * requests/day against a 1,000/day limit); the per-minute ceiling was.
+ *
+ * Root cause of the drift: the enrichment system prompt grew by roughly
+ * 500 tokens when style constraints and few-shot examples were added
+ * (measured directly in the same logs: average input rose from 1,997 on
+ * 2026-08-03 to ~2,490 from 2026-08-05 onward). The fixed "+1000"
+ * guess silently stopped matching reality, with no mechanism to notice.
+ *
+ * This implementation measures the ACTUAL prompt being sent instead of
+ * guessing, so future prompt growth adjusts the estimate automatically
+ * rather than silently re-breaking the TPM budget. Deliberately errs
+ * high: over-estimating costs throughput, under-estimating costs
+ * hard 429 failures and lost observations.
+ */
+export function estimateRequestTokens(messages: AIMessage[], maxTokens: number): number {
+  const inputChars = messages.reduce((sum, m) => sum + m.content.length + m.role.length, 0)
+  const estimatedInput = Math.ceil(inputChars / CHARS_PER_TOKEN)
+  // Worst-case output: the model is permitted to emit up to maxTokens,
+  // so budget for that rather than for the typical (smaller) response.
+  return estimatedInput + maxTokens
+}
+
 // ── Deadline / abort classification ────────────────────────────────────────────
 
 /**
@@ -112,7 +173,7 @@ export async function callProvider(
   // before the actual fetch, since the TPM wait itself can consume a
   // meaningful chunk of the remaining budget.
   ensureTimeLeft(deadlineAt, 2_000, `callProvider:${ref.provider}/${ref.model}:pre-tpm-wait`)
-  const estimatedTokens = maxTokens + 1000 // conservative: max_output + typical_input
+  const estimatedTokens = estimateRequestTokens(messages, maxTokens)
   await waitForTPMBudget(ref.model, estimatedTokens, deadlineAt)
 
   ensureTimeLeft(deadlineAt, 1_000, `callProvider:${ref.provider}/${ref.model}:pre-fetch`)
