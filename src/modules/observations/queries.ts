@@ -225,3 +225,50 @@ export async function getObservationStats(): Promise<{
   const p = processed.count ?? 0
   return { total: t, processed: p, unprocessed: t - p, errors: errors.count ?? 0 }
 }
+
+/**
+ * Source links for a signal's observations, for public display.
+ *
+ * Fixes a real, user-visible gap: signal pages rendered "SOURCES: 1
+ * linked" as plain text with no anchor anywhere, even though the URL
+ * existed in the database the whole time (verified in production --
+ * every signal's observation carries a real arxiv.org URL). An
+ * Observatory that cites a source it will not show cannot be checked
+ * by its own readers.
+ *
+ * Uses the admin client -- consistent with every other function in
+ * this module, not a new precedent -- because RLS is ENABLED on
+ * `observations` with ZERO policies defined, so the public client can
+ * read nothing from it (confirmed against production's pg_policies).
+ * The alternative, a new public-read RLS policy, would expose every
+ * column of each matching row (including the full scraped `content`),
+ * since RLS is row-level and cannot restrict columns; that is strictly
+ * more exposure than this needs.
+ *
+ * Safety: this selects exactly two columns, never `content`, and runs
+ * only in server components. Callers reach it solely after
+ * getSignalById() has already returned a signal through the PUBLIC,
+ * RLS-bound client -- so a non-public signal 404s before this is ever
+ * called, and no observation can be surfaced for a signal the viewer
+ * could not already see.
+ */
+export async function getSourceLinksForSignal(
+  observationIds: string[],
+): Promise<Array<{ url: string; publishedAt: string | null }>> {
+  if (observationIds.length === 0) return []
+
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('observations')
+    .select('url, published_at')
+    .in('id', observationIds)
+
+  if (error) {
+    console.error('[observations/queries] getSourceLinksForSignal error:', error.message)
+    return []
+  }
+
+  return ((data ?? []) as Array<{ url: string | null; published_at: string | null }>)
+    .filter((row): row is { url: string; published_at: string | null } => Boolean(row.url))
+    .map((row) => ({ url: row.url, publishedAt: row.published_at }))
+}
