@@ -17,6 +17,8 @@ export interface SignalFilters {
   status?: SignalStatus
   minScore?: number
   limit?: number
+  /** Zero-based row offset, for paginated listings. Requires `limit`. */
+  offset?: number
 }
 
 // ── Core Queries ──────────────────────────────────────────────────────────────
@@ -30,15 +32,32 @@ export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]>
     query = query.eq('category', filters.category)
   }
 
-  // Default to ACTIVE — public RLS only returns ACTIVE/PROMOTED anyway
-  query = query.eq('status', filters.status ?? 'ACTIVE')
+  // Public default: ACTIVE *and* PROMOTED. The previous code filtered
+  // to ACTIVE alone while its own comment claimed "public RLS only
+  // returns ACTIVE/PROMOTED anyway" -- the filter contradicted the
+  // comment, so every PROMOTED signal (a signal important enough to
+  // have been promoted into an Event, i.e. ranked ABOVE a plain ACTIVE
+  // one) was invisible on every public page. Confirmed against
+  // production: 2 such signals existed and appeared nowhere.
+  // An explicit filters.status still narrows to exactly that status,
+  // which is what the admin pages rely on.
+  if (filters.status) {
+    query = query.eq('status', filters.status)
+  } else {
+    query = query.in('status', ['ACTIVE', 'PROMOTED'])
+  }
 
   if (filters.minScore !== undefined) {
     query = query.gte('signal_score', filters.minScore)
   }
 
   if (filters.limit) {
-    query = query.limit(filters.limit)
+    if (filters.offset) {
+      // Supabase's range() is inclusive on both ends, hence the -1.
+      query = query.range(filters.offset, filters.offset + filters.limit - 1)
+    } else {
+      query = query.limit(filters.limit)
+    }
   }
 
   const { data, error } = await query
@@ -49,6 +68,46 @@ export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]>
   }
 
   return (data ?? []) as Signal[]
+}
+
+/**
+ * Total number of signals matching the same filters getSignals() would
+ * apply, ignoring limit/offset. Needed because a listing page can only
+ * honestly report "N signals" if N is the real total rather than the
+ * size of the current page -- previously /signals rendered
+ * "{signals.length} active signals detected", which capped at the page
+ * limit (50) and therefore under-reported the real figure (121 in
+ * production at the time of this fix).
+ */
+export async function getSignalsCount(
+  filters: Omit<SignalFilters, 'limit' | 'offset'> = {},
+): Promise<number> {
+  const supabase = await createClient()
+
+  let query = supabase.from('signals').select('*', { count: 'exact', head: true })
+
+  if (filters.category) {
+    query = query.eq('category', filters.category)
+  }
+
+  if (filters.status) {
+    query = query.eq('status', filters.status)
+  } else {
+    query = query.in('status', ['ACTIVE', 'PROMOTED'])
+  }
+
+  if (filters.minScore !== undefined) {
+    query = query.gte('signal_score', filters.minScore)
+  }
+
+  const { count, error } = await query
+
+  if (error) {
+    console.error('[signals/queries] getSignalsCount error:', error.message)
+    return 0
+  }
+
+  return count ?? 0
 }
 
 export async function getSignalById(id: string): Promise<Signal | null> {
