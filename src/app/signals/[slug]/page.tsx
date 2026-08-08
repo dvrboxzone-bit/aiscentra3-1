@@ -6,6 +6,7 @@ import { ScoreBar } from '@/components/ui/score-bar'
 import { SignalIllustration } from '@/components/signals/signal-illustration'
 import { getSignalById } from '@/modules/signals/queries'
 import { getEventsBySignal } from '@/modules/events/queries'
+import { getSourceLinksForSignal } from '@/modules/observations/queries'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
 import { getSignalSeverity } from '@/types/database'
 
@@ -33,6 +34,12 @@ export async function generateMetadata({ params }: SignalPageProps): Promise<Met
 export default async function SignalPage({ params }: SignalPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
   const [signal, relatedEvents] = await Promise.all([getSignalById(slug), getEventsBySignal(slug)])
+
+  // Fetched only after getSignalById has confirmed the signal is
+  // publicly visible (it uses the RLS-bound public client) -- see
+  // getSourceLinksForSignal's own docstring for why that ordering is
+  // the safety boundary here.
+  const sourceLinks = signal ? await getSourceLinksForSignal(signal.observation_ids) : []
 
   if (!signal) notFound()
 
@@ -111,6 +118,34 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
             </section>
           )}
 
+          {/* Sources — the URL was always present in the data but was
+              never rendered as a link; "SOURCES: N linked" alone gave
+              readers no way to verify the claim. */}
+          {sourceLinks.length > 0 && (
+            <section>
+              <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SOURCES</h2>
+              <ul className="space-y-2">
+                {sourceLinks.map((source) => (
+                  <li key={source.url}>
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="break-all font-mono text-xs text-text-secondary underline-offset-4 transition-colors hover:text-text-primary hover:underline"
+                    >
+                      {source.url}
+                    </a>
+                    {source.publishedAt && (
+                      <span className="ml-2 font-mono text-xs text-text-muted">
+                        {formatDate(source.publishedAt)}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {/* Status grid */}
           <section className="border border-observatory-border bg-observatory-surface p-4">
             <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SIGNAL STATUS</h2>
@@ -123,8 +158,14 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
                 label="Override"
                 value={signal.manual_override ? 'Manual' : 'Automated'}
               />
+              {/* Label is deliberately "Scored" and not "Momentum": this
+                  field is momentum_last_calculated (a timestamp), while the
+                  sidebar's ScoreBar shows momentum_score (a 0-100 value).
+                  Both were previously labelled "Momentum", so the same page
+                  rendered "MOMENTUM 20" and "MOMENTUM 3 days ago" for two
+                  unrelated values -- the second reading as nonsense. */}
               <StatusItem
-                label="Momentum"
+                label="Scored"
                 value={
                   signal.momentum_last_calculated
                     ? formatRelativeTime(signal.momentum_last_calculated)
