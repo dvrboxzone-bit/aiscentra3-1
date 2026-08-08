@@ -12,6 +12,7 @@
  * 4. Recent high-score signals as baseline context
  */
 import { createClient } from '@/lib/supabase/server'
+import { env } from '@/config/env'
 import type { Signal, Event, Report } from '@/types/database'
 
 export interface RetrievedContext {
@@ -143,6 +144,7 @@ export function formatContextForPrompt(ctx: RetrievedContext): string {
     for (const s of ctx.signals) {
       parts.push(
         `[SIGNAL] ${s.title}\n` +
+          `ID: ${s.id} | URL: ${env.APP_URL}/signals/${s.id}\n` +
           `Category: ${s.category} | Score: ${s.signal_score}/100 | Confidence: ${s.confidence_score}%\n` +
           `Date: ${s.created_at.slice(0, 10)}\n` +
           `${s.description}\n`,
@@ -155,6 +157,7 @@ export function formatContextForPrompt(ctx: RetrievedContext): string {
     for (const e of ctx.events) {
       parts.push(
         `[EVENT] ${e.title}\n` +
+          `ID: ${e.id} | URL: ${env.APP_URL}/events/${e.id}\n` +
           `Type: ${e.event_type} | Timeline: ${e.timeline_date}\n` +
           `Summary: ${e.summary}\n` +
           `Impact: ${e.impact_summary}\n` +
@@ -168,6 +171,7 @@ export function formatContextForPrompt(ctx: RetrievedContext): string {
     for (const r of ctx.reports) {
       parts.push(
         `[REPORT: ${r.report_type}] ${r.title}\n` +
+          `ID: ${r.id} | URL: ${env.APP_URL}/reports/${r.id}\n` +
           `Published: ${(r.published_at ?? '').slice(0, 10)}\n` +
           `${r.summary}\n` +
           `${r.content.slice(0, 800)}\n`,
