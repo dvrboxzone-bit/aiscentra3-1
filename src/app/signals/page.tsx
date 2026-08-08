@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { SignalCard } from '@/components/signals/signal-card'
-import { getSignals } from '@/modules/signals/queries'
+import { getSignals, getSignalsCount } from '@/modules/signals/queries'
 import type { SignalCategory } from '@/types/database'
 
 export const metadata: Metadata = {
@@ -25,8 +25,17 @@ const CATEGORIES: SignalCategory[] = [
 ]
 
 interface SignalsPageProps {
-  searchParams: Promise<{ category?: string }>
+  searchParams: Promise<{ category?: string; page?: string }>
 }
+
+/**
+ * Signals shown per page. Previously this was a bare `limit: 50` with
+ * no pagination of any kind, which meant every signal beyond the 50th
+ * was unreachable from the site: production held 121 publicly-visible
+ * signals at the time of this fix, so 71 of them (59%) could not be
+ * browsed to at all.
+ */
+const PAGE_SIZE = 50
 
 export default async function SignalsPage({
   searchParams,
@@ -34,10 +43,21 @@ export default async function SignalsPage({
   const params = await searchParams
   const activeCategory = params.category as SignalCategory | undefined
 
-  const signals = await getSignals({
-    ...(activeCategory !== undefined && { category: activeCategory }),
-    limit: 50,
-  })
+  const parsedPage = Number.parseInt(params.page ?? '1', 10)
+  const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
+  const categoryFilter = activeCategory !== undefined ? { category: activeCategory } : {}
+
+  const [signals, totalCount] = await Promise.all([
+    getSignals({
+      ...categoryFilter,
+      limit: PAGE_SIZE,
+      offset: (currentPage - 1) * PAGE_SIZE,
+    }),
+    getSignalsCount(categoryFilter),
+  ])
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  const categoryQuery = activeCategory ? `category=${activeCategory}&` : ''
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -45,8 +65,9 @@ export default async function SignalsPage({
         <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">SIGNAL DISCOVERY</p>
         <h1 className="text-2xl font-light text-text-primary">Signal Feed</h1>
         <p className="mt-2 text-sm text-text-muted">
-          {signals.length} active signal{signals.length !== 1 ? 's' : ''} detected
+          {totalCount} active signal{totalCount !== 1 ? 's' : ''} detected
           {activeCategory ? ` in ${activeCategory.replace('_', ' ')}` : ''}
+          {totalPages > 1 ? ` · page ${currentPage} of ${totalPages}` : ''}
         </p>
       </div>
 
@@ -92,6 +113,40 @@ export default async function SignalsPage({
           signals.map((signal) => <SignalCard key={signal.id} signal={signal} variant="default" />)
         )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <nav
+          className="flex items-center justify-between border-t border-observatory-border px-6 py-6 font-mono text-xs"
+          aria-label="Pagination"
+        >
+          {currentPage > 1 ? (
+            <Link
+              href={`/signals?${categoryQuery}page=${currentPage - 1}`}
+              className="tracking-wider text-text-muted transition-colors hover:text-text-primary"
+            >
+              ← PREVIOUS
+            </Link>
+          ) : (
+            <span className="tracking-wider text-observatory-border">← PREVIOUS</span>
+          )}
+
+          <span className="tracking-wider text-text-muted">
+            {currentPage} / {totalPages}
+          </span>
+
+          {currentPage < totalPages ? (
+            <Link
+              href={`/signals?${categoryQuery}page=${currentPage + 1}`}
+              className="tracking-wider text-text-muted transition-colors hover:text-text-primary"
+            >
+              NEXT →
+            </Link>
+          ) : (
+            <span className="tracking-wider text-observatory-border">NEXT →</span>
+          )}
+        </nav>
+      )}
     </div>
   )
 }
