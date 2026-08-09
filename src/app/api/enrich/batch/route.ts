@@ -56,7 +56,11 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation } from '@/modules/signals/engine'
-import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
+import {
+  markObservationProcessed,
+  markObservationForRetry,
+  getObservationStats,
+} from '@/modules/observations/queries'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
@@ -107,6 +111,10 @@ export interface BatchStats {
   rejected: number
   retried: number
   errors: number
+  /** Real per-item processing latencies (ms), collected during this
+   * batch. Used to compute real p50/p95 for the whole cycle -- see
+   * recordCycleMetrics's own call site below. */
+  item_latencies_ms: number[]
   stopped_reason:
     | 'queue_empty'
     | 'time_budget'
@@ -135,6 +143,7 @@ function freshStats(): BatchStats {
     rejected: 0,
     retried: 0,
     errors: 0,
+    item_latencies_ms: [],
     stopped_reason: 'queue_empty',
     error_breakdown: {
       rate_limit: 0,
@@ -196,6 +205,7 @@ export async function processBatchOfObservations(
     try {
       const { trustScore, sourceName } = await deps.fetchSourceInfo(observation.source_id)
 
+      const itemStartedAt = Date.now()
       const result = await deps.processObservation(
         observation,
         trustScore,
@@ -203,6 +213,7 @@ export async function processBatchOfObservations(
         '',
         deadlineAt,
       )
+      stats.item_latencies_ms.push(Date.now() - itemStartedAt)
 
       await deps.markObservationProcessed(
         observation.id,
@@ -422,6 +433,10 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const combinedStats = freshStats()
 
+    // Real queue-depth/oldest-pending snapshot taken BEFORE this cycle
+    // drains anything -- "at the start of this cycle," not after.
+    const queueSnapshot = await getObservationStats()
+
     // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
     while (true) {
       if (Date.now() >= deadlineAt) {
@@ -464,6 +479,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       combinedStats.rejected += batchStats.rejected
       combinedStats.retried += batchStats.retried
       combinedStats.errors += batchStats.errors
+      combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
       combinedStats.stopped_reason = batchStats.stopped_reason
       for (const key of Object.keys(batchStats.error_breakdown) as Array<
         keyof BatchStats['error_breakdown']
@@ -500,6 +516,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       itemsFailed: combinedStats.errors,
       failureBreakdown: combinedStats.error_breakdown as unknown as Record<string, number>,
       stoppedReason: combinedStats.stopped_reason,
+      itemLatenciesMs: combinedStats.item_latencies_ms,
+      queueDepth: queueSnapshot.unprocessed,
+      oldestPendingAgeSeconds: queueSnapshot.oldestPendingAgeSeconds,
     })
 
     return NextResponse.json({

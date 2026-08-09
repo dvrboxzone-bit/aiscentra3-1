@@ -67,28 +67,28 @@ claim to.
 
 | Metric                                              | Value |
 | --------------------------------------------------- | ----: |
-| Total routes                                        |    15 |
+| Total routes                                        |    16 |
 | Category: `public-read`                             |     2 |
 | Category: `authenticated-user`                      |     0 |
 | Category: `admin`                                   |     1 |
-| Category: `cron`                                    |    11 |
+| Category: `cron`                                    |    12 |
 | Category: `internal-machine`                        |     1 |
 | Category: `disabled`                                |     0 |
 | Direct AI-calling routes                            |     7 |
 | Indirect AI-triggering routes                       |     4 |
-| Service-role routes                                 |    12 |
-| Database-read routes                                |    14 |
-| Database-write routes                               |     7 |
-| Literal rateLimit="missing" count                   |    13 |
-| Routes without a real caller-facing HTTP rate limit |    15 |
-| Literal budgetGuard="missing" count                 |    14 |
+| Service-role routes                                 |    13 |
+| Database-read routes                                |    15 |
+| Database-write routes                               |     8 |
+| Literal rateLimit="missing" count                   |    14 |
+| Routes without a real caller-facing HTTP rate limit |    16 |
+| Literal budgetGuard="missing" count                 |    15 |
 | Cost-sensitive routes                               |    11 |
-| External-network-call routes                        |    13 |
-| Weak shared-secret (non-constant-time) routes       |    11 |
-| Confirmed raw-error-exposure routes                 |     5 |
+| External-network-call routes                        |    14 |
+| Weak shared-secret (non-constant-time) routes       |    12 |
+| Confirmed raw-error-exposure routes                 |     6 |
 | Risk: P0                                            |     0 |
 | Risk: P1                                            |    13 |
-| Risk: P2                                            |     2 |
+| Risk: P2                                            |     3 |
 | Risk: P3                                            |     0 |
 
 <!-- API_INVENTORY_SUMMARY_END -->

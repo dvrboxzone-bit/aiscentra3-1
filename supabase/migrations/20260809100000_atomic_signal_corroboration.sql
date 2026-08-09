@@ -42,7 +42,12 @@ BEGIN
     confidence_score = p_new_confidence_score,
     momentum_score = p_new_momentum_score,
     momentum_last_calculated = now(),
-    verification_state = public.compute_verification_state(array_length(p_updated_observation_ids, 1))
+    verification_state = public.compute_verification_state(array_length(p_updated_observation_ids, 1)),
+    -- A corroborating observation may itself be the FIRST verified
+    -- source this signal ever had -- re-evaluated on every merge
+    -- inside the same transaction as everything else, so the
+    -- publication gate can never lag behind the actual evidence.
+    has_verified_source = public.compute_has_verified_source(p_updated_observation_ids)
   WHERE id = p_signal_id;
 
   IF NOT FOUND THEN

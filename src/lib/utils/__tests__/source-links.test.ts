@@ -4,10 +4,15 @@
  * Real requirement: "небезопасный или недоступный URL исключать; если
  * не осталось ни одной доступной ссылки — сигнал не публиковать."
  */
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { isSafeSourceUrl, buildFaviconUrl, filterSafeSourceLinks } from '../source-links'
+import {
+  isSafeSourceUrl,
+  buildFaviconUrl,
+  filterSafeSourceLinks,
+  verifyUrlReachable,
+} from '../source-links'
 
 describe('isSafeSourceUrl', () => {
   test('a normal https article URL is safe', () => {
@@ -97,5 +102,67 @@ describe('filterSafeSourceLinks', () => {
     ]
     const result = filterSafeSourceLinks(links)
     assert.deepEqual(result, [])
+  })
+})
+
+describe('verifyUrlReachable', () => {
+  const originalFetch = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  test('unsafe URLs are never even attempted -- fails before any fetch call', async () => {
+    let fetchCalled = false
+    globalThis.fetch = (async () => {
+      fetchCalled = true
+      return new Response('', { status: 200 })
+    }) as typeof fetch
+
+    const result = await verifyUrlReachable('javascript:alert(1)')
+    assert.equal(result, false)
+    assert.equal(fetchCalled, false, 'an unsafe URL must never reach the network layer at all')
+  })
+
+  test('a 200 HEAD response is reachable', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 200 })) as typeof fetch
+    assert.equal(await verifyUrlReachable('https://example.com/article'), true)
+  })
+
+  test('a 404 is NOT reachable, even though the domain itself responded', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch
+    assert.equal(await verifyUrlReachable('https://example.com/gone'), false)
+  })
+
+  test('HEAD rejected (405) falls back to a ranged GET, which can still succeed', async () => {
+    let calls = 0
+    globalThis.fetch = (async (_url, init) => {
+      calls++
+      const method = (init as RequestInit | undefined)?.method
+      if (method === 'HEAD') return new Response('', { status: 405 })
+      return new Response('', { status: 200 })
+    }) as typeof fetch
+
+    const result = await verifyUrlReachable('https://example.com/no-head-support')
+    assert.equal(result, true)
+    assert.equal(calls, 2, 'must attempt HEAD first, then fall back to GET')
+  })
+
+  test('a network error (fetch throws) is treated as unreachable, never crashes', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('DNS resolution failed')
+    }) as typeof fetch
+    assert.equal(await verifyUrlReachable('https://this-does-not-resolve.invalid/x'), false)
+  })
+
+  test('a timeout (AbortError) is treated as unreachable', async () => {
+    globalThis.fetch = (async (_url, init) => {
+      return new Promise((_resolve, reject) => {
+        ;(init as RequestInit | undefined)?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted', 'AbortError'))
+        })
+      })
+    }) as typeof fetch
+    assert.equal(await verifyUrlReachable('https://example.com/slow', 50), false)
   })
 })

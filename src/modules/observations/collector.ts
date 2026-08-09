@@ -123,6 +123,23 @@ export async function collectSource(source: Source): Promise<CollectionResult> {
     }
 
     // 5. Save observations — upsert to handle race conditions
+    //
+    // Real requirement: "хранить результат и время проверки URL; не
+    // выполнять внешний запрос при каждом render." URL reachability is
+    // deliberately NOT verified synchronously here: this function's
+    // feed fetch above already uses up to 8s of Vercel's 10s function
+    // ceiling (see the AbortSignal.timeout(8000) above), so adding a
+    // real network round trip per item here risks timing out
+    // collection itself. Rows are inserted with url_verified_ok=NULL
+    // (unverified) -- the publication gate (has_verified_source,
+    // computed in engine.ts / apply_signal_corroboration) correctly
+    // treats NULL as "not verified" = not eligible for publication, a
+    // safe fail-closed default. A separate, dedicated verification
+    // pass (/api/cron/verify-urls, its OWN time budget, decoupled from
+    // collection's already-tight window) fills url_verified_ok/
+    // url_verified_at in afterward -- verification still happens
+    // exactly once per observation, still never at render time, just
+    // not synchronously inside collection.
     const observations = qualifiedItems.map((item) => ({
       source_id: source.id,
       title: item.title.slice(0, 500), // Safety truncation

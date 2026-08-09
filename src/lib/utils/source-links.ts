@@ -52,6 +52,51 @@ export interface SourceLink {
 }
 
 /**
+ * Real requirement: "хранить результат и время проверки URL; не
+ * выполнять внешний запрос при каждом render." This function performs
+ * the ONE real network check -- called exactly once per observation,
+ * at collection time (see collector.ts), never at render time. The
+ * result is stored on the observation row and read back, never
+ * re-checked per page view.
+ *
+ * HEAD first (cheaper, no body transfer); falls back to a ranged GET
+ * for servers that reject HEAD (a real, common case -- some origins
+ * return 405/501 for HEAD specifically). A 5s timeout keeps a single
+ * slow/hanging origin from blocking collection of the other 8 sources.
+ */
+export async function verifyUrlReachable(url: string, timeoutMs = 5_000): Promise<boolean> {
+  if (!isSafeSourceUrl(url)) return false
+
+  const attempt = async (method: 'HEAD' | 'GET'): Promise<boolean> => {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      try {
+        const res = await fetch(url, {
+          method,
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: method === 'GET' ? { Range: 'bytes=0-0' } : {},
+        })
+        // 2xx/3xx (already followed) = reachable. 4xx/5xx = not
+        // genuinely reachable for a public reader, even if the DNS/TCP
+        // layer responded.
+        return res.status >= 200 && res.status < 400
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch {
+      return false
+    }
+  }
+
+  if (await attempt('HEAD')) return true
+  // Some origins reject HEAD specifically (405/501) but serve GET
+  // fine -- one bounded retry, not a silent false negative.
+  return attempt('GET')
+}
+
+/**
  * Builds a same-origin favicon URL for a source link -- "verified" in
  * the sense required here means fetched from the SAME domain as the
  * actual article URL being linked (not a third-party icon service

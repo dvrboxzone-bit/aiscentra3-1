@@ -71,6 +71,41 @@ echo "Found ${#TEST_FILES[@]} test file(s):"
 printf '  %s\n' "${TEST_FILES[@]}"
 echo ""
 
+# ── DOM/accessibility tests (real jsdom + React) — REAL ISOLATION REQUIRED ──
+#
+# These specifically match `*.dom.test.tsx` (not `*.test.ts`), so the
+# find loop above never picks them up -- deliberately: jsdom's own
+# setup (src/lib/test-utils/dom-setup.ts) installs global.window/
+# document/navigator/etc. as a real side effect. Running that in the
+# SAME `node --test` process as every other test file would leak those
+# globals into unrelated Supabase/budget-gate/etc. tests that assume no
+# DOM environment exists -- a real, serious cross-contamination risk,
+# not a hypothetical one. Each DOM test file therefore gets its OWN
+# separate `node --test` invocation.
+DOM_TEST_FILES=()
+for dir in "${TEST_DIRS[@]}"; do
+  if [[ -d "$dir" ]]; then
+    while IFS= read -r -d '' f; do
+      DOM_TEST_FILES+=("$f")
+    done < <(find "$dir" -name '*.dom.test.tsx' -type f -print0 2>/dev/null)
+  fi
+done
+
+if [[ ${#DOM_TEST_FILES[@]} -gt 0 ]]; then
+  echo "Found ${#DOM_TEST_FILES[@]} DOM test file(s), each run in its own isolated process:"
+  printf '  %s\n' "${DOM_TEST_FILES[@]}"
+  echo ""
+  for domfile in "${DOM_TEST_FILES[@]}"; do
+    echo "--- running $domfile (isolated jsdom process) ---"
+    if ! node --import tsx --test "$domfile"; then
+      echo ""
+      echo "FAIL: DOM test $domfile failed."
+      exit 1
+    fi
+  done
+  echo ""
+fi
+
 OUTPUT_FILE=$(mktemp)
 trap 'rm -f "$OUTPUT_FILE"' EXIT
 

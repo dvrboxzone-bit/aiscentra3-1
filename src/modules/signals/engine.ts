@@ -755,6 +755,17 @@ export async function processObservation(
       // signal and its source observation agree on this value.
       qualification_score: sisResult?.sis.final ?? signal_score,
 
+      // Real publication gate: "без безопасной и подтверждённо
+      // доступной ссылки на оригинальный материал сигнал публично не
+      // показывается." At creation time this is normally FALSE --
+      // url_verified_ok is typically still NULL here (verification is
+      // a separate, decoupled pass, see /api/cron/verify-urls's own
+      // docstring for why) -- a safe, fail-closed default. The signal
+      // becomes eligible for public display once that pass confirms
+      // this observation's own URL is reachable and re-evaluates this
+      // flag; it never blocks on that at creation time.
+      has_verified_source: observation.url_verified_ok === true,
+
       // V2: Human relevance
       human_relevance_flags: sisResult?.human_relevance ?? {},
 

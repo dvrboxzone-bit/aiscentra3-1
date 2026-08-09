@@ -25,6 +25,10 @@ export interface ObservationRow {
   dry_run_result: Record<string, unknown>
   engine_version: string
   created_at: string
+  /** Real, stored result of a one-time reachability check -- see
+   * verifyUrlReachable in source-links.ts and /api/cron/verify-urls.
+   * NULL = never checked yet. */
+  url_verified_ok: boolean | null
 }
 
 export async function getUnprocessedObservations(limit = 8): Promise<ObservationRow[]> {
@@ -209,9 +213,10 @@ export async function getObservationStats(): Promise<{
   processed: number
   unprocessed: number
   errors: number
+  oldestPendingAgeSeconds: number | null
 }> {
   const supabase = createAdminClient()
-  const [total, processed, errors] = await Promise.all([
+  const [total, processed, errors, oldestPending] = await Promise.all([
     supabase.from('observations').select('id', { count: 'exact', head: true }),
     supabase
       .from('observations')
@@ -221,10 +226,30 @@ export async function getObservationStats(): Promise<{
       .from('observations')
       .select('id', { count: 'exact', head: true })
       .not('processing_error', 'is', null),
+    // Real requirement: "oldest pending age" -- queue depth alone
+    // (unprocessed count) does not show whether the queue is stuck on
+    // old work or genuinely fresh. Oldest unprocessed row's age is the
+    // real signal for that.
+    supabase
+      .from('observations')
+      .select('collected_at')
+      .eq('processed', false)
+      .order('collected_at', { ascending: true })
+      .limit(1),
   ])
   const t = total.count ?? 0
   const p = processed.count ?? 0
-  return { total: t, processed: p, unprocessed: t - p, errors: errors.count ?? 0 }
+  const oldestRow = oldestPending.data?.[0] as { collected_at: string } | undefined
+  const oldestPendingAgeSeconds = oldestRow
+    ? Math.floor((Date.now() - new Date(oldestRow.collected_at).getTime()) / 1000)
+    : null
+  return {
+    total: t,
+    processed: p,
+    unprocessed: t - p,
+    errors: errors.count ?? 0,
+    oldestPendingAgeSeconds,
+  }
 }
 
 /**

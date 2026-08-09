@@ -30,12 +30,27 @@ export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]>
     query = query.eq('category', filters.category)
   }
 
-  // Default to ACTIVE — public RLS only returns ACTIVE/PROMOTED anyway
-  query = query.eq('status', filters.status ?? 'ACTIVE')
+  // Public default: ACTIVE and PROMOTED (matches the RLS policy
+  // itself, "status = ANY (ARRAY['ACTIVE','PROMOTED'])") -- this
+  // branch had diverged from main before PR #41 fixed the same
+  // .eq('status','ACTIVE')-only bug there; reapplied here directly
+  // rather than rebasing this deep into an already-large PR.
+  if (filters.status) {
+    query = query.eq('status', filters.status)
+  } else {
+    query = query.in('status', ['ACTIVE', 'PROMOTED'])
+  }
 
   if (filters.minScore !== undefined) {
     query = query.gte('signal_score', filters.minScore)
   }
+
+  // Real publication gate: "без безопасной и подтверждённо доступной
+  // ссылки на оригинальный материал сигнал публично не показывается."
+  // has_verified_source is a stored, denormalized boolean (see
+  // migration 20260809095000) -- a single indexed column read here,
+  // zero joins, zero network calls at query/render time.
+  query = query.eq('has_verified_source', true)
 
   if (filters.limit) {
     query = query.limit(filters.limit)
@@ -54,10 +69,15 @@ export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]>
 export async function getSignalById(id: string): Promise<Signal | null> {
   const supabase = await createClient()
 
-  const { data, error } = await supabase.from('signals').select('*').eq('id', id).single()
+  const { data, error } = await supabase
+    .from('signals')
+    .select('*')
+    .eq('id', id)
+    .eq('has_verified_source', true)
+    .single()
 
   if (error) {
-    if (error.code === 'PGRST116') return null // Not found
+    if (error.code === 'PGRST116') return null // Not found (or gated -- indistinguishable to a public visitor, correctly so)
     console.error('[signals/queries] getSignalById error:', error.message)
     return null
   }
