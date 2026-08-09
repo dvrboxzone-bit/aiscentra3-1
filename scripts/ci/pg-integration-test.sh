@@ -41,6 +41,8 @@ export PATH="$PGBIN:$PATH"
 
 MIGRATION="supabase/migrations/20260808150000_create_ai_token_budget.sql"
 HARDENING_MIGRATION="supabase/migrations/20260809040000_harden_ai_token_budget_grants.sql"
+VERIFICATION_STATE_MIGRATION="supabase/migrations/20260809090000_add_signal_verification_state.sql"
+[[ -f "$VERIFICATION_STATE_MIGRATION" ]] || { echo "FATAL: $VERIFICATION_STATE_MIGRATION not found (run from repo root)"; exit 1; }
 CORROBORATION_MIGRATION="supabase/migrations/20260809100000_atomic_signal_corroboration.sql"
 [[ -f "$CORROBORATION_MIGRATION" ]] || { echo "FATAL: $CORROBORATION_MIGRATION not found (run from repo root)"; exit 1; }
 METRICS_MIGRATION="supabase/migrations/20260809120000_create_pipeline_metrics.sql"
@@ -114,6 +116,7 @@ CREATE TABLE public.signals (
   id UUID PRIMARY KEY,
   observation_ids UUID[] NOT NULL DEFAULT '{}',
   confidence_score INT NOT NULL DEFAULT 60,
+  qualification_score NUMERIC,
   momentum_score INT NOT NULL DEFAULT 0,
   momentum_last_calculated TIMESTAMPTZ
 );
@@ -128,6 +131,7 @@ CREATE TABLE public.signal_decision_log (
   signal_id UUID,
   observation_id UUID NOT NULL,
   decision TEXT NOT NULL,
+  qualification_score NUMERIC,
   qualification_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
   human_relevance_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
   thresholds_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -137,6 +141,9 @@ CREATE TABLE public.signal_decision_log (
   decided_at TIMESTAMPTZ DEFAULT now()
 );
 SQL
+
+echo "Applying the signal-verification-state migration..."
+$PG -v ON_ERROR_STOP=1 -f "$VERIFICATION_STATE_MIGRATION" >/dev/null
 
 echo "Applying the corroboration-atomicity migration..."
 $PG -v ON_ERROR_STOP=1 -f "$CORROBORATION_MIGRATION" >/dev/null
@@ -345,7 +352,7 @@ OBS_B="33333333-3333-3333-3333-333333333333"
 MISSING_SIG="99999999-9999-9999-9999-999999999999"
 MISSING_OBS="88888888-8888-8888-8888-888888888888"
 
-$PG -c "INSERT INTO public.signals (id, observation_ids, confidence_score, momentum_score) VALUES ('$SIG_ID', ARRAY['$OBS_A']::uuid[], 60, 20);" >/dev/null
+$PG -c "INSERT INTO public.signals (id, observation_ids, confidence_score, qualification_score, momentum_score) VALUES ('$SIG_ID', ARRAY['$OBS_A']::uuid[], 60, 7.2, 20);" >/dev/null
 $PG -c "INSERT INTO public.observations (id) VALUES ('$OBS_B');" >/dev/null
 
 echo "  -- success case: all three writes commit together --"
@@ -357,8 +364,14 @@ check "signal.confidence_score genuinely updated" "65" \
   "$($PG -c "SELECT confidence_score FROM public.signals WHERE id='$SIG_ID';")"
 check "observation.qualification_result genuinely updated" "SIGNAL" \
   "$($PG -c "SELECT qualification_result FROM public.observations WHERE id='$OBS_B';")"
+check "observation.qualification_score inherits the REAL signal score (7.2), not NULL -- the exact 'false SIGNAL with NULL score' bug this closes" "7.2" \
+  "$($PG -c "SELECT qualification_score FROM public.observations WHERE id='$OBS_B';")"
 check "decision log entry genuinely written" "1" \
   "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$OBS_B';")"
+check "decision log qualification_score also matches -- three-way consistency (signal/observation/decision_log)" "7.2" \
+  "$($PG -c "SELECT qualification_score FROM public.signal_decision_log WHERE observation_id='$OBS_B';")"
+check "verification_state becomes CORROBORATED at exactly 2 independent observations" "CORROBORATED" \
+  "$($PG -c "SELECT verification_state FROM public.signals WHERE id='$SIG_ID';")"
 
 echo "  -- failure case: nonexistent signal -- must roll back EVERYTHING, not partially apply --"
 $PG -c "INSERT INTO public.observations (id) VALUES ('$MISSING_OBS');" >/dev/null
@@ -405,6 +418,36 @@ check "the in-window row survives pruning" "1" \
   "$($PG -c "SELECT count(*) FROM public.pipeline_metrics;")"
 
 $PG -c "TRUNCATE public.pipeline_metrics;" >/dev/null
+
+echo ""
+echo "TEST 15 — verification_state: distinct from confidence/qualification/status, correct thresholds"
+check "compute_verification_state(1) = SINGLE_SOURCE_UNVERIFIED" "SINGLE_SOURCE_UNVERIFIED" \
+  "$($PG -c "SELECT public.compute_verification_state(1);")"
+check "compute_verification_state(2) = CORROBORATED (exact boundary)" "CORROBORATED" \
+  "$($PG -c "SELECT public.compute_verification_state(2);")"
+check "compute_verification_state(3) = VERIFIED (exact boundary)" "VERIFIED" \
+  "$($PG -c "SELECT public.compute_verification_state(3);")"
+check "compute_verification_state(10) = VERIFIED (well above boundary)" "VERIFIED" \
+  "$($PG -c "SELECT public.compute_verification_state(10);")"
+
+echo "  -- a freshly-inserted signal defaults to SINGLE_SOURCE_UNVERIFIED without the application setting it explicitly --"
+$PG -c "TRUNCATE public.signals;" >/dev/null
+$PG -c "INSERT INTO public.signals (id, observation_ids) VALUES ('55555555-5555-5555-5555-555555555555', ARRAY['$OBS_A']::uuid[]);" >/dev/null
+check "default verification_state on insert" "SINGLE_SOURCE_UNVERIFIED" \
+  "$($PG -c "SELECT verification_state FROM public.signals WHERE id='55555555-5555-5555-5555-555555555555';")"
+
+echo "  -- verification_state, confidence_score, and status are genuinely independent columns --"
+$PG -c "UPDATE public.signals SET confidence_score=95, verification_state='DISPUTED' WHERE id='55555555-5555-5555-5555-555555555555';" >/dev/null
+check "confidence_score change does not affect verification_state" "DISPUTED" \
+  "$($PG -c "SELECT verification_state FROM public.signals WHERE id='55555555-5555-5555-5555-555555555555';")"
+check "verification_state change does not affect confidence_score" "95" \
+  "$($PG -c "SELECT confidence_score FROM public.signals WHERE id='55555555-5555-5555-5555-555555555555';")"
+
+echo "  -- the CHECK constraint rejects an invalid state --"
+INVALID_ERR="$($PG -c "UPDATE public.signals SET verification_state='NOT_A_REAL_STATE' WHERE id='55555555-5555-5555-5555-555555555555';" 2>&1 | grep -c 'violates check constraint' || true)"
+check "invalid verification_state is rejected by the CHECK constraint" "1" "$INVALID_ERR"
+
+$PG -c "TRUNCATE public.signals;" >/dev/null
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then

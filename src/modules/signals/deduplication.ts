@@ -213,16 +213,37 @@ export async function checkDuplicate(
  * attempting broader cross-signal correlation, which is a materially
  * larger feature deserving its own dedicated design pass.
  *
- * Band: a lower bound (0.55) below which two titles are more likely to
- * be genuinely different stories that merely share common AI-domain
+ * Band: a lower bound below which two titles are more likely to be
+ * genuinely different stories that merely share common AI-domain
  * vocabulary than the same event -- a Levenshtein-based check has no
- * semantic understanding, so this stays conservative on the low end
- * deliberately, matching this project's own "prefer no Signal over a
- * wrong one" stance rather than aggressively merging unrelated items.
- * No upper bound (see CORROBORATION_MIN's own comment below): a match
- * at >=0.85 that reaches this function has already been confirmed by
- * checkDuplicate to be from an INDEPENDENT source, making it stronger
- * evidence, not weaker.
+ * semantic understanding, so this stays conservative deliberately,
+ * matching this project's own "prefer no Signal over a wrong one"
+ * stance rather than aggressively merging unrelated items.
+ *
+ * REAL BUG FIXED (raised bar, entity-anchor required): the original
+ * implementation merged on title similarity ALONE, down to 0.55 --
+ * far too weak a signal on its own. Two DIFFERENT papers with generic,
+ * stylized titles ("New Model Achieves Record Performance" vs.
+ * "Record-Breaking Model Released Today") can score well above 0.55
+ * on pure Levenshtein similarity while describing completely unrelated
+ * events. Per the owner's explicit instruction: "Разные события не
+ * объединять без подтверждённой event identity. Неоднозначный
+ * кандидат остаётся отдельным single-source observation."
+ *
+ * Now requires BOTH, deliberately without any additional AI call
+ * (entity extraction here is a free, deterministic heuristic, not an
+ * LLM call -- adding one would reintroduce exactly the AI-budget
+ * pressure the pre-filter in pre-qualification.ts exists to relieve):
+ *   1. similarity >= CORROBORATION_MIN (raised to 0.70, from 0.55)
+ *   2. at least one shared "entity anchor" token -- a capitalized,
+ *      non-generic word or hyphenated compound extracted from both
+ *      titles (see extractEntityAnchors below), acting as a proxy for
+ *      a shared proper noun (company, model, product name) that a
+ *      genuinely coincidental title-similarity match would be very
+ *      unlikely to also share.
+ * Failing either condition means the candidate is AMBIGUOUS and is
+ * NOT auto-merged -- it proceeds through the normal pipeline as its
+ * own single-source observation, exactly as the instruction requires.
  *
  * A same-source match is explicitly excluded: this is corroboration
  * from an INDEPENDENT outlet, not the same source republishing or
@@ -230,15 +251,195 @@ export async function checkDuplicate(
  * a different, legitimate case already handled elsewhere by URL-based
  * observation deduplication in the collector).
  */
-const CORROBORATION_MIN = 0.55
-// No upper bound: checkDuplicate above already handles the >=0.85 case
-// for SAME-source matches (rejecting those as true duplicates before
-// this function is ever reached in engine.ts's call order). Any match
-// that reaches this function -- including >=0.85 -- has therefore
-// already been confirmed to be from an INDEPENDENT source, which makes
-// higher similarity STRONGER corroboration evidence, not a reason to
-// exclude it. An explicit upper bound here would have wrongly dropped
-// exactly the strongest, most confident corroboration signal.
+const CORROBORATION_MIN = 0.7
+
+// Common capitalized words that are NOT proper-noun-like anchors --
+// generic terms that would trivially "match" between two unrelated
+// AI-domain titles and defeat the purpose of requiring an anchor at
+// all.
+//
+// REAL GAP FOUND AND FIXED HERE (via a failing test, not assumed):
+// headlines are conventionally written in Title Case, which
+// capitalizes EVERY significant word -- not just proper nouns. A
+// short denylist covering only a few domain terms let ordinary
+// function/connector words ("With", "Today", "Improved",
+// "Benchmarks") through as false "anchors," which would have made
+// two completely generic, unrelated titles appear to share an entity
+// just because both used common English words in Title Case. This
+// list is deliberately broad -- common English prepositions,
+// articles, conjunctions, and generic AI-news verbs/nouns -- rather
+// than a short, easily-incomplete one, precisely because the
+// consequence of under-covering it is a false "confirmed event
+// identity" between two different stories.
+const GENERIC_CAPITALIZED_TERMS = new Set([
+  // Domain-generic terms (original set)
+  'new',
+  'the',
+  'a',
+  'an',
+  'ai',
+  'research',
+  'study',
+  'model',
+  'models',
+  'system',
+  'systems',
+  'analysis',
+  'framework',
+  'approach',
+  'method',
+  'update',
+  'report',
+  'this',
+  'first',
+  'major',
+  'breaking',
+  'record',
+  'breakthrough',
+  'announces',
+  'announcement',
+  'launches',
+  'launch',
+  'releases',
+  'release',
+  'shows',
+  'reveals',
+  'unveils',
+  // English function/connector words -- capitalized by Title Case
+  // conventions regardless of whether they are proper nouns.
+  'with',
+  'without',
+  'today',
+  'now',
+  'after',
+  'before',
+  'from',
+  'for',
+  'its',
+  'their',
+  'his',
+  'her',
+  'and',
+  'but',
+  'or',
+  'nor',
+  'to',
+  'of',
+  'in',
+  'on',
+  'at',
+  'by',
+  'as',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'has',
+  'have',
+  'had',
+  'will',
+  'would',
+  'could',
+  'should',
+  'can',
+  'may',
+  'might',
+  'must',
+  'not',
+  'no',
+  'yes',
+  'all',
+  'more',
+  'most',
+  'some',
+  'any',
+  'each',
+  'every',
+  'both',
+  'few',
+  'many',
+  'much',
+  'such',
+  'over',
+  'under',
+  'up',
+  'down',
+  'out',
+  'off',
+  'again',
+  'further',
+  'then',
+  'once',
+  'here',
+  'there',
+  'when',
+  'where',
+  'why',
+  'how',
+  'what',
+  'which',
+  'who',
+  'whom',
+  'while',
+  'during',
+  // Generic AI-news vocabulary that is not itself distinctive.
+  'improved',
+  'improves',
+  'improving',
+  'improvement',
+  'benchmark',
+  'benchmarks',
+  'performance',
+  'results',
+  'score',
+  'scores',
+  'better',
+  'faster',
+  'smaller',
+  'larger',
+  'bigger',
+  'context',
+  'window',
+  'version',
+  'latest',
+  'next',
+  'ships',
+  'ship',
+  'debuts',
+  'debut',
+])
+
+/**
+ * Extracts proper-noun-like "entity anchor" tokens from a title: words
+ * or hyphenated compounds that start with an uppercase letter and are
+ * not in the generic-term denylist above. Deliberately simple and
+ * inspectable (no NLP library, no AI call) -- a heuristic proxy for
+ * "this title names a specific company/model/product," not a claim of
+ * linguistic correctness.
+ */
+export function extractEntityAnchors(title: string): Set<string> {
+  const tokens = title.match(/\b[A-Z][A-Za-z0-9-]*\b/g) ?? []
+  const anchors = new Set<string>()
+  for (const token of tokens) {
+    const lower = token.toLowerCase()
+    if (GENERIC_CAPITALIZED_TERMS.has(lower)) continue
+    if (token.length < 3) continue
+    anchors.add(lower)
+  }
+  return anchors
+}
+
+function sharesEntityAnchor(titleA: string, titleB: string): boolean {
+  const anchorsA = extractEntityAnchors(titleA)
+  const anchorsB = extractEntityAnchors(titleB)
+  for (const a of anchorsA) {
+    if (anchorsB.has(a)) return true
+  }
+  return false
+}
 
 export interface CorroborationResult {
   isCorroboration: boolean
@@ -322,6 +523,11 @@ export async function checkCorroboration(
   }>) {
     const score = similarity(candidateTitle, signal.title)
     if (score < CORROBORATION_MIN) continue
+    // Confirmed event identity requires BOTH raised similarity AND a
+    // shared entity anchor -- see this function's own docstring for
+    // why pure similarity, even at 0.70+, is not sufficient on its
+    // own to safely merge two different observations.
+    if (!sharesEntityAnchor(candidateTitle, signal.title)) continue
     if (!best || score > best.score) {
       best = { id: signal.id, title: signal.title, observation_ids: signal.observation_ids, score }
     }
