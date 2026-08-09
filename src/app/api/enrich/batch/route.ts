@@ -59,6 +59,7 @@ import { processObservation } from '@/modules/signals/engine'
 import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
+import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
 import {
   acquireEnrichmentLock,
   releaseEnrichmentLock,
@@ -77,6 +78,10 @@ const BATCH_SIZE = 3 // 3 observations per run — conservative for stability. U
 const DEADLINE_BUFFER_MS = 10_000 // >=10s between deadline and Vercel's actual kill, for requeue + response
 const AI_RETRY_MS = 30_000 // 30s backoff after 429 (no Retry-After header available)
 const DEADLINE_RETRY_MS = 10_000 // short backoff after AI_DEADLINE_EXCEEDED -- distinct from rate-limit backoff
+const BUDGET_RETRY_MS = 60_000 // backoff after AI_TOKEN_BUDGET_EXCEEDED -- longer than a deadline miss,
+// since a daily/rolling-window budget refusal will not resolve in seconds. The real backstop
+// is the next scheduled enrichment cycle (~4h away, see enrich-batch-hourly.yml), which will
+// re-fetch this observation regardless of the exact value once its retry_after has passed.
 const INTER_REQUEST_MS = 6_000 // 6s between requests — 10 RPM effective rate
 
 export interface BatchStats {
@@ -90,12 +95,14 @@ export interface BatchStats {
     | 'time_budget'
     | 'rate_limited'
     | 'deadline_exceeded'
+    | 'budget_exhausted'
     | 'requeue_failed'
   error_breakdown: {
     rate_limit: number
     server_error: number
     timeout: number
     deadline_exceeded: number
+    budget_exhausted: number
     requeue_failed: number
     json_parse: number
     validation: number
@@ -117,6 +124,7 @@ function freshStats(): BatchStats {
       server_error: 0,
       timeout: 0,
       deadline_exceeded: 0,
+      budget_exhausted: 0,
       requeue_failed: 0,
       json_parse: 0,
       validation: 0,
@@ -197,6 +205,40 @@ export async function processBatchOfObservations(
         await sleep(INTER_REQUEST_MS)
       }
     } catch (err) {
+      // AI_TOKEN_BUDGET_EXCEEDED: temporary, exactly like AI_DEADLINE_EXCEEDED
+      // below -- requeue with a distinct backoff and stop the whole batch
+      // immediately. Checked BEFORE AIDeadlineExceededError and
+      // AIProviderError since it is a sibling type to both (not a
+      // subclass of either) and must never fall through to the generic
+      // "mark as permanent processing_error" path. Without this, a
+      // Signal Engine call refused by the shared TPD budget gate would
+      // have its SIS stage silently proceed without evaluation and its
+      // enrichment stage return outcome:'error', which the code below
+      // then WOULD have recorded as a permanent processing_error --
+      // discarding a temporary, self-resolving budget refusal as if the
+      // observation were permanently broken.
+      if (err instanceof AITokenBudgetExceededError) {
+        stats.error_breakdown.budget_exhausted++
+        try {
+          await deps.markObservationForRetry(observation.id, BUDGET_RETRY_MS)
+          stats.retried++
+          stats.stopped_reason = 'budget_exhausted'
+          console.warn(
+            `[enrich/batch] budget_exhausted — ${observation.id} queued for retry in ${BUDGET_RETRY_MS}ms (${err.consumer}/${err.model})`,
+          )
+        } catch (requeueErr) {
+          // See the identical comment on the deadline_exceeded branch
+          // below: never report retried++ for a requeue write that did
+          // not actually succeed.
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after budget_exhausted for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        break
+      }
+
       // AI_DEADLINE_EXCEEDED: temporary, like rate-limit -- requeue with
       // a short, distinct backoff and stop the whole batch immediately
       // so this invocation can return a controlled response instead of
@@ -422,6 +464,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (
         combinedStats.stopped_reason === 'rate_limited' ||
         combinedStats.stopped_reason === 'deadline_exceeded' ||
+        combinedStats.stopped_reason === 'budget_exhausted' ||
         combinedStats.stopped_reason === 'requeue_failed'
       )
         break
