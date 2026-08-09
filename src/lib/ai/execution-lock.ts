@@ -59,10 +59,11 @@ export async function acquireEnrichmentLock(
   client: LockRpcClient,
   holder: string,
   ttlSeconds = 300,
+  lockName: string = ENRICHMENT_LOCK,
 ): Promise<boolean> {
   try {
     const { data, error } = await client.rpc('acquire_execution_lock', {
-      p_lock_name: ENRICHMENT_LOCK,
+      p_lock_name: lockName,
       p_holder: holder,
       p_ttl: `${ttlSeconds} seconds`,
     })
@@ -100,10 +101,14 @@ export async function acquireEnrichmentLock(
  * failing an otherwise-successful run over, because the lease expires
  * on its own regardless.
  */
-export async function releaseEnrichmentLock(client: LockRpcClient, holder: string): Promise<void> {
+export async function releaseEnrichmentLock(
+  client: LockRpcClient,
+  holder: string,
+  lockName: string = ENRICHMENT_LOCK,
+): Promise<void> {
   try {
     await client.rpc('release_execution_lock', {
-      p_lock_name: ENRICHMENT_LOCK,
+      p_lock_name: lockName,
       p_holder: holder,
     })
   } catch (err) {

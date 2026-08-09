@@ -1,0 +1,93 @@
+name: Collect Sources (every 4h)
+
+# ---------------------------------------------------------------------------
+# Why this workflow exists:
+#
+# Vercel Hobby (free tier) allows exactly ONE native Vercel Cron trigger
+# for this project, already used by /api/cron/pipeline at "0 10 * * *"
+# (once daily). vercel.json's docstring in /api/cron/collect/route.ts
+# previously claimed "Triggered by Vercel Cron every 4 hours" while no
+# such cron entry existed anywhere in vercel.json -- the endpoint was
+# unreachable by any automatic trigger. Confirmed against production:
+# real collection frequency was once/day (only via /api/cron/pipeline's
+# fire-and-forget call to /api/collect), not every 4 hours as every
+# source's own check_interval_hours=4 implied.
+#
+# Same fix pattern already proven for enrichment
+# (enrich-batch-hourly.yml): GitHub Actions' own `schedule:` trigger is
+# free and unrelated to Vercel's cron-count limit. This workflow calls
+# the existing, already-authenticated /api/cron/collect endpoint
+# directly over HTTPS, six times per day, using the same CRON_SECRET
+# the Vercel-native cron already uses.
+#
+# Scheduled 30 minutes BEFORE each corresponding enrichment cycle
+# (enrich-batch-hourly.yml's 01:30/05:30/13:30/17:30/21:30 + Vercel's
+# 10:00), so newly-collected observations exist in the database before
+# enrichment next looks for unprocessed rows -- collecting AFTER
+# enrichment would mean each cycle only ever processes material that is
+# already up to 4 hours stale.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # SIX collection cycles per day, each ~30 min before the matching
+    # enrichment cycle:
+    #   01:00 -> feeds 01:30 enrichment
+    #   05:00 -> feeds 05:30 enrichment
+    #   09:00 -> feeds 10:00 enrichment (Vercel cron)
+    #   13:00 -> feeds 13:30 enrichment
+    #   17:00 -> feeds 17:30 enrichment
+    #   21:00 -> feeds 21:30 enrichment
+    - cron: '0 1,5,9,13,17,21 * * *'
+  workflow_dispatch: {} # manual trigger for testing/on-demand collection
+
+# Serializes every trigger of this workflow -- scheduled AND manual.
+# Separate concurrency group from enrich-batch: collection and
+# enrichment are independent operations (collection writes NEW
+# observations, enrichment reads UNPROCESSED ones) and are not mutually
+# exclusive at the GitHub Actions level -- /api/cron/collect's own
+# execution lock (a distinct 'collection_cycle' lock name, separate
+# from enrichment's 'enrichment_cycle') is the real guard against two
+# COLLECTION cycles overlapping each other.
+concurrency:
+  group: collect-sources
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-collect:
+    name: Trigger /api/cron/collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call cron/collect endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.APP_URL || 'https://aiscentra.com' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set. Configure it in GitHub repo Settings > Secrets and variables > Actions before this workflow can call the endpoint."
+            exit 1
+          fi
+
+          HTTP_STATUS="$(curl -sS -o /tmp/collect-response.json -w '%{http_code}' \
+            -X GET "${APP_URL}/api/cron/collect" \
+            -H "Authorization: Bearer ${CRON_SECRET}")"
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "--- response body ---"
+          cat /tmp/collect-response.json
+          echo ""
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "::notice::cron/collect call succeeded (HTTP $HTTP_STATUS)."
+          else
+            echo "::error::cron/collect call failed with HTTP $HTTP_STATUS."
+            exit 1
+          fi
+
+          rm -f /tmp/collect-response.json
