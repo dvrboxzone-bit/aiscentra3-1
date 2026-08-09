@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 
 import { processBatchOfObservations, type BatchProcessingDeps } from '../route'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
+import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
 import { AIProviderError } from '@/lib/ai/client'
 import type { ObservationRow } from '@/modules/observations/queries'
 
@@ -163,5 +164,99 @@ describe('processBatchOfObservations', () => {
     assert.equal(stats.processed, 2)
     assert.equal(stats.signal_created, 2)
     assert.deepEqual(calls.processObservation, ['obs-1', 'obs-2'])
+  })
+
+  test('after a budget refusal on the first observation, the batch requeues it, stops, and the second observation is never processed', async () => {
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+    const processedIds: string[] = []
+
+    const { deps, calls } = makeDeps({
+      processObservation: (async (obs: ObservationRow) => {
+        processedIds.push(obs.id)
+        if (obs.id === 'obs-1') {
+          throw new AITokenBudgetExceededError(
+            '[budget] signal_engine refused for llama-3.3-70b-versatile: reserve_exhausted',
+            'llama-3.3-70b-versatile',
+            'signal_engine',
+            {
+              allowed: false,
+              usedTokens: 100_000,
+              ceilingTokens: 100_000,
+              reason: 'reserve_exhausted',
+            },
+          )
+        }
+        return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
+      }) as BatchProcessingDeps['processObservation'],
+    })
+
+    const deadlineAt = Date.now() + 30_000
+    const stats = await processBatchOfObservations([obs1, obs2], deadlineAt, deps)
+
+    assert.deepEqual(
+      processedIds,
+      ['obs-1'],
+      'obs-2 must never be processed after obs-1 was refused by the budget gate -- no Groq call for it can have happened',
+    )
+    assert.equal(stats.stopped_reason, 'budget_exhausted')
+    assert.equal(stats.retried, 1, 'obs-1 must be requeued, not permanently failed')
+    assert.equal(
+      stats.processed,
+      0,
+      'obs-1 must NOT count as processed -- it was refused, not completed',
+    )
+    assert.deepEqual(calls.markForRetry, ['obs-1'], 'obs-1 must go through the normal requeue path')
+    assert.equal(
+      stats.error_breakdown.budget_exhausted,
+      1,
+      'the dedicated budget_exhausted counter must increment',
+    )
+  })
+
+  test('a requeue failure after a budget refusal does not report retried++, uses requeue_failed, and still stops the batch', async () => {
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+    const processedIds: string[] = []
+
+    const { deps, calls } = makeDeps({
+      processObservation: (async (obs: ObservationRow) => {
+        processedIds.push(obs.id)
+        if (obs.id === 'obs-1') {
+          throw new AITokenBudgetExceededError(
+            'refused',
+            'llama-3.3-70b-versatile',
+            'signal_engine',
+            {
+              allowed: false,
+              usedTokens: 100_000,
+              ceilingTokens: 100_000,
+              reason: 'reserve_exhausted',
+            },
+          )
+        }
+        return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
+      }) as BatchProcessingDeps['processObservation'],
+      markObservationForRetry: (async () => {
+        throw new Error('simulated Supabase update failure')
+      }) as BatchProcessingDeps['markObservationForRetry'],
+    })
+
+    const deadlineAt = Date.now() + 30_000
+    const stats = await processBatchOfObservations([obs1, obs2], deadlineAt, deps)
+
+    assert.equal(stats.stopped_reason, 'requeue_failed')
+    assert.equal(
+      stats.retried,
+      0,
+      'retried must NOT be incremented when the requeue write itself failed',
+    )
+    assert.equal(stats.error_breakdown.requeue_failed, 1)
+    assert.deepEqual(
+      processedIds,
+      ['obs-1'],
+      'obs-2 must never have been attempted after the requeue failure',
+    )
+    void calls
   })
 })

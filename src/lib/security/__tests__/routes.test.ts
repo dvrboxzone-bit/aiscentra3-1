@@ -580,10 +580,19 @@ describe('/api/admin/simulate-engine-v2 — direct dependency-call evidence via 
 
 function makeFakeAssistantDeps(): {
   deps: AssistantDependencies
-  counts: { retrievalLoader: number; retrieval: number; fetch: number; quota: number }
+  counts: {
+    retrievalLoader: number
+    retrieval: number
+    fetch: number
+    quota: number
+    budget: number
+  }
 } {
-  const counts = { retrievalLoader: 0, retrieval: 0, fetch: 0, quota: 0 }
+  const counts = { retrievalLoader: 0, retrieval: 0, fetch: 0, quota: 0, budget: 0 }
   const deps: AssistantDependencies = {
+    reserveBudget: async () => {
+      counts.budget++
+    },
     checkQuota: async () => {
       counts.quota++
       return { allowed: true, perIpCount: 1, globalCount: 1 }
@@ -732,5 +741,51 @@ describe('/api/assistant — direct dependency-call evidence via injected fakes'
     assert.match(body.error, /still fully available/)
     assert.equal(counts.retrievalLoader, 0, 'retrieval must never load after a quota denial')
     assert.equal(counts.fetch, 0, 'Groq must never be called after a quota denial')
+  })
+
+  test('budget refusal returns 429 and Groq is never contacted', async () => {
+    process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
+    process.env['VERCEL_ENV'] = 'preview'
+    const { deps, counts } = makeFakeAssistantDeps()
+    deps.reserveBudget = async () => {
+      counts.budget++
+      throw new Error('AI_TOKEN_BUDGET_EXCEEDED')
+    }
+    const POST = createAssistantPostHandler(deps)
+    const res = await POST(
+      new Request('https://example.invalid/api/assistant', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'a real question here' }),
+      }),
+    )
+    assert.equal(res.status, 429)
+    assert.equal(counts.budget, 1, 'the budget gate must have been consulted')
+    assert.equal(counts.fetch, 0, 'Groq must NEVER be contacted after a budget refusal')
+  })
+
+  test('budget gate runs before Groq on the happy path too', async () => {
+    process.env['PUBLIC_ASSISTANT_ACCESS_MODE'] = 'preview-only'
+    process.env['VERCEL_ENV'] = 'preview'
+    const order: string[] = []
+    const { deps } = makeFakeAssistantDeps()
+    deps.reserveBudget = async () => {
+      order.push('budget')
+    }
+    const originalFetch = deps.fetchGroq
+    deps.fetchGroq = async (args) => {
+      order.push('groq')
+      return originalFetch(args)
+    }
+    const POST = createAssistantPostHandler(deps)
+    const res = await POST(
+      new Request('https://example.invalid/api/assistant', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'a real question here' }),
+      }),
+    )
+    assert.equal(res.status, 200)
+    assert.deepEqual(order, ['budget', 'groq'], 'budget must be reserved before Groq is called')
   })
 })

@@ -30,8 +30,44 @@ name: Enrich Batch (hourly, free-tier structural fix)
 
 on:
   schedule:
-    - cron: '0 * * * *' # every hour, on the hour (UTC)
+    # SIX cycles per day, deliberately NOT hourly.
+    #
+    # Hourly (24 cycles) structurally overspends Groq's TPD: at the
+    # measured ~2,526 tokens per 70b enrichment call and ~5 observations
+    # per 50s invocation, 24 cycles demand roughly 303,000 tokens/day
+    # against a 100,000 limit -- ~303%. That overspend is the direct
+    # cause of the 24 observed HTTP 429 "tokens per day (TPD)" refusals.
+    #
+    # Six cycles land at roughly 76,000 tokens/day (~76%), leaving real
+    # headroom above the Signal Engine's own consumption.
+    #
+    # FIVE slots here, not six: the Vercel cron at 10:00 UTC
+    # (vercel.json) drives /api/cron/pipeline, which itself awaits
+    # /api/enrich/batch and is therefore a sixth enrichment cycle.
+    # 5 + 1 = exactly 6 automatic enrichment cycles per day.
+    #
+    # Offsets are :30 and deliberately avoid the 10:00 hour entirely, so
+    # no GitHub-scheduled run can overlap the Vercel one -- overlapping
+    # would put two enrichment loops against the same shared TPD budget
+    # at one predictable moment each day.
+    #
+    # Resulting daily schedule (UTC):
+    #   01:30  05:30  [10:00 Vercel]  13:30  17:30  21:30
+    - cron: '30 1,5,13,17,21 * * *'
   workflow_dispatch: {} # manual trigger for testing/on-demand drain
+
+# Serializes every trigger of this workflow -- scheduled AND manual.
+# Without it, a manual dispatch during a scheduled run (or a slow run
+# overlapping the next tick) puts two enrichment loops against the same
+# shared TPD budget simultaneously.
+#
+# cancel-in-progress is false on purpose: an in-flight run has already
+# spent Groq tokens and may hold observations mid-processing. Killing it
+# would waste that spend and risk leaving rows requeued unnecessarily;
+# queueing behind it is strictly safer.
+concurrency:
+  group: enrich-batch
+  cancel-in-progress: false
 
 permissions:
   contents: read

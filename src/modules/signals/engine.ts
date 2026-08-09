@@ -19,6 +19,7 @@
 import { agentCompleteJSON } from '@/lib/ai/agent'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
+import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EnrichmentOutputSchema,
@@ -294,6 +295,14 @@ export async function processObservation(
     // just wasn't available (the whole point of the shared deadline is
     // that continuing further work is not safe here).
     if (err instanceof AIDeadlineExceededError) throw err
+    // Re-throw budget exhaustion — identical rationale to the deadline
+    // case above, and previously missing here entirely: SIS would
+    // silently swallow this exact error (it is neither AIProviderError
+    // nor AIDeadlineExceededError) and fall through to "proceed without
+    // SIS", masking a real, temporary budget refusal as if the
+    // classifier had simply been skipped. The batch handler must see
+    // this to requeue the observation and stop the cycle instead.
+    if (err instanceof AITokenBudgetExceededError) throw err
     // SIS failure → proceed without SIS (V1 fallback)
     console.warn('[engine] SIS evaluation failed, proceeding without:', err)
   }
@@ -368,6 +377,13 @@ export async function processObservation(
     // permanent processing_error (see the identical comment on the SIS
     // call site above for the full rationale).
     if (err instanceof AIDeadlineExceededError) throw err
+    // Re-throw budget exhaustion — must never become a permanent
+    // processing_error via the generic `return { outcome: 'error' }`
+    // below. Previously fell through exactly there: the batch handler
+    // would call markObservationProcessed with the budget-refusal
+    // message and the observation would never be retried, even though
+    // the refusal is temporary and resolves once budget frees up.
+    if (err instanceof AITokenBudgetExceededError) throw err
     const message = err instanceof Error ? err.message : 'Enrichment failed'
     return { observationId: observation.id, outcome: 'error', reason: message }
   }

@@ -67,6 +67,14 @@ export interface AssistantDependencies {
   loadRetrieval: () => Promise<RetrievalModule>
   /** Checks and, if allowed, increments the daily quota for this client IP. Lazily loads the admin Supabase client in production — same reasoning as loadRetrieval above: never imported before the access guard has already passed. */
   checkQuota: (ip: string) => Promise<QuotaCheckResult>
+  /**
+   * Reserves shared Groq TPD budget before the Assistant's own direct
+   * fetch. The Assistant bypasses src/lib/ai/client.ts entirely, so the
+   * gate wired into agent.ts does NOT cover it -- without this it could
+   * spend the Signal Engine's reserved budget once enabled. Throws
+   * AITokenBudgetExceededError to refuse.
+   */
+  reserveBudget: (model: string, estimatedTokens: number) => Promise<void>
   /** Performs the Groq chat-completions call. Wrapped so tests can supply a fake streaming Response without any real network call. */
   fetchGroq: (args: { apiKey: string; model: string; messages: ChatMessage[] }) => Promise<Response>
   /** Reads the Groq API key. Production reads process.env directly; tests can override to simulate a missing key. */
@@ -82,6 +90,10 @@ const productionAssistantDependencies: AssistantDependencies = {
     )
     const { ASSISTANT_SYSTEM_PROMPT } = await import('@/modules/assistant/prompt')
     return { retrieveContext, formatContextForPrompt, ASSISTANT_SYSTEM_PROMPT }
+  },
+  reserveBudget: async (model: string, estimatedTokens: number) => {
+    const { reserveGroqBudget } = await import('@/lib/ai/budget-gate')
+    await reserveGroqBudget({ model, consumer: 'assistant', estimatedTokens })
   },
   checkQuota: async (ip: string) => {
     // Lazily imported -- same reasoning as loadRetrieval above:
@@ -201,6 +213,25 @@ export function createAssistantPostHandler(deps: AssistantDependencies) {
     }
 
     const model = deps.getGroqModel()
+
+    // Shared TPD budget gate -- MUST precede the fetch. The Assistant
+    // may only consume what remains above the Signal Engine's reserve,
+    // and is fail-closed when budget state is unknown (see
+    // src/lib/ai/token-budget.ts). Refusal returns before Groq is ever
+    // contacted, so a refused request costs zero tokens.
+    try {
+      const promptChars = messages.reduce((n, m) => n + m.content.length, 0)
+      await deps.reserveBudget(model, Math.ceil(promptChars / 4) + 2000)
+    } catch {
+      return new Response(
+        JSON.stringify({
+          error:
+            "The Assistant has reached today's shared capacity. Signals, events, and reports are still fully available.",
+        }),
+        { status: 429, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+
     const response = await deps.fetchGroq({ apiKey: groqApiKey, model, messages })
 
     if (!response.ok || !response.body) {
