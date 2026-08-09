@@ -40,6 +40,8 @@ fi
 export PATH="$PGBIN:$PATH"
 
 MIGRATION="supabase/migrations/20260808150000_create_ai_token_budget.sql"
+HARDENING_MIGRATION="supabase/migrations/20260809040000_harden_ai_token_budget_grants.sql"
+[[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
 DIR="$(mktemp -d /tmp/aiscentra-pgtest-XXXXXX)"
@@ -79,11 +81,19 @@ done
 PG="psql -h $DIR -p $PORT -U postgres -tAq"
 $PG -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null || { echo "FATAL: server did not start"; exit 1; }
 
-# Supabase-specific role the migration's RLS policy references.
+# Supabase-specific roles the migrations reference. anon/authenticated
+# are required for the hardening migration's REVOKE ... FROM PUBLIC,
+# anon, authenticated to succeed at all -- REVOKE FROM a non-existent
+# role errors, it does not silently no-op.
 $PG -c "CREATE ROLE service_role;" >/dev/null 2>&1 || true
+$PG -c "CREATE ROLE anon;" >/dev/null 2>&1 || true
+$PG -c "CREATE ROLE authenticated;" >/dev/null 2>&1 || true
 
 echo "Applying the real migration file..."
 $PG -v ON_ERROR_STOP=1 -f "$MIGRATION" >/dev/null
+
+echo "Applying the hardening migration (grants + search_path)..."
+$PG -v ON_ERROR_STOP=1 -f "$HARDENING_MIGRATION" >/dev/null
 
 fail=0
 check() { # name expected actual
@@ -202,6 +212,58 @@ $PG -c "DELETE FROM public.execution_locks; TRUNCATE public.ai_token_usage;" >/d
 $PG -c "SELECT public.acquire_execution_lock('enrichment_cycle','holder-x','5 minutes');" >/dev/null
 check "budget decisions proceed while the enrichment lock is held" "t" \
   "$($PG -c "SELECT allowed FROM public.consume_ai_token_budget('test-model','signal_engine',100,100000,0.9);")"
+
+echo ""
+echo "TEST 12 — hardening migration: grants and search_path"
+$PG -c "TRUNCATE public.ai_token_usage; TRUNCATE public.execution_locks;" >/dev/null
+
+# service_role: must still work exactly as before hardening.
+sr_result="$($PG -c "SET ROLE service_role; SELECT allowed FROM public.consume_ai_token_budget('hardening-model','signal_engine',10,1000,0.9); RESET ROLE;" 2>&1)"
+check "service_role: consume_ai_token_budget still callable" "t" "$(echo "$sr_result" | tail -1)"
+[[ "$(echo "$sr_result" | tail -1)" == "t" ]] || echo "    (full output: $sr_result)"
+
+check "service_role: acquire_execution_lock still callable" "t" \
+  "$($PG -c "SET ROLE service_role; SELECT public.acquire_execution_lock('hardening-lock','h','1 minute'); RESET ROLE;" 2>&1 | tail -1)"
+
+# anon: table access must now be denied at the privilege level (not
+# merely filtered by RLS to zero rows -- an actual permission error).
+anon_select_err="$($PG -c "SET ROLE anon; SELECT * FROM public.ai_token_usage; RESET ROLE;" 2>&1 | grep -c 'permission denied' || true)"
+check "anon: SELECT on ai_token_usage is permission denied" "1" "$anon_select_err"
+
+anon_exec_err="$($PG -c "SET ROLE anon; SELECT public.consume_ai_token_budget('m','signal_engine',1,100,0.9); RESET ROLE;" 2>&1 | grep -c 'permission denied' || true)"
+check "anon: EXECUTE on consume_ai_token_budget is permission denied" "1" "$anon_exec_err"
+
+# authenticated: same expectation as anon -- this data has no
+# per-user meaning, it is pure infrastructure accounting.
+auth_select_err="$($PG -c "SET ROLE authenticated; SELECT * FROM public.execution_locks; RESET ROLE;" 2>&1 | grep -c 'permission denied' || true)"
+check "authenticated: SELECT on execution_locks is permission denied" "1" "$auth_select_err"
+
+auth_exec_err="$($PG -c "SET ROLE authenticated; SELECT public.acquire_execution_lock('m','h','1 minute'); RESET ROLE;" 2>&1 | grep -c 'permission denied' || true)"
+check "authenticated: EXECUTE on acquire_execution_lock is permission denied" "1" "$auth_exec_err"
+
+# RLS itself must be unchanged by a pure GRANT/REVOKE + search_path
+# migration -- still enabled, still service_role-only.
+check "RLS still enabled on ai_token_usage" "t" \
+  "$($PG -c "SELECT relrowsecurity FROM pg_class WHERE relname='ai_token_usage';")"
+check "RLS still enabled on execution_locks" "t" \
+  "$($PG -c "SELECT relrowsecurity FROM pg_class WHERE relname='execution_locks';")"
+check "RLS policy on ai_token_usage still service_role-only" "service_role" \
+  "$($PG -c "SELECT roles::text FROM pg_policies WHERE tablename='ai_token_usage';" | tr -d '{}')"
+
+# search_path pinned on all four functions.
+for fn_sig in \
+  "consume_ai_token_budget(text, text, integer, integer, numeric, interval)" \
+  "prune_ai_token_usage(interval)" \
+  "acquire_execution_lock(text, text, interval)" \
+  "release_execution_lock(text, text)"
+do
+  fn_name="${fn_sig%%(*}"
+  cfg="$($PG -c "SELECT proconfig FROM pg_proc WHERE proname='${fn_name}';")"
+  check "search_path pinned on ${fn_name}" "1" \
+    "$(echo "$cfg" | grep -c 'search_path=pg_catalog')"
+done
+
+$PG -c "TRUNCATE public.ai_token_usage; TRUNCATE public.execution_locks;" >/dev/null
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then
