@@ -32,8 +32,19 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { acquireEnrichmentLock, releaseEnrichmentLock } from '@/lib/ai/execution-lock'
+import { recordCycleMetrics } from '@/lib/metrics'
 
-export const maxDuration = 10
+// THROUGHPUT/CORRECTNESS FIX: was 10 (matching the old fire-and-forget
+// pattern, which never actually waited for anything). Now that this
+// route genuinely awaits all per-source /api/collect calls in parallel
+// before releasing the execution lock, the real ceiling is bounded by
+// the SLOWEST single /api/collect invocation's own maxDuration (10,
+// see that route) plus this route's own HTTP round-trip overhead to
+// call it. 30 gives real headroom above that nested 10s ceiling,
+// matching the same "safe multiple above a nested call's own ceiling"
+// pattern already used by /api/cron/pipeline (maxDuration=60, wrapping
+// enrich/batch's own 60s internal budget plus overhead).
+export const maxDuration = 30
 export const dynamic = 'force-dynamic'
 
 /** Same cooldown as /api/collect's own selection -- see that file's
@@ -63,6 +74,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const supabase = createAdminClient()
   const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
   const cronSecret = process.env['CRON_SECRET'] ?? ''
+  const startedAt = Date.now()
 
   const lockHolder = `cron-collect:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,32 +112,73 @@ export async function GET(request: Request): Promise<NextResponse> {
       return NextResponse.json({ message: 'No sources due for collection' })
     }
 
-    // Fire collection requests per source — non-blocking (fire and forget)
-    // Each request processes one source independently within its own timeout
-    const triggered: string[] = []
-    const dispatchFailures: string[] = []
-
-    for (const source of sources) {
+    // Fire collection requests per source, IN PARALLEL, and genuinely
+    // wait for all of them to settle before this function returns (and
+    // therefore before the execution lock in the finally block below is
+    // released).
+    //
+    // REAL BUG FIXED: previously each fetch() was called WITHOUT await
+    // inside this loop -- the loop moved to the next source immediately,
+    // this function returned right after, and the lock was released
+    // almost instantly, well before any of the fire-and-forget requests
+    // had actually finished. The lock's own purpose (preventing two
+    // collection cycles from racing the same 9 source feeds) was
+    // defeated in practice: a second cycle starting even a few seconds
+    // later would see the lock already free.
+    //
+    // Fired in PARALLEL (not sequentially awaited one at a time) so
+    // total wall-clock stays bounded by the SLOWEST individual source's
+    // own internal timeout (collectSource's 8s AbortSignal.timeout, see
+    // collector.ts) rather than the SUM of all 9 sources' timeouts --
+    // sequential awaiting would risk exceeding this route's own
+    // maxDuration by itself.
+    const dispatched = sources.map(async (source) => {
       try {
-        // Fire but don't await — stays within cron's own 10s limit
-        fetch(`${appUrl}/api/collect`, {
+        const res = await fetch(`${appUrl}/api/collect`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'x-cron-secret': cronSecret,
           },
           body: JSON.stringify({ sourceId: source.id }),
-        }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          console.error(`[cron/collect] Failed to trigger ${source.name}:`, msg)
         })
-        triggered.push(source.name)
-      } catch {
-        dispatchFailures.push(source.name)
+        return { name: source.name, ok: res.ok, status: res.status }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[cron/collect] Failed to collect ${source.name}:`, msg)
+        return { name: source.name, ok: false, status: 0, error: msg }
+      }
+    })
+
+    const results = await Promise.all(dispatched)
+    const triggered = results.filter((r) => r.ok).map((r) => r.name)
+    const dispatchFailures = results.filter((r) => !r.ok).map((r) => r.name)
+
+    console.log(`[cron/collect] Completed ${triggered.length}/${sources.length} sources`)
+
+    // Real, persisted metrics -- previously this data existed only in
+    // this HTTP response body, never queryable after the fact.
+    // Failure breakdown keyed by the actual HTTP status observed per
+    // source, since collector.ts's own richer per-source error detail
+    // (HTTP status / parse error / insert error) is already recorded
+    // separately on each source's own metadata by updateSourceStatus.
+    const failureBreakdown: Record<string, number> = {}
+    for (const r of results) {
+      if (!r.ok) {
+        const key = `http_${r.status || 'network_error'}`
+        failureBreakdown[key] = (failureBreakdown[key] ?? 0) + 1
       }
     }
-
-    console.log(`[cron/collect] Triggered ${triggered.length} sources`)
+    await recordCycleMetrics(lockClient, {
+      cycleType: 'collection',
+      startedAt,
+      completedAt: Date.now(),
+      itemsAttempted: sources.length,
+      itemsSucceeded: triggered.length,
+      itemsFailed: dispatchFailures.length,
+      failureBreakdown,
+      stoppedReason: dispatchFailures.length > 0 ? 'partial_source_failures' : 'completed',
+    })
 
     return NextResponse.json({
       triggered: triggered.length,

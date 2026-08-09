@@ -103,7 +103,7 @@ describe('checkCorroboration', () => {
     assert.equal(result.isCorroboration, false, 'same-source match must not count as corroboration')
   })
 
-  test("near-identical titles (>=0.85) are NOT corroboration -- that is checkDuplicate's job, not this function's", async () => {
+  test('near-identical titles (>=0.85) from an INDEPENDENT source ARE corroboration -- checkDuplicate already excludes same-source matches before this function is reached', async () => {
     const client = makeMockClient({
       signals: [
         {
@@ -117,7 +117,7 @@ describe('checkCorroboration', () => {
     })
 
     const result = await checkCorroboration(
-      'OpenAI Releases New Reasoning Model', // identical
+      'OpenAI Releases New Reasoning Model', // identical -- but independent source
       'Models',
       'source-arxiv',
       client,
@@ -125,8 +125,8 @@ describe('checkCorroboration', () => {
 
     assert.equal(
       result.isCorroboration,
-      false,
-      'exact/near-exact matches belong to checkDuplicate, not corroboration',
+      true,
+      'no upper similarity bound: a near-identical headline from an independent source is STRONGER corroboration evidence, not weaker -- checkDuplicate is the one responsible for rejecting same-source near-identical matches',
     )
   })
 

@@ -3,6 +3,7 @@
  * Updated for Signal Engine V2
  */
 import { createAdminClient } from '@/lib/supabase/server'
+import { buildFaviconUrl, filterSafeSourceLinks, type SourceLink } from '@/lib/utils/source-links'
 
 export interface ObservationRow {
   id: string
@@ -224,4 +225,70 @@ export async function getObservationStats(): Promise<{
   const t = total.count ?? 0
   const p = processed.count ?? 0
   return { total: t, processed: p, unprocessed: t - p, errors: errors.count ?? 0 }
+}
+
+/**
+ * Source links (URL + source name + favicon candidate) for a signal's
+ * observations, for public display.
+ *
+ * Real gap this closes: signal pages had no way to show WHERE a claim
+ * came from beyond a bare count -- the URL, source name, and a
+ * same-origin favicon candidate all existed in the database already
+ * but were never surfaced together for rendering.
+ *
+ * Uses the admin client -- RLS is enabled on `observations`/`sources`
+ * with no public-read policy (confirmed against production), so the
+ * public client can read neither table directly. Selects only the
+ * columns needed for display (url, source name) -- never `content`.
+ *
+ * SAFETY: callers MUST reach this only after getSignalById() has
+ * already confirmed the signal is publicly visible through the
+ * PUBLIC, RLS-bound client -- a non-public signal 404s before this is
+ * ever called, so no observation can be surfaced for a signal the
+ * viewer could not already see. This function itself additionally
+ * filters out unsafe URLs (see src/lib/utils/source-links.ts) before
+ * returning, so an unsafe link can never reach the rendering layer at
+ * all -- it does not decide whether to hide the whole signal (that
+ * decision belongs to the caller, per the "no safe links -> do not
+ * publish" requirement), it only ever returns the safe subset.
+ */
+export async function getSourceLinksForSignal(observationIds: string[]): Promise<SourceLink[]> {
+  if (observationIds.length === 0) return []
+
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('observations')
+    .select('url, source_id, sources(name)')
+    .in('id', observationIds)
+
+  if (error) {
+    console.error('[observations/queries] getSourceLinksForSignal error:', error.message)
+    return []
+  }
+
+  const raw = (data ?? []) as Array<{
+    url: string | null
+    source_id: string | null
+    sources: { name: string } | { name: string }[] | null
+  }>
+
+  const links: SourceLink[] = raw
+    .filter((row): row is typeof row & { url: string } => Boolean(row.url))
+    .map((row) => {
+      const sourcesField = row.sources
+      const sourceName = Array.isArray(sourcesField)
+        ? (sourcesField[0]?.name ?? 'Unknown source')
+        : (sourcesField?.name ?? 'Unknown source')
+      return {
+        url: row.url,
+        sourceName,
+        faviconUrl: buildFaviconUrl(row.url),
+      }
+    })
+
+  // Unsafe links are excluded HERE, at the data layer -- see this
+  // function's own docstring: the caller only ever sees the safe
+  // subset, and a caller implementing "no safe links -> do not
+  // publish" only needs to check whether the returned array is empty.
+  return filterSafeSourceLinks(links)
 }

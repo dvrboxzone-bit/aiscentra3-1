@@ -272,7 +272,7 @@ export async function processObservation(
     observation.content,
   ) as SignalCategory
 
-  const dupCheck = await checkDuplicate(observation.title, candidateCategory)
+  const dupCheck = await checkDuplicate(observation.title, candidateCategory, observation.source_id)
   if (dupCheck.isDuplicate) {
     await writeDecisionLog({
       supabase,
@@ -329,40 +329,62 @@ export async function processObservation(
       daysSinceCreation: 0,
     })
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any)
-      .from('signals')
-      .update({
-        observation_ids: updatedObservationIds,
-        confidence_score: newConfidence,
-        momentum_score: newMomentum,
-        momentum_last_calculated: new Date().toISOString(),
-      })
-      .eq('id', corrCheck.matchedSignalId)
+    // REAL BUG FIXED: this used to be three separate, unchecked `await`
+    // writes (signal update, observation update, decision log insert) --
+    // none checked for an `error` in the response, so a failure on any
+    // ONE of them still let execution continue to the next write and
+    // still returned outcome:'corroborated_existing_signal', a
+    // partially-applied merge with a decision log claiming success.
+    //
+    // Now a single atomic RPC (apply_signal_corroboration, see
+    // supabase/migrations/20260809100000_atomic_signal_corroboration.sql)
+    // performs all three writes inside ONE PostgreSQL transaction --
+    // if the RPC throws, NONE of the three writes are committed, full
+    // stop, verified directly by a real-PostgreSQL atomicity test.
+    //
+    // FAIL-CLOSED, not fail-lost: on failure, this observation is NOT
+    // marked as corroborated and NO decision log entry claims it was --
+    // but it is also not silently dropped. Falling through to the
+    // normal pipeline below (rather than returning an error outcome
+    // here) means the observation proceeds through SIS/enrichment and,
+    // worst case, becomes its own standalone signal -- exactly the
+    // behavior that existed before corroboration was implemented at
+    // all, which is the safe, conservative degradation.
+    const justification = `Corroborates existing signal "${corrCheck.matchedTitle}" (similarity=${((corrCheck.similarityScore ?? 0) * 100).toFixed(1)}%, independent source) -- merged as additional evidence rather than creating a duplicate single-source signal.`
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any)
-      .from('observations')
-      .update({
-        qualification_result: 'SIGNAL',
-        qualification_score: null,
-        engine_version: ENGINE_VERSION,
-      })
-      .eq('id', observation.id)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: applied, error: rpcError } = await (supabase as any).rpc(
+        'apply_signal_corroboration',
+        {
+          p_signal_id: corrCheck.matchedSignalId,
+          p_new_observation_id: observation.id,
+          p_updated_observation_ids: updatedObservationIds,
+          p_new_confidence_score: newConfidence,
+          p_new_momentum_score: newMomentum,
+          p_engine_version: ENGINE_VERSION,
+          p_engine_justification: justification,
+        },
+      )
 
-    await writeDecisionLog({
-      supabase,
-      signal_id: corrCheck.matchedSignalId,
-      observation_id: observation.id,
-      decision: 'SIGNAL',
-      engine_justification: `Corroborates existing signal "${corrCheck.matchedTitle}" (similarity=${((corrCheck.similarityScore ?? 0) * 100).toFixed(1)}%, independent source) -- merged as additional evidence rather than creating a duplicate single-source signal.`,
-    })
-
-    return {
-      observationId: observation.id,
-      outcome: 'corroborated_existing_signal',
-      signalId: corrCheck.matchedSignalId,
-      reason: `Corroborates "${corrCheck.matchedTitle}" from an independent source`,
+      if (rpcError || applied !== true) {
+        console.error(
+          '[engine] apply_signal_corroboration failed -- falling through to normal pipeline (fail-closed, not fail-lost):',
+          rpcError?.message ?? 'RPC returned falsy',
+        )
+      } else {
+        return {
+          observationId: observation.id,
+          outcome: 'corroborated_existing_signal',
+          signalId: corrCheck.matchedSignalId,
+          reason: `Corroborates "${corrCheck.matchedTitle}" from an independent source`,
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[engine] apply_signal_corroboration threw -- falling through to normal pipeline (fail-closed, not fail-lost):',
+        err instanceof Error ? err.message : String(err),
+      )
     }
   }
 

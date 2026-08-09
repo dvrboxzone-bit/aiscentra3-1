@@ -82,12 +82,36 @@ const SIMILARITY_THRESHOLD = 0.85 // Signal Scoring Spec Section 11.2
 /**
  * Check if a candidate title duplicates an existing active signal.
  * Queries signals from the last 14 days (Signal Spec Section 11.2).
+ *
+ * REAL BUG FIXED: previously ANY match >=SIMILARITY_THRESHOLD (0.85)
+ * was rejected as a duplicate regardless of source -- an independent
+ * outlet reporting the exact same event with a near-identical headline
+ * (which genuinely happens: wire-service-style AI news often gets
+ * republished with minimal rewording across outlets) was silently
+ * discarded instead of being recognized as strong, high-confidence
+ * corroboration. Confirmed against the project's own stated goal:
+ * source-independent confirmation should STRENGTHEN a signal, not be
+ * thrown away because its title happens to closely match.
+ *
+ * Now source-aware: a match is only a true duplicate when the SAME
+ * source is already linked to it (a genuine republish, a source's own
+ * follow-up under a near-identical headline, or a collector-level near-
+ * miss on URL-based dedup). An independent source at ANY similarity,
+ * including >=0.85, is explicitly NOT flagged as a duplicate here --
+ * checkCorroboration (with its upper bound removed, see that
+ * function's own docstring) now catches the full >=0.55 range
+ * regardless of how high above 0.85 it goes, so a near-identical
+ * headline from an independent source is *stronger* corroboration
+ * evidence, not evidence to discard.
  */
 export async function checkDuplicate(
   candidateTitle: string,
   candidateCategory: string,
+  candidateSourceId?: string,
+  client?: CorroborationQueryClient,
 ): Promise<DeduplicationResult> {
-  const supabase = createAdminClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = (client ?? createAdminClient()) as any
 
   // Fetch active signals from last 14 days in same category
   const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
@@ -95,7 +119,7 @@ export async function checkDuplicate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: recentSignals, error } = await (supabase as any)
     .from('signals')
-    .select('id, title')
+    .select('id, title, observation_ids')
     .eq('category', candidateCategory)
     .in('status', ['ACTIVE', 'PROMOTED', 'DRAFT'])
     .gte('created_at', cutoff)
@@ -113,17 +137,45 @@ export async function checkDuplicate(
 
   // Compare against all recent signals
   let highestSimilarity = 0
-  let bestMatch: { id: string; title: string } | null = null
+  let bestMatch: { id: string; title: string; observation_ids: string[] } | null = null
 
-  for (const signal of recentSignals) {
-    const score = similarity(candidateTitle, signal.title as string)
+  for (const signal of recentSignals as Array<{
+    id: string
+    title: string
+    observation_ids: string[]
+  }>) {
+    const score = similarity(candidateTitle, signal.title)
     if (score > highestSimilarity) {
       highestSimilarity = score
-      bestMatch = signal as { id: string; title: string }
+      bestMatch = signal
     }
   }
 
   if (highestSimilarity >= SIMILARITY_THRESHOLD && bestMatch) {
+    // Source-aware check: only a duplicate if the SAME source is
+    // already linked. No candidateSourceId provided (backward-
+    // compatible callers) is treated conservatively as same-source,
+    // preserving the pre-existing reject-on-title-match behavior for
+    // any caller that hasn't been updated to pass it.
+    if (candidateSourceId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingObs } = await (supabase as any)
+        .from('observations')
+        .select('source_id')
+        .in('id', bestMatch.observation_ids)
+
+      const existingSourceIds = new Set(
+        ((existingObs ?? []) as Array<{ source_id: string }>).map((o) => o.source_id),
+      )
+
+      if (!existingSourceIds.has(candidateSourceId)) {
+        // Independent source at high similarity -- NOT a duplicate.
+        // Let checkCorroboration (full >=0.55 range) handle this as
+        // strong corroboration evidence instead.
+        return { isDuplicate: false }
+      }
+    }
+
     return {
       isDuplicate: true,
       matchedSignalId: bestMatch.id,
@@ -161,13 +213,16 @@ export async function checkDuplicate(
  * attempting broader cross-signal correlation, which is a materially
  * larger feature deserving its own dedicated design pass.
  *
- * Band: strictly between the exact-duplicate threshold (0.85) and a
- * lower bound (0.55) below which two titles are more likely to be
- * genuinely different stories that merely share common AI-domain
+ * Band: a lower bound (0.55) below which two titles are more likely to
+ * be genuinely different stories that merely share common AI-domain
  * vocabulary than the same event -- a Levenshtein-based check has no
  * semantic understanding, so this stays conservative on the low end
  * deliberately, matching this project's own "prefer no Signal over a
  * wrong one" stance rather than aggressively merging unrelated items.
+ * No upper bound (see CORROBORATION_MIN's own comment below): a match
+ * at >=0.85 that reaches this function has already been confirmed by
+ * checkDuplicate to be from an INDEPENDENT source, making it stronger
+ * evidence, not weaker.
  *
  * A same-source match is explicitly excluded: this is corroboration
  * from an INDEPENDENT outlet, not the same source republishing or
@@ -176,7 +231,14 @@ export async function checkDuplicate(
  * observation deduplication in the collector).
  */
 const CORROBORATION_MIN = 0.55
-const CORROBORATION_MAX = SIMILARITY_THRESHOLD // exclusive upper bound; >= this is a duplicate, not corroboration
+// No upper bound: checkDuplicate above already handles the >=0.85 case
+// for SAME-source matches (rejecting those as true duplicates before
+// this function is ever reached in engine.ts's call order). Any match
+// that reaches this function -- including >=0.85 -- has therefore
+// already been confirmed to be from an INDEPENDENT source, which makes
+// higher similarity STRONGER corroboration evidence, not a reason to
+// exclude it. An explicit upper bound here would have wrongly dropped
+// exactly the strongest, most confident corroboration signal.
 
 export interface CorroborationResult {
   isCorroboration: boolean
@@ -259,7 +321,7 @@ export async function checkCorroboration(
     observation_ids: string[]
   }>) {
     const score = similarity(candidateTitle, signal.title)
-    if (score >= CORROBORATION_MAX || score < CORROBORATION_MIN) continue
+    if (score < CORROBORATION_MIN) continue
     if (!best || score > best.score) {
       best = { id: signal.id, title: signal.title, observation_ids: signal.observation_ids, score }
     }

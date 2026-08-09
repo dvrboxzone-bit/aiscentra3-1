@@ -60,6 +60,7 @@ import { markObservationProcessed, markObservationForRetry } from '@/modules/obs
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
+import { recordCycleMetrics } from '@/lib/metrics'
 import {
   acquireEnrichmentLock,
   releaseEnrichmentLock,
@@ -82,7 +83,23 @@ const BUDGET_RETRY_MS = 60_000 // backoff after AI_TOKEN_BUDGET_EXCEEDED -- long
 // since a daily/rolling-window budget refusal will not resolve in seconds. The real backstop
 // is the next scheduled enrichment cycle (~4h away, see enrich-batch-hourly.yml), which will
 // re-fetch this observation regardless of the exact value once its retry_after has passed.
-const INTER_REQUEST_MS = 6_000 // 6s between requests — 10 RPM effective rate
+// THROUGHPUT FIX: was 6_000ms (10 RPM effective). Confirmed against
+// Groq's own published Free-plan limits for llama-3.3-70b-versatile:
+// 30 RPM, 100,000 TPD. 6s pacing was calibrated BEFORE the atomic TPD
+// budget gate (src/lib/ai/budget-gate.ts, PR #43) existed, when a fixed
+// delay was the only real protection against overrunning limits. Now
+// that every real provider attempt is gated by an atomic, per-attempt
+// budget reservation BEFORE it reaches Groq (see agent.ts), the fixed
+// delay's job is only to stay under the RPM ceiling, not TPD -- 6s (10
+// RPM) was 3x more conservative than the real 30 RPM limit requires.
+// 2,200ms gives ~27.3 RPM, a real safety margin under 30 rather than
+// cutting it exactly to the limit. This does not touch BATCH_SIZE or
+// TIME_BUDGET, and the TPD ceiling itself is enforced by the budget
+// gate regardless of this value -- reducing this delay increases how
+// many observations a single enrichment cycle can drain within its
+// existing time budget without spending the daily token budget any
+// faster than the gate already allows.
+const INTER_REQUEST_MS = 2_200 // ~27.3 RPM, safety margin under Groq's real 30 RPM limit
 
 export interface BatchStats {
   processed: number
@@ -471,6 +488,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const duration = Date.now() - startedAt
+
+    // Real, persisted metrics -- previously this data existed only in
+    // this HTTP response body, never queryable after the fact.
+    await recordCycleMetrics(lockClient, {
+      cycleType: 'enrichment',
+      startedAt,
+      completedAt: startedAt + duration,
+      itemsAttempted: combinedStats.processed + combinedStats.errors + combinedStats.rejected,
+      itemsSucceeded: combinedStats.signal_created,
+      itemsFailed: combinedStats.errors,
+      failureBreakdown: combinedStats.error_breakdown as unknown as Record<string, number>,
+      stoppedReason: combinedStats.stopped_reason,
+    })
 
     return NextResponse.json({
       ...combinedStats,
