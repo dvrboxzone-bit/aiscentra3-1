@@ -357,6 +357,57 @@ describe('isSafeSourceUrl — real IPv6 parsing + bitwise CIDR comparison (fourt
   })
 })
 
+describe('isSafeSourceUrl — 2002::/16 (6to4) and correct ::ffff:0:0/96 ordering (fifth architectural review)', () => {
+  // Both ranges are registered in the IANA IPv6 Special-Purpose
+  // Address Registry; ::ffff:0:0/96 was previously implicitly handled
+  // (correctly, but not present as an explicit denylist table entry)
+  // -- both are now explicit table entries, with the embedded-address
+  // unwrap for IPv4-mapped addresses running BEFORE the general
+  // denylist loop so this range's own presence in the table never
+  // creates a blanket-reject regression.
+
+  test('2002::/16 (6to4) is rejected -- deprecated (RFC 7526), a genuine blanket reject even when it embeds a public IPv4', () => {
+    // 2002:0808:0808::1 embeds 8.8.8.8 (a real public address) in its
+    // 6to4-encoded bits -- still rejected, unlike IPv4-mapped, since
+    // 6to4 relay infrastructure itself is deprecated/abuse-prone.
+    assert.equal(isSafeSourceUrl('http://[2002:0808:0808::1]/'), false)
+  })
+
+  test('2002::/16 boundaries: the range itself is rejected at both ends, addresses immediately outside remain allowed', () => {
+    assert.equal(isSafeSourceUrl('http://[2002::1]/'), false) // lower bound
+    assert.equal(isSafeSourceUrl('http://[2002:ffff:ffff::1]/'), false) // upper bound
+    assert.equal(isSafeSourceUrl('http://[2001:ffff:ffff::1]/'), true) // immediately before -- must be allowed
+    assert.equal(isSafeSourceUrl('http://[2003::1]/'), true) // immediately after -- must be allowed
+  })
+
+  test('::ffff:0:0/96 now has an explicit denylist table entry (IANA marks it non-global) WITHOUT breaking public-embedded-address handling', () => {
+    // The real risk this test guards: adding ::ffff:0:0/96 as a table
+    // entry could regress to a blanket reject if the embedded-address
+    // unwrap logic did not run BEFORE the general denylist loop.
+    assert.equal(
+      isSafeSourceUrl('http://[::ffff:8.8.8.8]/'),
+      true,
+      'a public embedded IPv4 must still be allowed',
+    )
+    assert.equal(
+      isSafeSourceUrl('http://[::ffff:1.1.1.1]/'),
+      true,
+      'another real public embedded IPv4 (Cloudflare DNS)',
+    )
+  })
+
+  test('::ffff:0:0/96 embedding a PRIVATE IPv4 is still correctly rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[::ffff:127.0.0.1]/'), false)
+    assert.equal(isSafeSourceUrl('http://[::ffff:10.0.0.1]/'), false)
+    assert.equal(isSafeSourceUrl('http://[::ffff:192.168.1.1]/'), false)
+  })
+
+  test('the hex-normalized form of an IPv4-mapped address is still correctly unwrapped, not caught by the blanket 2002::/16-style path', () => {
+    assert.equal(isSafeSourceUrl('http://[::ffff:7f00:1]/'), false) // 127.0.0.1, hex form
+    assert.equal(isSafeSourceUrl('http://[::ffff:101:101]/'), true) // 1.1.1.1, hex form
+  })
+})
+
 describe('verifyUrlReachable — SSRF via redirect (real bypass class, real DI)', () => {
   // Real requirement: verifyUrlReachable now uses undici's fetch
   // directly (for real DNS-pinning dispatchers, see the function's own

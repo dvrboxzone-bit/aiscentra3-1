@@ -191,24 +191,32 @@ function cidr6(address: string, prefixBits: number, name: string): Ipv6Range {
 /**
  * Full IANA "IPv6 Special-Purpose Address Registry" coverage,
  * expressed as genuine CIDR ranges (network + prefix length),
- * compared via real bitwise masking -- not string matching. Includes
- * the four ranges specifically identified as missing in the fourth
- * architectural review: 64:ff9b:1::/48 (NAT64 local-use), 2001:2::/48
- * (benchmarking), 3fff::/20 (documentation, RFC 9637), and 5f00::/16
- * (former 6bone space, returned/reserved).
+ * compared via real bitwise masking -- not string matching.
+ *
+ * FIFTH ARCHITECTURAL REVIEW: ::ffff:0:0/96 (IPv4-mapped) and
+ * 2002::/16 (6to4) are now BOTH present here for complete registry
+ * coverage/auditability -- IANA lists ::ffff:0:0/96 as non-global.
+ * The IPv4-mapped range's embedded address is still correctly
+ * unwrapped and checked on its own merits FIRST in
+ * isPrivateOrLoopbackHost below (so ::ffff:8.8.8.8, embedding a real
+ * public address, is still allowed) -- this entry exists so the
+ * table itself documents every registry range, while the actual
+ * decision for that specific range is resolved by the dedicated
+ * unwrap-then-check logic before the general denylist loop ever runs
+ * for it. 2002::/16 (6to4) is a genuine blanket reject: 6to4 was
+ * formally deprecated by RFC 7526 (2015) due to widespread relay
+ * abuse/reachability problems, so -- unlike IPv4-mapped and NAT64,
+ * which remain actively-used, well-behaved mechanisms -- no
+ * embedded-address carve-out is applied for it.
  */
 const IPV6_DENYLIST: Ipv6Range[] = [
   cidr6('::', 128, 'unspecified'),
   cidr6('::1', 128, 'loopback'),
-  // NOTE: ::ffff:0:0/96 (IPv4-mapped) is deliberately NOT listed here
-  // as a blanket-reject entry -- doing so would make the dedicated
-  // decode-and-recheck logic in isPrivateOrLoopbackHost below
-  // unreachable dead code, and would incorrectly reject a mapped
-  // address embedding a genuinely public IPv4 (e.g. ::ffff:8.8.8.8,
-  // a real, legitimate way to represent a public DNS server's address
-  // in IPv6 notation). The embedded IPv4 is checked on its own merits
-  // instead -- ::ffff:127.0.0.1 (embeds a private address) is still
-  // rejected via that separate path.
+  cidr6(
+    '::ffff:0:0',
+    96,
+    'IPv4-mapped (non-global per IANA; embedded address unwrapped and re-checked separately below)',
+  ),
   cidr6('64:ff9b::', 96, 'NAT64 well-known prefix'),
   cidr6('64:ff9b:1::', 48, 'NAT64 local-use prefix'),
   cidr6('100::', 64, 'discard-only'),
@@ -216,12 +224,32 @@ const IPV6_DENYLIST: Ipv6Range[] = [
   cidr6('2001::', 23, 'IETF protocol assignments'),
   cidr6('2001:2::', 48, 'benchmarking'),
   cidr6('2001:db8::', 32, 'documentation'),
+  cidr6(
+    '2002::',
+    16,
+    '6to4 (deprecated, RFC 7526 -- blanket reject, no embedded-address carve-out)',
+  ),
   cidr6('3fff::', 20, 'documentation (RFC 9637)'),
   cidr6('5f00::', 16, 'former 6bone space (reserved)'),
   cidr6('fc00::', 7, 'unique-local'),
   cidr6('fe80::', 10, 'link-local'),
   cidr6('ff00::', 8, 'multicast'),
 ]
+
+/** Prefix bits reserved for the IPv4-mapped range, ::ffff:0:0/96 --
+ * used to test membership BEFORE the general denylist loop, so the
+ * embedded-address unwrap-and-recheck logic always runs first for
+ * this specific range regardless of its own presence in
+ * IPV6_DENYLIST above. Computed directly (not via parseIPv6ToBigInt)
+ * so its type is a plain bigint, not bigint | null -- the value
+ * itself (top 96 bits = 0xffff, matching ::ffff:0:0's own definition)
+ * is a fixed constant, not user input.
+ */
+const IPV4_MAPPED_PREFIX_TOP32 = 0xffffn
+
+function isIPv4Mapped(addressValue: bigint): boolean {
+  return addressValue >> 32n === IPV4_MAPPED_PREFIX_TOP32
+}
 
 function isPrivateIPv6(addressValue: bigint): boolean {
   for (const range of IPV6_DENYLIST) {
@@ -244,19 +272,18 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   // regardless.
   const ipv6Value = parseIPv6ToBigInt(h)
   if (ipv6Value !== null) {
-    if (isPrivateIPv6(ipv6Value)) return true
-
-    // IPv4-mapped IPv6 (::ffff:0:0/96, already denylisted as a whole
-    // range above for the case where the MAPPED address itself is
-    // meaningless/reserved) -- additionally decode the embedded IPv4
-    // address and re-check it against the full IPv4 denylist, since
-    // ::ffff:8.8.8.8 is a real, publicly-routable mapped address that
-    // the /96 registry entry alone does not reject, but
-    // ::ffff:127.0.0.1 (embedding a real private IPv4 address) must
-    // still be rejected. Top 96 bits of a ::ffff:0:0/96 address are
-    // exactly 80 zero bits followed by 16 bits of 0xffff -- i.e. the
-    // value of the top 96 bits, as a number, is exactly 0xffff.
-    if (ipv6Value >> 32n === 0xffffn) {
+    // FIFTH ARCHITECTURAL REVIEW: IPv4-mapped addresses (::ffff:0:0/96)
+    // are checked FIRST, unconditionally, before the general IPv6
+    // denylist loop -- this range's own entry in IPV6_DENYLIST exists
+    // for registry-completeness documentation, but the REAL decision
+    // for any address in this range is made here, by unwrapping the
+    // embedded IPv4 and checking IT on its own merits. This correctly
+    // allows ::ffff:8.8.8.8 (embeds a genuinely public address) while
+    // still rejecting ::ffff:127.0.0.1 (embeds a private address) --
+    // a blanket reject of the whole /96 (matching IANA's own
+    // "Global: False" flag literally) would incorrectly reject the
+    // former.
+    if (isIPv4Mapped(ipv6Value)) {
       const embeddedIpv4 = ipv6Value & 0xffffffffn
       const octets: [number, number, number, number] = [
         Number((embeddedIpv4 >> 24n) & 0xffn),
@@ -264,8 +291,14 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
         Number((embeddedIpv4 >> 8n) & 0xffn),
         Number(embeddedIpv4 & 0xffn),
       ]
-      if (isPrivateIPv4Octets(octets)) return true
+      return isPrivateIPv4Octets(octets)
     }
+
+    // Not IPv4-mapped -- the general IANA denylist applies, including
+    // 2002::/16 (6to4), which IS a genuine blanket reject here (see
+    // IPV6_DENYLIST's own docstring for why no carve-out applies to
+    // it, unlike IPv4-mapped/NAT64).
+    if (isPrivateIPv6(ipv6Value)) return true
   }
 
   return false
