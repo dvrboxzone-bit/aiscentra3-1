@@ -577,6 +577,90 @@ jobs:
           rm -f /tmp/deployment.json
           echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
 
+  # -------------------------------------------------------------------
+  # Job 5b: bounded, AWAITED priority backfill for ACTIVE signals, on
+  # the STAGED deployment, before smoke checks for a non-empty feed.
+  #
+  # REAL SEQUENCING GAP THIS CLOSES (independent review of PR #46): the
+  # release previously depended on a manual race between deploy and
+  # smoke -- nothing in this workflow ran the backfill that
+  # has_verified_source depends on before staged-smoke checked whether
+  # the feed was non-empty, so a release could reach the smoke gate
+  # with every signal's has_verified_source still false (the real
+  # default post-migration, before any URL has been verified) and fail
+  # there, or -- worse, if the smoke check's own bar were ever
+  # loosened -- succeed with a technically-non-empty but mostly-stale
+  # feed.
+  #
+  # This job makes ONE real, bounded, AWAITED POST to the STAGED
+  # deployment's /api/cron/verify-urls with {"priorityOnly": true} --
+  # draining ONLY the ACTIVE-signal priority queue (see that route's
+  # own docstring for why priorityOnly exists) within the endpoint's
+  # own maxDuration=60 budget. This is a real HTTP call FROM this
+  # workflow step, awaited to completion before the job proceeds --
+  # explicitly NOT fire-and-forget and NOT a background task inside a
+  # single Vercel request, per the exact constraint given. The GENERAL
+  # backlog (non-ACTIVE-linked observations) is deliberately NOT
+  # drained here -- it continues via the separately-scheduled
+  # verify-urls-4h.yml cadence after this release completes, matching
+  # "общий backlog должен продолжаться отдельными штатными вызовами
+  # после релиза."
+  #
+  # This step does not itself gate the release on a non-empty feed --
+  # that remains staged-smoke's own job, immediately after this one.
+  # This job's purpose is narrower and more honest: give the feed a
+  # real, bounded chance to be non-empty before that check runs, not to
+  # guarantee it (a genuinely stale/empty backlog, e.g. because
+  # migrations were never applied at all, must still fail at
+  # staged-smoke, not be masked here).
+  priority-backfill:
+    name: Bounded priority backfill (ACTIVE signals only, staged deployment, before smoke)
+    needs: [validate, staged-deploy, deployment-metadata-gate]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: POST /api/cron/verify-urls with priorityOnly=true (real, awaited call -- not fire-and-forget)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DEPLOYMENT_URL: ${{ needs.staged-deploy.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET is not set. This job must run under environment: production with the CRON_SECRET Environment secret configured. STOP."
+            exit 1
+          fi
+
+          set +e
+          npx --yes vercel@${VERCEL_CLI_VERSION} curl /api/cron/verify-urls \
+            --deployment "$DEPLOYMENT_URL" \
+            -- -X POST \
+               -H "Authorization: Bearer ${CRON_SECRET}" \
+               -H "Content-Type: application/json" \
+               -d '{"priorityOnly":true}' \
+               -o /tmp/backfill.json -w '%{http_code}' > /tmp/backfill-status.txt 2>/tmp/backfill-stderr.txt
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::vercel curl /api/cron/verify-urls (priority backfill) failed with exit code $CURL_EXIT. STOP."
+            sed "s/${VERCEL_TOKEN}/[REDACTED]/g; s/${CRON_SECRET}/[REDACTED]/g" /tmp/backfill-stderr.txt 2>/dev/null
+            exit 1
+          fi
+
+          STATUS="$(cat /tmp/backfill-status.txt)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Priority backfill returned HTTP $STATUS (expected 200). Real requirement: a database error during backfill must never be silently ignored here either -- STOP, do not proceed to smoke on top of a failed backfill."
+            cat /tmp/backfill.json 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Priority backfill (ACTIVE signals only) completed on the staged deployment:"
+          cat /tmp/backfill.json
+          echo ""
+          rm -f /tmp/backfill.json /tmp/backfill-status.txt /tmp/backfill-stderr.txt
+
   # ---------------------------------------------------------------------
   # Job 6: staged smoke, before any promotion. Uses documented
   # `vercel curl /path --deployment <url>` syntax (a path plus
@@ -586,7 +670,7 @@ jobs:
   # ---------------------------------------------------------------------
   staged-smoke:
     name: Staged smoke test (pre-promotion)
-    needs: [validate, staged-deploy, deployment-metadata-gate]
+    needs: [validate, staged-deploy, deployment-metadata-gate, priority-backfill]
     runs-on: ubuntu-latest
     environment: production
     steps:

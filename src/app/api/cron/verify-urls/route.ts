@@ -35,6 +35,48 @@
  * own maxDuration=60) -- a real, tested Vercel Hobby-plan value, not a
  * new unverified one.
  *
+ * INDEPENDENT REVIEW OF PR #46 -- three further real fixes:
+ *
+ * 1. STARTED_AT/DEADLINE_AT are now computed FRESH, inside the POST
+ *    handler, on every single request -- previously module-level
+ *    `const`s, which only run once at cold start. Vercel reuses a
+ *    "warm" Node.js process across multiple invocations of the same
+ *    function; a warm invocation happening any amount of time after
+ *    the process's original cold start would see a deadline computed
+ *    from THAT original moment. If the warm instance had been alive
+ *    longer than maxDuration, the deadline would already be in the
+ *    past, and every check in the drain loop would be true
+ *    immediately -- processing ZERO records on every subsequent warm
+ *    invocation, indistinguishable from a genuinely idle queue.
+ *
+ * 2. Database read errors (both the ACTIVE-signals lookup and the
+ *    observations page fetch) are no longer masked as an empty queue.
+ *    Previously, drainOnePage returned rowsFetched: 0 identically for
+ *    "genuinely no pending rows" AND "the database read itself
+ *    failed" -- the outer loop could not tell them apart, and a
+ *    transient DB failure would silently produce a 200 response
+ *    reporting stoppedReason: 'queue_empty', verified: 0 -- a false
+ *    success. drainOnePage's return type now carries an explicit
+ *    dbError field; the outer loop stops immediately on it and the
+ *    HTTP response is a genuine 500 naming the failure, never masked
+ *    as an empty/idle result.
+ *
+ * 3. A new `priorityOnly` request option (JSON body: {"priorityOnly":
+ *    true}) lets a caller request ONLY the ACTIVE-signal priority
+ *    pass, skipping the general backlog pass entirely regardless of
+ *    remaining time budget. This exists specifically so
+ *    production-release.yml can run a real, bounded, AWAITED call to
+ *    this endpoint between staged-deploy and staged-smoke -- draining
+ *    just enough of the priority queue to give the feed a real chance
+ *    of being non-empty before the smoke gate checks it -- without
+ *    also draining the full general backlog inside that release-time
+ *    request (the general backlog continues via the separately-
+ *    scheduled verify-urls-4h.yml cadence after release, matching the
+ *    explicit "не использовать fire-and-forget или фоновое выполнение
+ *    внутри Vercel-запроса" requirement: this is a real, awaited,
+ *    bounded HTTP call from the workflow, not a background task
+ *    inside a single request).
+ *
  * REAL CHANGES (second architectural review, unchanged from before):
  * - POST, not GET (a GET route with real DB side effects is a
  *   CSRF-adjacent risk).
@@ -70,8 +112,6 @@ const PAGE_SIZE = 50
  * leave real headroom for in-flight page completion, DB writes, and
  * the function's own response. */
 const DEADLINE_BUFFER_MS = 10_000
-const STARTED_AT = Date.now()
-const DEADLINE_AT = STARTED_AT + maxDuration * 1000 - DEADLINE_BUFFER_MS
 
 const VERIFY_URLS_LOCK = 'verify_urls_cycle'
 
@@ -83,12 +123,30 @@ interface PageResult {
   affectedSignalIds: Set<string>
 }
 
+/**
+ * REAL BUG FIXED (independent review): dbError is a NEW, explicit
+ * field distinguishing "the database read genuinely failed" from
+ * "rowsFetched is 0 because the queue is genuinely empty" -- the two
+ * were previously indistinguishable to the caller, which treated a
+ * real DB failure as if it meant "nothing left to do."
+ */
+interface DrainPageOutcome {
+  result: PageResult
+  nextCursor: string | null
+  rowsFetched: number
+  dbError: string | null
+}
+
+function emptyPageResult(): PageResult {
+  return { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() }
+}
+
 export async function drainOnePage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
   priorityOnly: boolean,
   cursor: string | null,
-): Promise<{ result: PageResult; nextCursor: string | null; rowsFetched: number }> {
+): Promise<DrainPageOutcome> {
   let query = supabase.from('observations').select('id, url, signal_id').is('url_verified_ok', null)
 
   if (cursor) query = query.gt('id', cursor)
@@ -102,12 +160,22 @@ export async function drainOnePage(
       .from('signals')
       .select('id')
       .eq('status', 'ACTIVE')
-    if (activeErr || !activeSignalIds || activeSignalIds.length === 0) {
+
+    // REAL BUG FIXED: a query error here previously fell through to
+    // the SAME "empty" return as "there are genuinely zero ACTIVE
+    // signals" -- a transient DB failure was silently treated as
+    // harmless. Now surfaced explicitly via dbError.
+    if (activeErr) {
+      console.error('[cron/verify-urls] ACTIVE-signals lookup failed:', activeErr.message)
       return {
-        result: { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() },
+        result: emptyPageResult(),
         nextCursor: null,
         rowsFetched: 0,
+        dbError: activeErr.message,
       }
+    }
+    if (!activeSignalIds || activeSignalIds.length === 0) {
+      return { result: emptyPageResult(), nextCursor: null, rowsFetched: 0, dbError: null }
     }
     query = query.in(
       'signal_id',
@@ -123,21 +191,15 @@ export async function drainOnePage(
 
   const { data: pending, error } = await query
   if (error) {
+    // REAL BUG FIXED: previously indistinguishable from a genuinely
+    // empty queue -- see this function's own docstring.
     console.error('[cron/verify-urls] page fetch failed:', error.message)
-    return {
-      result: { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() },
-      nextCursor: null,
-      rowsFetched: 0,
-    }
+    return { result: emptyPageResult(), nextCursor: null, rowsFetched: 0, dbError: error.message }
   }
 
   const rows = (pending ?? []) as Array<{ id: string; url: string; signal_id: string | null }>
   if (rows.length === 0) {
-    return {
-      result: { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() },
-      nextCursor: null,
-      rowsFetched: 0,
-    }
+    return { result: emptyPageResult(), nextCursor: null, rowsFetched: 0, dbError: null }
   }
 
   const results = await Promise.all(
@@ -149,13 +211,7 @@ export async function drainOnePage(
   )
 
   const verifiedAt = new Date().toISOString()
-  const pageResult: PageResult = {
-    processed: 0,
-    ok: 0,
-    failed: 0,
-    writeFailures: 0,
-    affectedSignalIds: new Set(),
-  }
+  const pageResult: PageResult = emptyPageResult()
 
   for (const r of results) {
     // REAL BUG FIXED (unchanged from prior review): this write's
@@ -186,12 +242,38 @@ export async function drainOnePage(
     result: pageResult,
     nextCursor: rows.length === PAGE_SIZE && lastRow ? lastRow.id : null, // null means this pass is exhausted
     rowsFetched: rows.length,
+    dbError: null,
   }
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // REAL BUG FIXED: computed fresh on every request -- see this file's
+  // own top docstring (independent review, point 1) for why a
+  // module-level computation was a real, serious bug on warm Vercel
+  // instances.
+  const startedAt = Date.now()
+  const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
+
+  // Real requirement (independent review, point 3): an optional
+  // request-body flag lets a caller (specifically
+  // production-release.yml, between staged-deploy and staged-smoke)
+  // request ONLY the priority (ACTIVE-signal) pass, skipping the
+  // general backlog pass regardless of remaining time budget. Defaults
+  // to false (both passes) for the endpoint's normal scheduled-cron
+  // usage, matching prior behavior exactly when this flag is absent.
+  let priorityOnlyMode = false
+  try {
+    const body: unknown = await request.json()
+    if (body && typeof body === 'object' && 'priorityOnly' in body) {
+      priorityOnlyMode = (body as { priorityOnly?: unknown }).priorityOnly === true
+    }
+  } catch {
+    // No body, or invalid JSON -- both treated as "no options given,"
+    // matching this endpoint's original no-body contract exactly.
   }
 
   const supabase = createAdminClient()
@@ -211,14 +293,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     let totalWriteFailures = 0
     const allAffectedSignalIds = new Set<string>()
     let pagesRun = 0
-    let stoppedReason: 'queue_empty' | 'time_budget' = 'queue_empty'
+    let stoppedReason: 'queue_empty' | 'time_budget' | 'priority_only_complete' = 'queue_empty'
+    let dbErrorEncountered: string | null = null
 
     // Pass 1: priority -- observations linked to an ACTIVE signal,
     // exhaustively paginated (within the time budget) before anything
     // else is touched.
     let cursor: string | null = null
     for (;;) {
-      if (Date.now() >= DEADLINE_AT) {
+      if (Date.now() >= deadlineAt) {
         stoppedReason = 'time_budget'
         break
       }
@@ -229,16 +312,30 @@ export async function POST(request: Request): Promise<NextResponse> {
       totalFailed += page.result.failed
       totalWriteFailures += page.result.writeFailures
       for (const id of page.result.affectedSignalIds) allAffectedSignalIds.add(id)
-      if (page.rowsFetched === 0) break // priority pass exhausted
+
+      // REAL BUG FIXED: a genuine DB error now stops the loop
+      // immediately and is carried through to a non-200 HTTP response
+      // below -- never silently treated as "priority pass exhausted."
+      if (page.dbError) {
+        dbErrorEncountered = page.dbError
+        break
+      }
+      if (page.rowsFetched === 0) break // priority pass genuinely exhausted
       cursor = page.nextCursor
       if (cursor === null) break // last page of priority pass was smaller than PAGE_SIZE -- exhausted
     }
 
-    // Pass 2: everything else, only if time budget remains.
-    if (Date.now() < DEADLINE_AT) {
+    // Pass 2: everything else -- only if time budget remains, no DB
+    // error occurred in pass 1, AND the caller did not request
+    // priority-only mode.
+    if (dbErrorEncountered) {
+      // Skip pass 2 entirely -- already failed.
+    } else if (priorityOnlyMode) {
+      stoppedReason = 'priority_only_complete'
+    } else if (Date.now() < deadlineAt) {
       cursor = null
       for (;;) {
-        if (Date.now() >= DEADLINE_AT) {
+        if (Date.now() >= deadlineAt) {
           stoppedReason = 'time_budget'
           break
         }
@@ -249,12 +346,37 @@ export async function POST(request: Request): Promise<NextResponse> {
         totalFailed += page.result.failed
         totalWriteFailures += page.result.writeFailures
         for (const id of page.result.affectedSignalIds) allAffectedSignalIds.add(id)
+
+        if (page.dbError) {
+          dbErrorEncountered = page.dbError
+          break
+        }
         if (page.rowsFetched === 0) break // queue genuinely empty
         cursor = page.nextCursor
         if (cursor === null) break
       }
     } else {
       stoppedReason = 'time_budget'
+    }
+
+    // REAL BUG FIXED: a genuine database read failure now produces an
+    // honest, non-200 response naming the failure -- never masked as
+    // a harmless empty/idle result. The lock is still released via the
+    // `finally` block below regardless.
+    if (dbErrorEncountered) {
+      return NextResponse.json(
+        {
+          error: 'Database read failed during backfill',
+          verified: totalProcessed,
+          ok: totalOk,
+          failed: totalFailed,
+          writeFailures: totalWriteFailures,
+          pagesRun,
+          stoppedReason: 'db_error',
+          timestamp: new Date().toISOString(),
+        },
+        { status: 500 },
+      )
     }
 
     // Recompute the publication gate for every affected signal. Each
@@ -319,7 +441,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       signalsReevaluated: allAffectedSignalIds.size,
       pagesRun,
       stoppedReason,
-      durationMs: Date.now() - STARTED_AT,
+      priorityOnly: priorityOnlyMode,
+      durationMs: Date.now() - startedAt,
       timestamp: new Date().toISOString(),
     })
   } finally {

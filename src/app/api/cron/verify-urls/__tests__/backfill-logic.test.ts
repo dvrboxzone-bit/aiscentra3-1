@@ -24,6 +24,8 @@ function makeMockClient(config: {
   observations: Array<{ id: string; url: string; signal_id: string | null }>
   activeSignalIds?: string[]
   writeErrorForIds?: Set<string>
+  activeSignalsReadError?: string
+  observationsReadError?: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }): { client: any; written: Array<{ id: string; url_verified_ok: boolean }> } {
   const written: Array<{ id: string; url_verified_ok: boolean }> = []
@@ -34,14 +36,22 @@ function makeMockClient(config: {
       if (table === 'signals') {
         return {
           select: () => ({
-            eq: async () => ({
-              data: (config.activeSignalIds ?? []).map((id) => ({ id })),
-              error: null,
-            }),
+            eq: async () => {
+              if (config.activeSignalsReadError) {
+                return { data: null, error: { message: config.activeSignalsReadError } }
+              }
+              return {
+                data: (config.activeSignalIds ?? []).map((id) => ({ id })),
+                error: null,
+              }
+            },
           }),
         }
       }
       // 'observations'
+      const obsError = config.observationsReadError
+        ? { message: config.observationsReadError }
+        : null
       return {
         select: () => ({
           is: () => {
@@ -52,32 +62,39 @@ function makeMockClient(config: {
                   in: (_col2: string, ids: string[]) => ({
                     order: () => ({
                       limit: async (n: number) => ({
-                        data: filtered
-                          .filter((o) => o.signal_id && ids.includes(o.signal_id))
-                          .slice(0, n),
-                        error: null,
+                        data: obsError
+                          ? null
+                          : filtered
+                              .filter((o) => o.signal_id && ids.includes(o.signal_id))
+                              .slice(0, n),
+                        error: obsError,
                       }),
                     }),
                   }),
                   order: () => ({
-                    limit: async (n: number) => ({ data: filtered.slice(0, n), error: null }),
+                    limit: async (n: number) => ({
+                      data: obsError ? null : filtered.slice(0, n),
+                      error: obsError,
+                    }),
                   }),
                 }
               },
               in: (_col2: string, ids: string[]) => ({
                 order: () => ({
                   limit: async (n: number) => ({
-                    data: config.observations
-                      .filter((o) => o.signal_id && ids.includes(o.signal_id))
-                      .slice(0, n),
-                    error: null,
+                    data: obsError
+                      ? null
+                      : config.observations
+                          .filter((o) => o.signal_id && ids.includes(o.signal_id))
+                          .slice(0, n),
+                    error: obsError,
                   }),
                 }),
               }),
               order: () => ({
                 limit: async (n: number) => ({
-                  data: config.observations.slice(0, n),
-                  error: null,
+                  data: obsError ? null : config.observations.slice(0, n),
+                  error: obsError,
                 }),
               }),
             }
@@ -181,5 +198,52 @@ describe('drainOnePage — cursor-based pagination', () => {
 
     const second = await drainOnePage(client, false, 'obs-2')
     assert.equal(second.rowsFetched, 1, 'a cursor of obs-2 must only return rows with id > obs-2')
+  })
+})
+
+describe('drainOnePage — database read errors are NEVER masked as an empty/idle queue (independent review fix)', () => {
+  test('an error reading the observations page is surfaced via dbError, not silently treated as rowsFetched=0-means-empty', async () => {
+    const { client } = makeMockClient({
+      observations: [{ id: 'obs-1', url: 'https://example.com/a', signal_id: null }],
+      observationsReadError: 'connection reset',
+    })
+
+    const outcome = await drainOnePage(client, false, null)
+
+    assert.equal(outcome.dbError, 'connection reset')
+    assert.equal(
+      outcome.rowsFetched,
+      0,
+      'rowsFetched is still 0 on error, but dbError now lets the caller distinguish this from a genuinely idle queue',
+    )
+  })
+
+  test('an error reading ACTIVE signals (priority pass) is surfaced via dbError, not treated as "no active signals"', async () => {
+    const { client } = makeMockClient({
+      observations: [{ id: 'obs-1', url: 'https://example.com/a', signal_id: 'sig-1' }],
+      activeSignalsReadError: 'timeout',
+    })
+
+    const outcome = await drainOnePage(client, true, null)
+
+    assert.equal(outcome.dbError, 'timeout')
+    assert.equal(outcome.rowsFetched, 0)
+  })
+
+  test('a genuinely empty queue (no error) still reports dbError=null, distinguishing it from a real failure', async () => {
+    const { client } = makeMockClient({ observations: [] })
+    const outcome = await drainOnePage(client, false, null)
+    assert.equal(outcome.dbError, null)
+    assert.equal(outcome.rowsFetched, 0)
+  })
+
+  test('genuinely zero ACTIVE signals (no error) also reports dbError=null', async () => {
+    const { client } = makeMockClient({
+      observations: [{ id: 'obs-1', url: 'https://example.com/a', signal_id: null }],
+      activeSignalIds: [],
+    })
+    const outcome = await drainOnePage(client, true, null)
+    assert.equal(outcome.dbError, null)
+    assert.equal(outcome.rowsFetched, 0)
   })
 })
