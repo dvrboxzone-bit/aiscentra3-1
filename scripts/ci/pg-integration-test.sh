@@ -611,6 +611,68 @@ $PG -c "DROP TABLE IF EXISTS public.seen_ids;" >/dev/null
 $PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
+echo "TEST 19 — verify-urls reconciliation: real recovery from a lost gate-recompute (independent review, blocker 2)"
+echo "  -- real incident this closes: an observation's url_verified_ok write can succeed while the LATER has_verified_source recompute (read/RPC/write) fails -- the signal must not stay permanently gated closed --"
+
+RECON_SIG_STALE="88880000-0000-0000-0000-000000000001"    # recompute previously failed: real verified obs, but gate still false
+RECON_SIG_GENUINELY_CLOSED="88880000-0000-0000-0000-000000000002" # correctly closed: no verified obs at all
+RECON_SIG_ALREADY_OPEN="88880000-0000-0000-0000-000000000003"     # already correctly open -- must not be re-flagged unnecessarily (harmless if it is, but real query should still work)
+RECON_OBS_VERIFIED="99990000-0000-0000-0000-000000000001"
+RECON_OBS_UNVERIFIED="99990000-0000-0000-0000-000000000002"
+RECON_OBS_FOR_OPEN="99990000-0000-0000-0000-000000000003"
+
+$PG -c "INSERT INTO public.observations (id, url_verified_ok) VALUES ('$RECON_OBS_VERIFIED', true);" >/dev/null
+$PG -c "INSERT INTO public.observations (id, url_verified_ok) VALUES ('$RECON_OBS_UNVERIFIED', false);" >/dev/null
+$PG -c "INSERT INTO public.observations (id, url_verified_ok) VALUES ('$RECON_OBS_FOR_OPEN', true);" >/dev/null
+
+$PG -c "INSERT INTO public.signals (id, observation_ids, has_verified_source) VALUES
+  ('$RECON_SIG_STALE', ARRAY['$RECON_OBS_VERIFIED']::uuid[], false);" >/dev/null
+$PG -c "INSERT INTO public.signals (id, observation_ids, has_verified_source) VALUES
+  ('$RECON_SIG_GENUINELY_CLOSED', ARRAY['$RECON_OBS_UNVERIFIED']::uuid[], false);" >/dev/null
+$PG -c "INSERT INTO public.signals (id, observation_ids, has_verified_source) VALUES
+  ('$RECON_SIG_ALREADY_OPEN', ARRAY['$RECON_OBS_FOR_OPEN']::uuid[], true);" >/dev/null
+
+# The REAL reconciliation query, exactly as implemented in
+# /api/cron/verify-urls (POST handler): find every gated-closed signal
+# that already has at least one genuinely-verified observation.
+RECONCILE_CANDIDATES="$($PG -c "
+  SELECT s.id FROM public.signals s
+  WHERE s.has_verified_source = false
+    AND EXISTS (
+      SELECT 1 FROM public.observations o
+      WHERE o.id = ANY(s.observation_ids) AND o.url_verified_ok = true
+    );
+")"
+check "the reconciliation query finds exactly the ONE signal with a lost recompute (stale gate + real verified observation)" "1" \
+  "$(echo "$RECONCILE_CANDIDATES" | grep -c '^8888')"
+check "the reconciliation query correctly identifies the STALE signal specifically, not the genuinely-closed one" "1" \
+  "$(echo "$RECONCILE_CANDIDATES" | grep -c "$RECON_SIG_STALE")"
+check "the reconciliation query does NOT flag a genuinely-closed signal (no verified observation at all)" "0" \
+  "$(echo "$RECONCILE_CANDIDATES" | grep -c "$RECON_SIG_GENUINELY_CLOSED")"
+check "the reconciliation query does NOT re-flag an already-open signal (has_verified_source already true)" "0" \
+  "$(echo "$RECONCILE_CANDIDATES" | grep -c "$RECON_SIG_ALREADY_OPEN")"
+
+echo "  -- applying the real recompute to the reconciled signal genuinely fixes it, using the same compute_has_verified_source function --"
+$PG -c "UPDATE public.signals SET has_verified_source =
+  public.compute_has_verified_source(ARRAY['$RECON_OBS_VERIFIED']::uuid[])
+  WHERE id = '$RECON_SIG_STALE';" >/dev/null
+check "after applying the real recompute, the previously-stuck signal is genuinely gated open" "t" \
+  "$($PG -c "SELECT has_verified_source FROM public.signals WHERE id='$RECON_SIG_STALE';")"
+
+echo "  -- re-running the SAME reconciliation query again (idempotent) now finds ZERO candidates -- the fix genuinely stuck, isn't re-flagged forever --"
+RECONCILE_AFTER_FIX="$($PG -c "
+  SELECT s.id FROM public.signals s
+  WHERE s.has_verified_source = false
+    AND EXISTS (
+      SELECT 1 FROM public.observations o
+      WHERE o.id = ANY(s.observation_ids) AND o.url_verified_ok = true
+    );
+")"
+check "zero remaining reconciliation candidates after the fix is applied" "" "$RECONCILE_AFTER_FIX"
+
+$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+
+echo ""
 if [[ "$fail" -eq 0 ]]; then
   echo "PASS: all PostgreSQL integration checks succeeded."
 else

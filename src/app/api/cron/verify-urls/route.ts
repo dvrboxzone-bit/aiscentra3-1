@@ -77,6 +77,35 @@
  *    bounded HTTP call from the workflow, not a background task
  *    inside a single request).
  *
+ * INDEPENDENT REVIEW, ITERATION 2 -- two further real fixes:
+ *
+ * 4. `priorityQueueExhausted: boolean` is now the single, unambiguous,
+ *    machine-readable signal for whether the priority queue was
+ *    genuinely confirmed empty. The prior `stoppedReason:
+ *    'priority_only_complete'` value was set unconditionally whenever
+ *    priorityOnlyMode was requested, REGARDLESS of whether pass 1 had
+ *    actually exhausted the queue or merely run out of time budget --
+ *    a caller could not distinguish "genuinely done" from "timed out
+ *    with rows still pending," a real fail-open gap. true is set ONLY
+ *    inside pass 1's own loop, at the exact moment a page genuinely
+ *    confirms zero remaining rows -- never merely because
+ *    priorityOnly was requested.
+ *
+ * 5. A self-healing reconciliation pass, run on every invocation, finds
+ *    any signal that is currently gated closed (has_verified_source =
+ *    false) but already has at least one genuinely-verified
+ *    observation (url_verified_ok = true) linked to it. Real gap this
+ *    closes: if the gate-recompute step (read/RPC/write) failed AFTER
+ *    an observation's own verification write had already succeeded,
+ *    nothing previously re-attempted that signal's recompute on a
+ *    future invocation -- the observation's url_verified_ok is
+ *    already durably set, so it is never re-selected by the normal
+ *    drain query again, and the signal could stay permanently gated
+ *    closed despite a genuinely verified source. This reconciliation
+ *    query re-derives the truth from already-existing, already-
+ *    correctly-maintained columns -- no new migration or column is
+ *    needed -- and is naturally idempotent to re-run every time.
+ *
  * REAL CHANGES (second architectural review, unchanged from before):
  * - POST, not GET (a GET route with real DB side effects is a
  *   CSRF-adjacent risk).
@@ -293,8 +322,25 @@ export async function POST(request: Request): Promise<NextResponse> {
     let totalWriteFailures = 0
     const allAffectedSignalIds = new Set<string>()
     let pagesRun = 0
-    let stoppedReason: 'queue_empty' | 'time_budget' | 'priority_only_complete' = 'queue_empty'
+    let stoppedReason: 'queue_empty' | 'time_budget' = 'queue_empty'
     let dbErrorEncountered: string | null = null
+
+    // REAL BUG FIXED (independent review, iteration 2): this flag is
+    // the single, unambiguous, machine-readable signal for whether the
+    // PRIORITY (ACTIVE-signal) queue was genuinely confirmed empty by
+    // a real request -- as opposed to merely having stopped because
+    // the time budget ran out. The earlier version collapsed both
+    // cases into the SAME stoppedReason value ('priority_only_
+    // complete'), unconditionally overwriting whatever pass 1 had
+    // actually observed (including a genuine 'time_budget' stop) --
+    // a caller reading that value could not tell a real "nothing left
+    // to do" from "ran out of time with rows still pending," which is
+    // exactly the fail-open gap this fixes. true is set ONLY inside
+    // pass 1's own loop, at the exact moment a page genuinely confirms
+    // zero remaining pending rows (no dbError, rowsFetched === 0, or a
+    // final page smaller than PAGE_SIZE) -- never assumed, never set
+    // merely because priorityOnlyMode was requested.
+    let priorityQueueExhausted = false
 
     // Pass 1: priority -- observations linked to an ACTIVE signal,
     // exhaustively paginated (within the time budget) before anything
@@ -320,18 +366,27 @@ export async function POST(request: Request): Promise<NextResponse> {
         dbErrorEncountered = page.dbError
         break
       }
-      if (page.rowsFetched === 0) break // priority pass genuinely exhausted
+      if (page.rowsFetched === 0) {
+        priorityQueueExhausted = true // genuinely confirmed empty by this real request
+        break
+      }
       cursor = page.nextCursor
-      if (cursor === null) break // last page of priority pass was smaller than PAGE_SIZE -- exhausted
+      if (cursor === null) {
+        priorityQueueExhausted = true // last page smaller than PAGE_SIZE -- genuinely exhausted
+        break
+      }
     }
 
     // Pass 2: everything else -- only if time budget remains, no DB
     // error occurred in pass 1, AND the caller did not request
-    // priority-only mode.
+    // priority-only mode. priorityQueueExhausted is left exactly as
+    // pass 1 determined it -- priorityOnlyMode no longer overwrites
+    // stoppedReason or fabricates an exhausted-queue claim.
     if (dbErrorEncountered) {
       // Skip pass 2 entirely -- already failed.
     } else if (priorityOnlyMode) {
-      stoppedReason = 'priority_only_complete'
+      // Intentionally no-op: stoppedReason and priorityQueueExhausted
+      // both already carry pass 1's own real, honest result.
     } else if (Date.now() < deadlineAt) {
       cursor = null
       for (;;) {
@@ -373,19 +428,72 @@ export async function POST(request: Request): Promise<NextResponse> {
           writeFailures: totalWriteFailures,
           pagesRun,
           stoppedReason: 'db_error',
+          priorityQueueExhausted: false,
           timestamp: new Date().toISOString(),
         },
         { status: 500 },
       )
     }
 
-    // Recompute the publication gate for every affected signal. Each
-    // signal's own observation_ids array is the source of truth for
-    // compute_has_verified_source, so this is correct regardless of
-    // how many observations link to it. REAL REQUIREMENT: this never
-    // sets has_verified_source=true without a genuinely-verified safe
-    // URL -- compute_has_verified_source (PostgreSQL function) only
-    // returns true when at least one linked observation has
+    // REAL BUG FIXED (independent review, iteration 2 -- blocker 2):
+    // "lost retry" gap. Previously, allAffectedSignalIds was built
+    // ONLY from observations written in THIS invocation -- if the
+    // recompute below (read/RPC/write) then failed for one of them,
+    // NOTHING marked that signal for retry on a future invocation: its
+    // observation's url_verified_ok is already durably set (a real,
+    // successful write), so the WHERE url_verified_ok IS NULL query
+    // used by drainOnePage will never select it again, and the
+    // signal's has_verified_source could stay permanently false even
+    // though its source IS genuinely verified.
+    //
+    // Fixed with a self-healing reconciliation query, re-run on EVERY
+    // invocation (not just after a failure -- idempotent and cheap):
+    // find any signal that is currently gated closed
+    // (has_verified_source = false) but already has at least one
+    // observation with url_verified_ok = true. Such a signal is either
+    // a genuine leftover from a PRIOR invocation's failed recompute, or
+    // (harmlessly) a signal this SAME invocation's pass 1/2 already
+    // added to allAffectedSignalIds -- the Set naturally dedupes
+    // either way. No new migration/column is required: this re-derives
+    // the truth from columns that already exist and are already
+    // correctly maintained by the write path above.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: staleGateSignals, error: staleGateError } = await (lockClient as any)
+      .from('signals')
+      .select('id, observation_ids')
+      .eq('has_verified_source', false)
+    if (staleGateError) {
+      console.error(
+        '[cron/verify-urls] reconciliation query failed (non-fatal, best-effort):',
+        staleGateError.message,
+      )
+    } else {
+      for (const sig of (staleGateSignals ?? []) as Array<{
+        id: string
+        observation_ids: string[]
+      }>) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: verifiedObs } = await (lockClient as any)
+          .from('observations')
+          .select('id')
+          .in('id', sig.observation_ids ?? [])
+          .eq('url_verified_ok', true)
+          .limit(1)
+        if (verifiedObs && verifiedObs.length > 0) {
+          allAffectedSignalIds.add(sig.id)
+        }
+      }
+    }
+
+    // Recompute the publication gate for every affected signal (both
+    // newly-verified-this-invocation AND reconciled leftovers from a
+    // prior invocation's failure). Each signal's own observation_ids
+    // array is the source of truth for compute_has_verified_source, so
+    // this is correct regardless of how many observations link to it.
+    // REAL REQUIREMENT: this never sets has_verified_source=true
+    // without a genuinely-verified safe URL --
+    // compute_has_verified_source (PostgreSQL function) only returns
+    // true when at least one linked observation has
     // url_verified_ok=true, which is only ever set by a real,
     // completed verifyUrlReachable() call above. Nothing in this loop
     // weakens or bypasses that.
@@ -442,6 +550,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       pagesRun,
       stoppedReason,
       priorityOnly: priorityOnlyMode,
+      priorityQueueExhausted,
       durationMs: Date.now() - startedAt,
       timestamp: new Date().toISOString(),
     })

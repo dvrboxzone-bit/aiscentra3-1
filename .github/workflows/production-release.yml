@@ -615,11 +615,49 @@ jobs:
   # staged-smoke, not be masked here).
   priority-backfill:
     name: Bounded priority backfill (ACTIVE signals only, staged deployment, before smoke)
+    # REAL FAIL-OPEN GAP CLOSED (independent review, PR #46 iteration 2):
+    # the earlier version made exactly ONE POST call and accepted any
+    # HTTP 200 as sufficient -- it never checked whether the priority
+    # queue had actually been confirmed exhausted, so a response that
+    # merely ran out of time budget (with pending rows still remaining)
+    # would let the release proceed to smoke regardless. Fixed with a
+    # real retry loop, bounded by BOTH a max-attempts count and an
+    # overall wall-clock timeout, making sequential AWAITED POST calls
+    # (never fire-and-forget, never a background task inside a single
+    # Vercel request) until priorityQueueExhausted=true is genuinely
+    # confirmed by a real response -- or the release is blocked.
+    #
+    # The actual pass/retry/fail decision for each response is made by
+    # decideBackfillAction (scripts/release/priority-backfill.ts), a
+    # real, independently unit-tested pure function (18 tests,
+    # scripts/release/__tests__/priority-backfill.test.ts) covering
+    # every required case: confirmed exhaustion, an unfinished queue
+    # (retried, then blocking the release if the budget runs out),
+    # lock contention (retryable, never itself counted as success),
+    # writeFailures/gateWriteFailures > 0 (fail outright even with an
+    # exhausted queue), and fail-closed parsing of a malformed,
+    # incomplete, or erroring response. This bash step is a thin,
+    # deliberately un-clever driver around that already-tested logic --
+    # not a second, untested copy of the same decisions.
     needs: [validate, staged-deploy, deployment-metadata-gate]
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: POST /api/cron/verify-urls with priorityOnly=true (real, awaited call -- not fire-and-forget)
+      - name: Checkout (for scripts/release only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install exact dependencies (npm ci)
+        run: npm ci
+
+      - name: Retry POST /api/cron/verify-urls (priorityOnly=true) until priorityQueueExhausted=true, bounded
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -632,34 +670,64 @@ jobs:
             exit 1
           fi
 
-          set +e
-          npx --yes vercel@${VERCEL_CLI_VERSION} curl /api/cron/verify-urls \
-            --deployment "$DEPLOYMENT_URL" \
-            -- -X POST \
-               -H "Authorization: Bearer ${CRON_SECRET}" \
-               -H "Content-Type: application/json" \
-               -d '{"priorityOnly":true}' \
-               -o /tmp/backfill.json -w '%{http_code}' > /tmp/backfill-status.txt 2>/tmp/backfill-stderr.txt
-          CURL_EXIT=$?
-          set -e
+          MAX_ATTEMPTS=10
+          MAX_ELAPSED_MS=300000  # 5 minutes overall, real bound independent of per-call maxDuration=60 on the endpoint itself
+          START_MS=$(($(date +%s%N) / 1000000))
+          ATTEMPT=0
 
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::vercel curl /api/cron/verify-urls (priority backfill) failed with exit code $CURL_EXIT. STOP."
-            sed "s/${VERCEL_TOKEN}/[REDACTED]/g; s/${CRON_SECRET}/[REDACTED]/g" /tmp/backfill-stderr.txt 2>/dev/null
-            exit 1
-          fi
+          while :; do
+            ATTEMPT=$((ATTEMPT + 1))
+            NOW_MS=$(($(date +%s%N) / 1000000))
+            ELAPSED_MS=$((NOW_MS - START_MS))
 
-          STATUS="$(cat /tmp/backfill-status.txt)"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Priority backfill returned HTTP $STATUS (expected 200). Real requirement: a database error during backfill must never be silently ignored here either -- STOP, do not proceed to smoke on top of a failed backfill."
-            cat /tmp/backfill.json 2>/dev/null || true
-            exit 1
-          fi
+            echo "--- priority backfill attempt $ATTEMPT/$MAX_ATTEMPTS (elapsed ${ELAPSED_MS}ms / ${MAX_ELAPSED_MS}ms budget) ---"
 
-          echo "Priority backfill (ACTIVE signals only) completed on the staged deployment:"
-          cat /tmp/backfill.json
-          echo ""
-          rm -f /tmp/backfill.json /tmp/backfill-status.txt /tmp/backfill-stderr.txt
+            set +e
+            npx --yes vercel@${VERCEL_CLI_VERSION} curl /api/cron/verify-urls \
+              --deployment "$DEPLOYMENT_URL" \
+              -- -X POST \
+                 -H "Authorization: Bearer ${CRON_SECRET}" \
+                 -H "Content-Type: application/json" \
+                 -d '{"priorityOnly":true}' \
+                 -o /tmp/backfill.json -w '%{http_code}' > /tmp/backfill-status.txt 2>/tmp/backfill-stderr.txt
+            CURL_EXIT=$?
+            set -e
+
+            if [ "$CURL_EXIT" -ne 0 ]; then
+              echo "::error::vercel curl /api/cron/verify-urls (priority backfill, attempt $ATTEMPT) failed with exit code $CURL_EXIT. STOP -- a transport-level failure is not retried by this loop (only application-level lock-contention/incomplete-queue responses are)."
+              sed "s/${VERCEL_TOKEN}/[REDACTED]/g; s/${CRON_SECRET}/[REDACTED]/g" /tmp/backfill-stderr.txt 2>/dev/null
+              exit 1
+            fi
+
+            STATUS="$(cat /tmp/backfill-status.txt)"
+            echo "HTTP $STATUS:"
+            cat /tmp/backfill.json 2>/dev/null || echo "(no body)"
+            echo ""
+
+            # Real decision: parsed and made by the same tested pure
+            # function the workflow's own unit tests exercise -- not a
+            # second, untested copy of this logic in bash.
+            set +e
+            DECISION_OUTPUT="$(node --import tsx scripts/release/priority-backfill-decide.ts \
+              "$STATUS" /tmp/backfill.json "$ATTEMPT" "$MAX_ATTEMPTS" "$ELAPSED_MS" "$MAX_ELAPSED_MS")"
+            DECISION_EXIT=$?
+            set -e
+
+            DECISION_ACTION="$(echo "$DECISION_OUTPUT" | awk '{print $1}')"
+            echo "Decision: $DECISION_OUTPUT"
+
+            if [ "$DECISION_ACTION" = "success" ]; then
+              echo "Priority backfill genuinely confirmed exhausted (attempt $ATTEMPT). Proceeding to smoke."
+              rm -f /tmp/backfill.json /tmp/backfill-status.txt /tmp/backfill-stderr.txt
+              exit 0
+            elif [ "$DECISION_ACTION" = "retry" ]; then
+              sleep 3
+              continue
+            else
+              echo "::error::Priority backfill blocked the release: $DECISION_OUTPUT"
+              exit "$DECISION_EXIT"
+            fi
+          done
 
   # ---------------------------------------------------------------------
   # Job 6: staged smoke, before any promotion. Uses documented
