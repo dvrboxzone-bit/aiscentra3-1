@@ -291,9 +291,64 @@ jobs:
   # stdout and stderr are captured separately; the deployment URL is
   # read only from stdout, per Vercel CLI's documented contract.
   # ---------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # Job 3b: production SCHEMA gate. Real incident this closes: PR #45's
+  # code was released while production's Supabase schema still matched
+  # the PRIOR release (PR #44) -- 5 migrations were never applied.
+  # signals.has_verified_source did not exist; every signal-listing
+  # query (which unconditionally filters on that column) failed, and
+  # the public signal feed went empty/errored. This gate queries the
+  # REAL production schema directly (not a fresh/ephemeral database,
+  # not an assumption) and fails closed -- before ANY Vercel build or
+  # deploy step runs -- if a single required table, column, or function
+  # is missing. Requires SUPABASE_DB_URL as a `production` Environment
+  # secret (a standard Supabase Postgres connection string) -- the
+  # owner must configure this exactly once, the same way VERCEL_TOKEN
+  # was configured, before this gate can run.
+  schema-check:
+    name: Production schema gate (fail-closed, before any build/deploy)
+    needs: [validate, exact-sha-check]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Verify every table/column/function this release's code depends on actually exists in production
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. This job must run under environment: production with the SUPABASE_DB_URL Environment secret (a standard Supabase Postgres connection string) configured. STOP -- this is exactly the class of gap that caused the PR #45 incident; refusing to proceed without being able to verify the real schema."
+            exit 1
+          fi
+
+          sudo apt-get update -qq >/dev/null && sudo apt-get install -yqq postgresql-client >/dev/null
+
+          # Real, single, deterministic query against the ACTUAL
+          # production schema -- not an assumption, not a fresh/
+          # ephemeral database. The query itself lives in
+          # scripts/release/schema-check.sql, the SAME file also
+          # exercised by real PostgreSQL integration tests
+          # (scripts/ci/schema-gate-test.sh), so the gate that actually
+          # runs here is provably the exact query the tests verified,
+          # not a hand-copied approximation.
+          MISSING="$(psql "$SUPABASE_DB_URL" -X -A -t -f scripts/release/schema-check.sql)"
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::Production schema is missing required objects this release's code depends on. STOP before any build/deploy step:"
+            echo "$MISSING" | while IFS= read -r line; do echo "::error::  $line"; done
+            echo ""
+            echo "This is exactly the class of gap that caused the PR #45 incident (has_verified_source missing, signal feed went empty). Apply the pending migrations via the documented runbook (docs/runbooks/pr45-migration-and-backfill.md) before re-running this release."
+            exit 1
+          fi
+
+          echo "Production schema gate: all required tables/columns/functions present. Proceeding."
+
+  # ---------------------------------------------------------------------
   staged-deploy:
     name: Staged production deploy (Vercel CLI, --skip-domain)
-    needs: [validate, exact-sha-check, team-project-invariant]
+    needs: [validate, exact-sha-check, team-project-invariant, schema-check]
     runs-on: ubuntu-latest
     environment: production
     outputs:
@@ -612,6 +667,59 @@ jobs:
           echo "Health path smoke: HTTP $STATUS, status=ok, database=ok."
           rm -f /tmp/health.json /tmp/health-status.txt /tmp/health-curl-stderr.txt
 
+      - name: Signal feed smoke (HTTP 200, no schema-error page, genuinely NON-EMPTY feed)
+        # REAL INCIDENT THIS CLOSES: /api/health can return HTTP 200
+        # while the /signals page itself is empty or erroring due to a
+        # schema mismatch (has_verified_source missing, or every
+        # signal's has_verified_source still false pre-backfill) --
+        # health checks the DATABASE CONNECTION, not the actual signal-
+        # listing QUERY this page depends on. A bare HTTP 200 here is
+        # not sufficient either: the exact failure mode that triggered
+        # the emergency rollback was a 200 response with an EMPTY feed.
+        # /signals renders a real, checkable marker
+        # ("N active signal(s) detected") on success, and a distinct
+        # empty-state string ("No signals detected") when the feed is
+        # empty -- both are asserted explicitly below.
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOYMENT_URL: ${{ needs.staged-deploy.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          npx --yes vercel@${VERCEL_CLI_VERSION} curl /signals \
+            --deployment "$DEPLOYMENT_URL" \
+            -- -o /tmp/signals.html -w '%{http_code}' > /tmp/signals-status.txt 2>/tmp/signals-curl-stderr.txt
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::vercel curl /signals failed with exit code $CURL_EXIT. STOP -- do not promote."
+            sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/signals-curl-stderr.txt 2>/dev/null
+            exit 1
+          fi
+
+          STATUS="$(cat /tmp/signals-status.txt)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::/signals returned HTTP $STATUS, expected 200. STOP -- do not promote."
+            exit 1
+          fi
+
+          if grep -q "No signals detected" /tmp/signals.html; then
+            echo "::error::/signals returned HTTP 200 but the feed is EMPTY (\"No signals detected\" marker present). STOP -- do not promote. This is exactly the PR #45 incident's own failure mode: a technically-successful response with zero visible signals, typically caused by pending migrations or an incomplete has_verified_source backfill. See docs/runbooks/pr45-migration-and-backfill.md."
+            rm -f /tmp/signals.html /tmp/signals-status.txt /tmp/signals-curl-stderr.txt
+            exit 1
+          fi
+
+          if ! grep -qE '[1-9][0-9]* active signals? detected' /tmp/signals.html; then
+            echo "::error::/signals returned HTTP 200 but the expected \"N active signal(s) detected\" marker was not found (page structure may have changed, or the count is genuinely zero without the expected empty-state text). STOP -- do not promote."
+            exit 1
+          fi
+
+          SIGNAL_COUNT="$(grep -oE '[1-9][0-9]* active signals? detected' /tmp/signals.html | grep -oE '^[0-9]+')"
+          echo "Signal feed smoke: HTTP $STATUS, feed genuinely non-empty ($SIGNAL_COUNT active signals detected)."
+          rm -f /tmp/signals.html /tmp/signals-status.txt /tmp/signals-curl-stderr.txt
+
       - name: Open Graph image smoke (HTTP 200, image/png, PNG signature)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -825,6 +933,32 @@ jobs:
           [ "$HEALTH_STATUS" = "200" ] || { echo "::error::Re-check health returned HTTP $HEALTH_STATUS. STOP -- do not promote."; exit 1; }
           jq -e '.status == "ok"' /tmp/recheck-health.json > /dev/null || { echo "::error::Re-check health .status != ok. STOP -- do not promote."; exit 1; }
           jq -e '.checks.database == "ok"' /tmp/recheck-health.json > /dev/null || { echo "::error::Re-check health .checks.database != ok. STOP -- do not promote."; exit 1; }
+
+          # REAL INCIDENT THIS CLOSES: the health check above verifies
+          # DATABASE CONNECTIVITY, not the actual signal-listing query
+          # /signals depends on -- a schema gap (or an incomplete
+          # has_verified_source backfill) produces HTTP 200 with an
+          # EMPTY feed, exactly the emergency-rollback failure mode.
+          # Re-checked here, immediately before promotion, not just in
+          # the earlier staged-smoke job -- the whole point of this
+          # re-check job is to catch drift between that earlier check
+          # and the moment of actual promotion.
+          set +e
+          npx --yes vercel@${VERCEL_CLI_VERSION} curl /signals \
+            --deployment "$DEPLOYMENT_URL" \
+            -- -o /tmp/recheck-signals.html -w '%{http_code}' > /tmp/recheck-signals-status.txt 2>/tmp/recheck-signals-stderr.txt
+          SIGNALS_CURL_EXIT=$?
+          set -e
+          [ "$SIGNALS_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check /signals vercel curl failed (exit $SIGNALS_CURL_EXIT). STOP -- do not promote."; sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/recheck-signals-stderr.txt 2>/dev/null; exit 1; }
+          SIGNALS_STATUS="$(cat /tmp/recheck-signals-status.txt)"
+          [ "$SIGNALS_STATUS" = "200" ] || { echo "::error::Re-check /signals returned HTTP $SIGNALS_STATUS. STOP -- do not promote."; exit 1; }
+          if grep -q "No signals detected" /tmp/recheck-signals.html; then
+            echo "::error::Re-check /signals returned HTTP 200 but the feed is EMPTY. STOP -- do not promote. See docs/runbooks/pr45-migration-and-backfill.md."
+            exit 1
+          fi
+          grep -qE '[1-9][0-9]* active signals? detected' /tmp/recheck-signals.html || { echo "::error::Re-check /signals: expected non-empty-feed marker not found. STOP -- do not promote."; exit 1; }
+          echo "Re-check signal feed smoke: HTTP $SIGNALS_STATUS, feed genuinely non-empty."
+          rm -f /tmp/recheck-signals.html /tmp/recheck-signals-status.txt /tmp/recheck-signals-stderr.txt
 
           set +e
           npx --yes vercel@${VERCEL_CLI_VERSION} curl /opengraph-image \

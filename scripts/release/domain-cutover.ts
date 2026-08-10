@@ -536,6 +536,36 @@ export function checkHealthJson(json: unknown): { ok: boolean; detail?: string }
   return { ok: true }
 }
 
+/**
+ * REAL INCIDENT THIS CLOSES: /api/health verifies DATABASE
+ * CONNECTIVITY, not the actual signal-listing QUERY /signals depends
+ * on. A schema gap (has_verified_source missing) or an incomplete
+ * has_verified_source backfill produces HTTP 200 with an EMPTY feed --
+ * exactly the failure mode that triggered the emergency rollback this
+ * release-hardening pass responds to. checkHealthJson alone would not
+ * have caught it; this check runs on the LIVE domain's /signals page
+ * HTML, after cutover, in the same verifyDomain pass as the other
+ * checks -- if it fails, the SAME rollback path already wired for
+ * every other check in this function triggers automatically.
+ *
+ * The page renders a real, checkable marker ("N active signal(s)
+ * detected") on success, and a distinct empty-state string ("No
+ * signals detected") when the feed is empty -- both are asserted
+ * explicitly, matching the same technique already used in
+ * production-release.yml's own staged-smoke/pre-promotion-recheck
+ * jobs (this function is the SAME check, applied to the real live
+ * domain rather than the pre-cutover staged deployment URL).
+ */
+export function checkSignalFeedNonEmpty(html: string): { ok: boolean; detail?: string } {
+  if (/No signals detected/.test(html)) {
+    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'signals-feed-empty') }
+  }
+  if (!/[1-9][0-9]* active signals? detected/.test(html)) {
+    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'signals-feed-marker-missing') }
+  }
+  return { ok: true }
+}
+
 export function checkCommitSha(
   actualSha: unknown,
   expectedSha: string,

@@ -1,45 +1,51 @@
 /**
- * AIscentra — Cron: URL Reachability Verification
+ * AIscentra — Cron: URL Reachability Verification (backfill + ongoing)
  *
  * POST /api/cron/verify-urls
  *
- * REAL CHANGES (second architectural review):
- * - Moved from GET to POST. A GET endpoint that performs real
- *   database writes (updates url_verified_ok/has_verified_source) is
- *   a real CSRF/side-effect-via-GET risk class -- GET requests are
- *   trivially triggerable cross-origin (an <img> tag, a link
- *   prefetch, a browser's own speculative preloading), none of which
- *   should be able to trigger writes. POST does not eliminate the
- *   need for the auth check below, but removes GET-specific
- *   side-effect risk.
- * - Auth check now uses the centralized, constant-time
- *   isAuthorizedCronRequest (cron-guard.ts) instead of a per-route
- *   `!==` string comparison -- see that module's own docstring for
- *   the timing-side-channel rationale.
- * - Raw Supabase error messages are no longer returned to the caller
- *   (see the error-handling block below) -- logged server-side only.
+ * REAL INCIDENT THIS CLOSES: the earlier version processed at most
+ * BATCH_SIZE=30 observations per invocation, with no ORDER BY (so
+ * pagination across invocations was not genuinely deterministic --
+ * PostgreSQL does not guarantee row order without one), no priority
+ * for observations that actually affect a currently-ACTIVE signal's
+ * public visibility, and no within-invocation time-budget loop (a
+ * single page, then return, even though real headroom remained within
+ * maxDuration). At 30/invocation x 6 scheduled invocations/day = 180/
+ * day, backfilling the real 6,885-observation backlog left over from
+ * the PR #44->PR #45 migration gap would have taken ~38 days --
+ * meanwhile the public signal feed stays effectively empty (every
+ * existing signal's own has_verified_source defaults to false until
+ * its linked observations are verified), which is precisely the
+ * symptom that triggered the emergency rollback this fix responds to.
  *
- * Real requirement this closes: "без безопасной и подтверждённо
- * доступной ссылки на оригинальный материал сигнал публично не
- * показывается. Хранить результат и время проверки URL; не выполнять
- * внешний запрос при каждом render."
+ * REAL FIX: a genuine within-invocation time-budget loop, draining
+ * MULTIPLE deterministically-ordered pages (ORDER BY id, a stable
+ * primary key) per invocation until either the queue is empty or the
+ * time budget is exhausted -- not a single fixed-size page. Priority:
+ * observations linked to an ACTIVE signal are drained FIRST, in their
+ * own separate, exhaustively-paginated pass, before any other pending
+ * observation is touched -- these are the ones actually gating public
+ * visibility right now. Resumability is unchanged in mechanism
+ * (url_verified_ok stays NULL until a row is genuinely written, so a
+ * crash or timeout mid-run loses zero already-completed progress) but
+ * now genuinely deterministic thanks to the explicit ORDER BY.
+ *
+ * maxDuration raised 30->60, matching the same ceiling already
+ * empirically proven safe elsewhere in this project (enrich/batch's
+ * own maxDuration=60) -- a real, tested Vercel Hobby-plan value, not a
+ * new unverified one.
+ *
+ * REAL CHANGES (second architectural review, unchanged from before):
+ * - POST, not GET (a GET route with real DB side effects is a
+ *   CSRF-adjacent risk).
+ * - Centralized, constant-time isAuthorizedCronRequest (cron-guard.ts).
+ * - Raw Supabase error messages are never returned to the caller --
+ *   logged server-side only.
  *
  * Deliberately a SEPARATE endpoint from collection, not verification
  * inside collector.ts: collector.ts's own feed fetch already uses up
- * to 8s of Vercel's 10s function ceiling (see the
- * AbortSignal.timeout(8000) in collector.ts), so adding real per-item
+ * to 8s of Vercel's 10s function ceiling, so adding real per-item
  * network verification there risked timing out collection itself.
- * This endpoint gets its OWN full maxDuration, dedicated only to
- * verification, decoupled from collection's already-tight budget.
- *
- * Processes observations with url_verified_ok IS NULL (never checked)
- * in parallel batches, storing the real result + timestamp on each
- * row. After updating an observation, also recomputes
- * has_verified_source on any signal that observation is linked to
- * (via compute_has_verified_source), so a signal that had no verified
- * source at creation time can still become eligible for publication
- * once its own source is confirmed reachable -- without re-running
- * any AI stage.
  */
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
@@ -47,18 +53,141 @@ import { verifyUrlReachable } from '@/lib/utils/source-links'
 import { acquireEnrichmentLock, releaseEnrichmentLock } from '@/lib/ai/execution-lock'
 import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 
-export const maxDuration = 30
+export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
-/** Bounded batch size: real verification is a real network call per
- * item; even in parallel, a very large batch risks exceeding
- * maxDuration when several origins are slow. Remaining unverified rows
- * are picked up by the next scheduled run -- eventual, not immediate,
- * consistency is an acceptable tradeoff here (nothing in the render
- * path depends on THIS specific run completing). */
-const BATCH_SIZE = 30
+/** Rows fetched per page within one invocation's drain loop. Real
+ * verification is a real network call per item, parallelized within a
+ * page via Promise.all -- page wall-clock time is bounded by the
+ * SLOWEST single URL in that page (each individually capped at 5s
+ * inside verifyUrlReachable), not the sum. 50 keeps a single slow page
+ * well within the per-page time check below even in a bad case. */
+const PAGE_SIZE = 50
+
+/** Real time-budget check, mirroring the same DEADLINE_BUFFER_MS
+ * pattern already used in enrich/batch/route.ts: stop starting new
+ * pages once fewer than this many ms remain before maxDuration, to
+ * leave real headroom for in-flight page completion, DB writes, and
+ * the function's own response. */
+const DEADLINE_BUFFER_MS = 10_000
+const STARTED_AT = Date.now()
+const DEADLINE_AT = STARTED_AT + maxDuration * 1000 - DEADLINE_BUFFER_MS
 
 const VERIFY_URLS_LOCK = 'verify_urls_cycle'
+
+interface PageResult {
+  processed: number
+  ok: number
+  failed: number
+  writeFailures: number
+  affectedSignalIds: Set<string>
+}
+
+export async function drainOnePage(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  priorityOnly: boolean,
+  cursor: string | null,
+): Promise<{ result: PageResult; nextCursor: string | null; rowsFetched: number }> {
+  let query = supabase.from('observations').select('id, url, signal_id').is('url_verified_ok', null)
+
+  if (cursor) query = query.gt('id', cursor)
+
+  if (priorityOnly) {
+    // Real priority pass: only observations linked to a currently-
+    // ACTIVE signal -- these directly gate what the public feed shows
+    // right now, so they are drained exhaustively before any other
+    // pending observation is touched at all.
+    const { data: activeSignalIds, error: activeErr } = await supabase
+      .from('signals')
+      .select('id')
+      .eq('status', 'ACTIVE')
+    if (activeErr || !activeSignalIds || activeSignalIds.length === 0) {
+      return {
+        result: { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() },
+        nextCursor: null,
+        rowsFetched: 0,
+      }
+    }
+    query = query.in(
+      'signal_id',
+      (activeSignalIds as Array<{ id: string }>).map((s) => s.id),
+    )
+  }
+
+  // order/limit applied LAST, after every filter -- avoids any doubt
+  // about whether a query-builder chain is sensitive to call order
+  // (PostgREST itself is not, but building the chain filters-first
+  // keeps this genuinely unambiguous to read).
+  query = query.order('id', { ascending: true }).limit(PAGE_SIZE) // REAL deterministic pagination -- was previously unordered
+
+  const { data: pending, error } = await query
+  if (error) {
+    console.error('[cron/verify-urls] page fetch failed:', error.message)
+    return {
+      result: { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() },
+      nextCursor: null,
+      rowsFetched: 0,
+    }
+  }
+
+  const rows = (pending ?? []) as Array<{ id: string; url: string; signal_id: string | null }>
+  if (rows.length === 0) {
+    return {
+      result: { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() },
+      nextCursor: null,
+      rowsFetched: 0,
+    }
+  }
+
+  const results = await Promise.all(
+    rows.map(async (row) => ({
+      id: row.id,
+      signalId: row.signal_id,
+      ok: await verifyUrlReachable(row.url),
+    })),
+  )
+
+  const verifiedAt = new Date().toISOString()
+  const pageResult: PageResult = {
+    processed: 0,
+    ok: 0,
+    failed: 0,
+    writeFailures: 0,
+    affectedSignalIds: new Set(),
+  }
+
+  for (const r of results) {
+    // REAL BUG FIXED (unchanged from prior review): this write's
+    // `error` must be checked -- a silent DB write failure must not
+    // be counted as if the verification result had been persisted.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: writeError } = await (supabase as any)
+      .from('observations')
+      .update({ url_verified_ok: r.ok, url_verified_at: verifiedAt })
+      .eq('id', r.id)
+
+    if (writeError) {
+      pageResult.writeFailures++
+      console.error(
+        `[cron/verify-urls] failed to persist verification result for observation ${r.id}: ${writeError.message}`,
+      )
+      continue // not counted as processed/ok/failed -- the write did not actually happen
+    }
+
+    pageResult.processed++
+    if (r.ok) pageResult.ok++
+    else pageResult.failed++
+    if (r.signalId) pageResult.affectedSignalIds.add(r.signalId)
+  }
+
+  const lastRow = rows[rows.length - 1]
+  return {
+    result: pageResult,
+    nextCursor: rows.length === PAGE_SIZE && lastRow ? lastRow.id : null, // null means this pass is exhausted
+    rowsFetched: rows.length,
+  }
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorizedCronRequest(request)) {
@@ -76,79 +205,72 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const { data: pending, error } = await supabase
-      .from('observations')
-      .select('id, url, signal_id')
-      .is('url_verified_ok', null)
-      .limit(BATCH_SIZE)
+    let totalProcessed = 0
+    let totalOk = 0
+    let totalFailed = 0
+    let totalWriteFailures = 0
+    const allAffectedSignalIds = new Set<string>()
+    let pagesRun = 0
+    let stoppedReason: 'queue_empty' | 'time_budget' = 'queue_empty'
 
-    if (error) {
-      // Real fix: raw Supabase/Postgres error messages can leak schema
-      // details (column/table names, constraint names) to a caller --
-      // logged server-side only; the client gets a generic message.
-      console.error('[cron/verify-urls] fetch failed:', error.message)
-      return NextResponse.json({ error: 'Internal error' }, { status: 500 })
-    }
-
-    const rows = (pending ?? []) as Array<{ id: string; url: string; signal_id: string | null }>
-    if (rows.length === 0) {
-      return NextResponse.json({ verified: 0, message: 'No pending URLs' })
-    }
-
-    const results = await Promise.all(
-      rows.map(async (row) => ({
-        id: row.id,
-        signalId: row.signal_id,
-        ok: await verifyUrlReachable(row.url),
-      })),
-    )
-
-    const verifiedAt = new Date().toISOString()
-    let okCount = 0
-    let failCount = 0
-    const affectedSignalIds = new Set<string>()
-    let writeFailures = 0
-
-    for (const r of results) {
-      // REAL BUG FIXED (architectural review): this write's `error`
-      // was previously never even extracted, let alone checked -- a
-      // silent DB write failure (transient network issue, RLS,
-      // malformed data) proceeded as if the verification result had
-      // been persisted, and the final response summary would falsely
-      // report success. Now checked explicitly and counted separately
-      // from the verification result itself (a WRITE failure is not
-      // the same thing as a URL being unreachable).
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: writeError } = await (supabase as any)
-        .from('observations')
-        .update({ url_verified_ok: r.ok, url_verified_at: verifiedAt })
-        .eq('id', r.id)
-
-      if (writeError) {
-        writeFailures++
-        console.error(
-          `[cron/verify-urls] failed to persist verification result for observation ${r.id}: ${writeError.message}`,
-        )
-        // Do not count this row's verification result or affect any
-        // signal's gate -- the write did not actually happen, so
-        // nothing about this observation's state has genuinely
-        // changed.
-        continue
+    // Pass 1: priority -- observations linked to an ACTIVE signal,
+    // exhaustively paginated (within the time budget) before anything
+    // else is touched.
+    let cursor: string | null = null
+    for (;;) {
+      if (Date.now() >= DEADLINE_AT) {
+        stoppedReason = 'time_budget'
+        break
       }
+      const page = await drainOnePage(lockClient, true, cursor)
+      pagesRun++
+      totalProcessed += page.result.processed
+      totalOk += page.result.ok
+      totalFailed += page.result.failed
+      totalWriteFailures += page.result.writeFailures
+      for (const id of page.result.affectedSignalIds) allAffectedSignalIds.add(id)
+      if (page.rowsFetched === 0) break // priority pass exhausted
+      cursor = page.nextCursor
+      if (cursor === null) break // last page of priority pass was smaller than PAGE_SIZE -- exhausted
+    }
 
-      if (r.ok) okCount++
-      else failCount++
-      if (r.signalId) affectedSignalIds.add(r.signalId)
+    // Pass 2: everything else, only if time budget remains.
+    if (Date.now() < DEADLINE_AT) {
+      cursor = null
+      for (;;) {
+        if (Date.now() >= DEADLINE_AT) {
+          stoppedReason = 'time_budget'
+          break
+        }
+        const page = await drainOnePage(lockClient, false, cursor)
+        pagesRun++
+        totalProcessed += page.result.processed
+        totalOk += page.result.ok
+        totalFailed += page.result.failed
+        totalWriteFailures += page.result.writeFailures
+        for (const id of page.result.affectedSignalIds) allAffectedSignalIds.add(id)
+        if (page.rowsFetched === 0) break // queue genuinely empty
+        cursor = page.nextCursor
+        if (cursor === null) break
+      }
+    } else {
+      stoppedReason = 'time_budget'
     }
 
     // Recompute the publication gate for every affected signal. Each
     // signal's own observation_ids array is the source of truth for
     // compute_has_verified_source, so this is correct regardless of
-    // how many observations link to it.
+    // how many observations link to it. REAL REQUIREMENT: this never
+    // sets has_verified_source=true without a genuinely-verified safe
+    // URL -- compute_has_verified_source (PostgreSQL function) only
+    // returns true when at least one linked observation has
+    // url_verified_ok=true, which is only ever set by a real,
+    // completed verifyUrlReachable() call above. Nothing in this loop
+    // weakens or bypasses that.
     let gateWriteFailures = 0
-    for (const signalId of affectedSignalIds) {
+    for (const signalId of allAffectedSignalIds) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: sig, error: sigReadError } = await (supabase as any)
+      const { data: sig, error: sigReadError } = await (lockClient as any)
         .from('signals')
         .select('observation_ids')
         .eq('id', signalId)
@@ -163,11 +285,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (!sig) continue
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: gateResult, error: rpcError } = await (supabase as any).rpc(
+      const { data: gateResult, error: rpcError } = await (lockClient as any).rpc(
         'compute_has_verified_source',
-        {
-          p_observation_ids: sig.observation_ids,
-        },
+        { p_observation_ids: sig.observation_ids },
       )
       if (rpcError) {
         gateWriteFailures++
@@ -178,7 +298,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: gateWriteError } = await (supabase as any)
+      const { error: gateWriteError } = await (lockClient as any)
         .from('signals')
         .update({ has_verified_source: gateResult === true })
         .eq('id', signalId)
@@ -191,13 +311,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     return NextResponse.json({
-      verified: results.length,
-      ok: okCount,
-      failed: failCount,
-      writeFailures,
+      verified: totalProcessed,
+      ok: totalOk,
+      failed: totalFailed,
+      writeFailures: totalWriteFailures,
       gateWriteFailures,
-      signalsReevaluated: affectedSignalIds.size,
-      timestamp: verifiedAt,
+      signalsReevaluated: allAffectedSignalIds.size,
+      pagesRun,
+      stoppedReason,
+      durationMs: Date.now() - STARTED_AT,
+      timestamp: new Date().toISOString(),
     })
   } finally {
     await releaseEnrichmentLock(lockClient, lockHolder, VERIFY_URLS_LOCK)

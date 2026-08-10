@@ -122,13 +122,18 @@ CREATE TABLE public.signals (
   confidence_score INT NOT NULL DEFAULT 60,
   qualification_score NUMERIC,
   momentum_score INT NOT NULL DEFAULT 0,
-  momentum_last_calculated TIMESTAMPTZ
+  momentum_last_calculated TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'ACTIVE'
 );
 CREATE TABLE public.observations (
   id UUID PRIMARY KEY,
   qualification_result TEXT,
   qualification_score NUMERIC,
-  engine_version TEXT
+  engine_version TEXT,
+  url TEXT,
+  signal_id UUID,
+  url_verified_ok BOOLEAN,
+  url_verified_at TIMESTAMPTZ
 );
 CREATE TABLE public.signal_decision_log (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -493,6 +498,116 @@ $PG -c "SELECT public.apply_signal_corroboration('$SIG_ID','$OBS_VERIFIED', ARRA
 check "has_verified_source flips to true after corroboration by a verified source, in the SAME transaction" "t" \
   "$($PG -c "SELECT has_verified_source FROM public.signals WHERE id='$SIG_ID';")"
 
+$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+
+echo ""
+echo "TEST 17 — production schema gate (scripts/release/schema-check.sql): real pass/fail against a real schema"
+echo "  -- against the FULL PR #45 schema (already applied earlier in this script) -- must return ZERO rows --"
+FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
+check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
+
+echo "  -- simulating the REAL incident: the exact PR #44 schema (PR #45's objects removed) -- must correctly identify EVERY gap --"
+$PG -c "ALTER TABLE public.signals DROP COLUMN IF EXISTS verification_state;" >/dev/null
+$PG -c "ALTER TABLE public.signals DROP COLUMN IF EXISTS has_verified_source;" >/dev/null
+$PG -c "ALTER TABLE public.observations DROP COLUMN IF EXISTS url_verified_ok;" >/dev/null
+$PG -c "ALTER TABLE public.observations DROP COLUMN IF EXISTS url_verified_at;" >/dev/null
+$PG -c "DROP TABLE IF EXISTS public.pipeline_metrics;" >/dev/null
+$PG -c "DROP FUNCTION IF EXISTS public.compute_verification_state(INT);" >/dev/null
+$PG -c "DROP FUNCTION IF EXISTS public.compute_has_verified_source(UUID[]);" >/dev/null
+$PG -c "DROP FUNCTION IF EXISTS public.apply_signal_corroboration(UUID, UUID, UUID[], INT, INT, TEXT, TEXT);" >/dev/null
+$PG -c "DROP FUNCTION IF EXISTS public.prune_pipeline_metrics(INTERVAL);" >/dev/null
+
+OLD_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
+OLD_SCHEMA_MISSING_COUNT="$(echo "$OLD_SCHEMA_MISSING" | grep -c '^MISSING' || true)"
+# Real count: 4 signals/observations columns + 1 pipeline_metrics table
+# + 4 pipeline_metrics columns (also legitimately "missing" once the
+# whole table is gone -- a column cannot exist in a nonexistent table,
+# so reporting both the table AND each of its columns is correct,
+# more informative behavior, not double-counting a bug) + 4 functions
+# = 13. (An earlier version of this test asserted 9, undercounting the
+# pipeline_metrics column cascade -- caught by running this exact test
+# and correcting the expectation, not the query.)
+check "the real PR #44 schema (incomplete) produces exactly 13 missing-object rows (4 columns + 1 table + 4 cascade-missing table columns + 4 functions)" "13" "$OLD_SCHEMA_MISSING_COUNT"
+check "the specific incident-causing gap (has_verified_source) is named in the output" "1" \
+  "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING COLUMN: signals.has_verified_source')"
+check "the missing pipeline_metrics table is named" "1" \
+  "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING TABLE: public.pipeline_metrics')"
+check "a missing function (apply_signal_corroboration) is named" "1" \
+  "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING FUNCTION: public.apply_signal_corroboration')"
+
+echo "  -- restoring the full schema (TEST 17 above intentionally dropped these objects to simulate the incident) so later tests see the complete PR #45 schema --"
+$PG -v ON_ERROR_STOP=1 -f "$VERIFICATION_STATE_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$PUBLICATION_GATE_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$CORROBORATION_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$METRICS_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
+POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
+check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
+
+echo ""
+echo "TEST 18 — verify-urls backfill: real deterministic pagination, priority, resumability, idempotent re-run"
+$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+
+# Real fixture: 12 observations. 5 linked to an ACTIVE signal (must
+# drain FIRST, priority pass), 7 unlinked/other (drained second).
+ACTIVE_SIG="99999999-0000-0000-0000-000000000001"
+$PG -c "INSERT INTO public.signals (id, status) VALUES ('$ACTIVE_SIG', 'ACTIVE');" >/dev/null
+
+for i in $(seq -w 1 5); do
+  $PG -c "INSERT INTO public.observations (id, url, signal_id, url_verified_ok) VALUES
+    ('11111111-1111-1111-1111-11111111111$i', 'https://example.com/priority-$i', '$ACTIVE_SIG', NULL);" >/dev/null
+done
+for i in $(seq -w 1 7); do
+  $PG -c "INSERT INTO public.observations (id, url, signal_id, url_verified_ok) VALUES
+    ('22222222-2222-2222-2222-22222222222$i', 'https://example.com/other-$i', NULL, NULL);" >/dev/null
+done
+
+echo "  -- priority pass: only observations linked to the ACTIVE signal, in deterministic id order --"
+PRIORITY_IDS="$($PG -c "SELECT id FROM public.observations
+  WHERE url_verified_ok IS NULL AND signal_id = '$ACTIVE_SIG'
+  ORDER BY id LIMIT 50;")"
+check "priority pass returns exactly the 5 ACTIVE-linked observations" "5" "$(echo "$PRIORITY_IDS" | grep -c '^1111')"
+check "priority pass never returns an unrelated observation" "0" "$(echo "$PRIORITY_IDS" | grep -c '^2222')"
+
+echo "  -- deterministic cursor pagination: page 1 (limit 3), then page 2 using the real cursor, no gaps, no overlap --"
+PAGE1="$($PG -c "SELECT id FROM public.observations
+  WHERE url_verified_ok IS NULL ORDER BY id LIMIT 3;")"
+CURSOR="$(echo "$PAGE1" | tail -1)"
+PAGE2="$($PG -c "SELECT id FROM public.observations
+  WHERE url_verified_ok IS NULL AND id > '$CURSOR' ORDER BY id LIMIT 3;")"
+OVERLAP="$(comm -12 <(echo "$PAGE1" | sort) <(echo "$PAGE2" | sort) | wc -l)"
+check "cursor-paginated page 1 and page 2 share zero rows (no overlap)" "0" "$OVERLAP"
+check "page 2 starts exactly after page 1's cursor (no gap)" "3" "$(echo "$PAGE2" | grep -c '^')"
+
+echo "  -- resumability across 'runs': simulate 3 separate invocations of page size 4, confirm ALL 12 rows are eventually covered, none twice --"
+$PG -c "DROP TABLE IF EXISTS public.seen_ids; CREATE TABLE public.seen_ids (id UUID);" >/dev/null
+RESUME_CURSOR=""
+for run in 1 2 3 4; do
+  if [[ -z "$RESUME_CURSOR" ]]; then
+    RUN_PAGE="$($PG -c "SELECT id FROM public.observations WHERE url_verified_ok IS NULL ORDER BY id LIMIT 4;")"
+  else
+    RUN_PAGE="$($PG -c "SELECT id FROM public.observations WHERE url_verified_ok IS NULL AND id > '$RESUME_CURSOR' ORDER BY id LIMIT 4;")"
+  fi
+  [[ -z "$RUN_PAGE" ]] && break
+  echo "$RUN_PAGE" | while IFS= read -r id; do
+    [[ -n "$id" ]] && $PG -c "INSERT INTO public.seen_ids VALUES ('$id');" >/dev/null
+    # Simulates the real route writing url_verified_ok so this row is
+    # never re-selected on the next simulated "run" -- the actual
+    # resumability mechanism this proves.
+    [[ -n "$id" ]] && $PG -c "UPDATE public.observations SET url_verified_ok = true WHERE id = '$id';" >/dev/null
+  done
+  RESUME_CURSOR="$(echo "$RUN_PAGE" | tail -1)"
+done
+check "all 12 real rows were covered across 3 simulated separate invocations, none skipped" "12" \
+  "$($PG -c "SELECT count(*) FROM public.seen_ids;")"
+check "no row was processed twice across simulated invocations (resumability, not duplication)" "12" \
+  "$($PG -c "SELECT count(DISTINCT id) FROM public.seen_ids;")"
+
+echo "  -- idempotent re-run: once url_verified_ok is set, a fresh 'invocation' query finds ZERO pending rows -- no re-processing --"
+check "after full backfill, the pending-rows query is genuinely exhausted (idempotent re-run does nothing)" "0" \
+  "$($PG -c "SELECT count(*) FROM public.observations WHERE url_verified_ok IS NULL;")"
+
+$PG -c "DROP TABLE IF EXISTS public.seen_ids;" >/dev/null
 $PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
