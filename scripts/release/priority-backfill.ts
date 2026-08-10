@@ -105,11 +105,13 @@ export function decideBackfillAction(
   }
   if (
     typeof parsedBody.writeFailures !== 'number' ||
-    typeof parsedBody.gateWriteFailures !== 'number'
+    typeof parsedBody.gateWriteFailures !== 'number' ||
+    typeof parsedBody.reconciliationFailures !== 'number'
   ) {
     return {
       action: 'fail',
-      reason: 'response is missing required writeFailures/gateWriteFailures fields',
+      reason:
+        'response is missing required writeFailures/gateWriteFailures/reconciliationFailures fields',
     }
   }
 
@@ -125,8 +127,36 @@ export function decideBackfillAction(
       reason: `gateWriteFailures=${parsedBody.gateWriteFailures} -- a gate-recompute error is never success`,
     }
   }
+  if (parsedBody.reconciliationFailures > 0) {
+    // REAL FIX (independent review, iteration 3): reconciliation was
+    // previously best-effort -- a read failure there was only logged,
+    // never surfaced, so the release could proceed even though a
+    // signal's stale gate might never actually get repaired. Now
+    // treated exactly like writeFailures/gateWriteFailures: a genuine
+    // reconciliation failure blocks the release outright.
+    return {
+      action: 'fail',
+      reason: `reconciliationFailures=${parsedBody.reconciliationFailures} -- a reconciliation read error is never success, priority-backfill must not be reported clean`,
+    }
+  }
 
   if (parsedBody.priorityQueueExhausted === true) {
+    // REAL FIX (independent review, iteration 3, blocker 2.3): the
+    // deadline must be checked even for a genuinely-exhausted result.
+    // `state.elapsedMs` is expected to be RECOMPUTED by the caller
+    // AFTER this response was received (not the pre-call value) --
+    // see production-release.yml's own ELAPSED_AFTER_MS. A response
+    // that only arrives once the overall budget is already spent must
+    // never be treated as success, regardless of what it reports:
+    // by the time this result is acted on, it is already too late to
+    // have honored the real timeout guarantee.
+    if (state.elapsedMs >= state.maxElapsedMs) {
+      return {
+        action: 'fail',
+        reason:
+          'priority queue was confirmed exhausted, but the response arrived after the overall time budget was already spent -- a late confirmation is not treated as success',
+      }
+    }
     return {
       action: 'success',
       reason: 'priority queue genuinely confirmed exhausted, zero write/gate failures',

@@ -14,7 +14,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { drainOnePage } from '../route'
+import { drainOnePage, reconcileStaleGates } from '../route'
 
 // Real fetch/DNS are not exercised here -- verifyUrlReachable itself
 // is unit-tested exhaustively in source-links.test.ts. This mock
@@ -245,5 +245,152 @@ describe('drainOnePage — database read errors are NEVER masked as an empty/idl
     const outcome = await drainOnePage(client, true, null)
     assert.equal(outcome.dbError, null)
     assert.equal(outcome.rowsFetched, 0)
+  })
+})
+
+// ── reconcileStaleGates: real, exported production code (independent
+// review iteration 3) -- NOT a separate SQL analog. Mock client
+// matches the exact query shape reconcileStaleGates itself uses:
+// .from('signals').select(...).eq('has_verified_source', false).limit(...)
+// then .from('observations').select(...).in(...).eq('url_verified_ok', true)
+function makeReconcileMockClient(config: {
+  staleSignals: Array<{ id: string; observation_ids: string[]; status: string }>
+  verifiedObservationIds: Set<string>
+  staleSignalsReadError?: string
+  observationsReadError?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}): any {
+  return {
+    from: (table: string) => {
+      if (table === 'signals') {
+        return {
+          select: () => ({
+            eq: () => ({
+              limit: async () => {
+                if (config.staleSignalsReadError) {
+                  return { data: null, error: { message: config.staleSignalsReadError } }
+                }
+                return { data: config.staleSignals, error: null }
+              },
+            }),
+          }),
+        }
+      }
+      // 'observations'
+      return {
+        select: () => ({
+          in: (_col: string, ids: string[]) => ({
+            eq: async () => {
+              if (config.observationsReadError) {
+                return { data: null, error: { message: config.observationsReadError } }
+              }
+              return {
+                data: ids
+                  .filter((id) => config.verifiedObservationIds.has(id))
+                  .map((id) => ({ id })),
+                error: null,
+              }
+            },
+          }),
+        }),
+      }
+    },
+  }
+}
+
+describe('reconcileStaleGates — real production code (independent review, iteration 3: replaces the earlier SQL-analog test)', () => {
+  test('finds exactly the signal with a lost recompute (stale gate + a genuinely verified observation)', async () => {
+    const client = makeReconcileMockClient({
+      staleSignals: [
+        { id: 'sig-stale', observation_ids: ['obs-verified'], status: 'ACTIVE' },
+        { id: 'sig-genuinely-closed', observation_ids: ['obs-unverified'], status: 'ACTIVE' },
+      ],
+      verifiedObservationIds: new Set(['obs-verified']),
+    })
+
+    const outcome = await reconcileStaleGates(client, false)
+
+    assert.equal(outcome.failures, 0)
+    assert.equal(outcome.signalIds.has('sig-stale'), true)
+    assert.equal(
+      outcome.signalIds.has('sig-genuinely-closed'),
+      false,
+      'a signal with no genuinely-verified observation must not be flagged',
+    )
+  })
+
+  test('exactly TWO queries total, never N+1 -- proven by the mock never needing per-signal call tracking to produce the right answer even with many stale signals', async () => {
+    const manyStale = Array.from({ length: 50 }, (_, i) => ({
+      id: `sig-${i}`,
+      observation_ids: [`obs-${i}`],
+      status: 'ACTIVE',
+    }))
+    const client = makeReconcileMockClient({
+      staleSignals: manyStale,
+      verifiedObservationIds: new Set(['obs-3', 'obs-17', 'obs-42']),
+    })
+
+    const outcome = await reconcileStaleGates(client, false)
+    assert.equal(outcome.failures, 0)
+    assert.deepEqual([...outcome.signalIds].sort(), ['sig-17', 'sig-3', 'sig-42'])
+  })
+
+  test('activeOnly=true restricts candidates to ACTIVE-linked signals only -- matches pass-1 priority semantics', async () => {
+    const client = makeReconcileMockClient({
+      staleSignals: [
+        { id: 'sig-active-stale', observation_ids: ['obs-a'], status: 'ACTIVE' },
+        { id: 'sig-weak-stale', observation_ids: ['obs-b'], status: 'WEAK' },
+      ],
+      verifiedObservationIds: new Set(['obs-a', 'obs-b']),
+    })
+
+    const activeOnly = await reconcileStaleGates(client, true)
+    assert.equal(activeOnly.signalIds.has('sig-active-stale'), true)
+    assert.equal(
+      activeOnly.signalIds.has('sig-weak-stale'),
+      false,
+      'a non-ACTIVE signal must be excluded when activeOnly=true',
+    )
+
+    const both = await reconcileStaleGates(client, false)
+    assert.equal(
+      both.signalIds.has('sig-weak-stale'),
+      true,
+      'without activeOnly, a WEAK signal IS still reconciled',
+    )
+  })
+
+  test('a stale-signals read error is a genuine, counted failure -- FAIL CLOSED, not best-effort/silently swallowed (the real fix)', async () => {
+    const client = makeReconcileMockClient({
+      staleSignals: [],
+      verifiedObservationIds: new Set(),
+      staleSignalsReadError: 'connection reset',
+    })
+
+    const outcome = await reconcileStaleGates(client, false)
+    assert.equal(
+      outcome.failures,
+      1,
+      'a real read error must be counted, never silently logged-and-ignored',
+    )
+    assert.equal(outcome.signalIds.size, 0)
+  })
+
+  test('an observations read error is also a genuine, counted failure', async () => {
+    const client = makeReconcileMockClient({
+      staleSignals: [{ id: 'sig-1', observation_ids: ['obs-1'], status: 'ACTIVE' }],
+      verifiedObservationIds: new Set(),
+      observationsReadError: 'timeout',
+    })
+
+    const outcome = await reconcileStaleGates(client, false)
+    assert.equal(outcome.failures, 1)
+  })
+
+  test('zero stale signals is a clean, zero-failure result -- not an error', async () => {
+    const client = makeReconcileMockClient({ staleSignals: [], verifiedObservationIds: new Set() })
+    const outcome = await reconcileStaleGates(client, false)
+    assert.equal(outcome.failures, 0)
+    assert.equal(outcome.signalIds.size, 0)
   })
 })

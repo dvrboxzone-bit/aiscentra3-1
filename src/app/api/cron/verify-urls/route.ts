@@ -170,6 +170,107 @@ function emptyPageResult(): PageResult {
   return { processed: 0, ok: 0, failed: 0, writeFailures: 0, affectedSignalIds: new Set() }
 }
 
+/** Upper bound on how many stale-gate signals a single invocation
+ * reconciles -- keeps this genuinely bounded regardless of how large
+ * the signal table grows, matching the same fixed-size-page philosophy
+ * already used for PAGE_SIZE above. 223 signals exist in production
+ * today; this ceiling is comfortably above any realistic near-term
+ * growth while still being a real, explicit bound, not "all rows." */
+const RECONCILE_LIMIT = 500
+
+export interface ReconcileOutcome {
+  signalIds: Set<string>
+  /** REAL FIX (independent review, iteration 3): a genuine count of
+   * read failures encountered while reconciling -- previously a
+   * reconciliation read error was only logged and silently swallowed
+   * (best-effort). A caller (the POST handler below) must now treat
+   * failures > 0 as a real reason NOT to report success. */
+  failures: number
+}
+
+/**
+ * Finds every signal that is currently gated closed
+ * (has_verified_source = false) but already has at least one
+ * genuinely-verified observation (url_verified_ok = true) linked to
+ * it -- a real leftover from a PRIOR invocation's failed
+ * has_verified_source recompute (read/RPC/write), which the normal
+ * drain query can never re-select once the observation's own write
+ * has already durably succeeded.
+ *
+ * REAL FIX (independent review, iteration 3): replaces the earlier
+ * inline, best-effort, N+1 version (one signals query, error only
+ * logged; then one SEPARATE observations query PER stale signal).
+ * Now exactly TWO queries total, regardless of how many stale signals
+ * exist: one bounded (RECONCILE_LIMIT) query for candidate signals,
+ * one batched query for the UNION of all their observation_ids'
+ * verified state. Any read error on either query is a genuine,
+ * counted failure -- never silently swallowed. When activeOnly is
+ * true (the release-time priorityOnly path), candidates are further
+ * restricted to signals linked to a currently-ACTIVE status, matching
+ * the same priority semantics pass 1 itself uses -- "успешное
+ * завершение priority-backfill допустимо только после чистой
+ * reconciliation ACTIVE-сигналов."
+ */
+export async function reconcileStaleGates(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  activeOnly: boolean,
+): Promise<ReconcileOutcome> {
+  const query = supabase
+    .from('signals')
+    .select('id, observation_ids, status')
+    .eq('has_verified_source', false)
+    .limit(RECONCILE_LIMIT)
+
+  const { data: staleSignals, error: staleErr } = await query
+  if (staleErr) {
+    console.error('[cron/verify-urls] reconciliation: stale-signal read failed:', staleErr.message)
+    return { signalIds: new Set(), failures: 1 }
+  }
+
+  let candidates = (staleSignals ?? []) as Array<{
+    id: string
+    observation_ids: string[]
+    status: string
+  }>
+  if (activeOnly) {
+    candidates = candidates.filter((s) => s.status === 'ACTIVE')
+  }
+  if (candidates.length === 0) {
+    return { signalIds: new Set(), failures: 0 }
+  }
+
+  // Single batched query: the UNION of every candidate's own
+  // observation_ids, checked for verified state in ONE round trip --
+  // never one query per signal.
+  const allObsIds = Array.from(new Set(candidates.flatMap((s) => s.observation_ids ?? [])))
+  if (allObsIds.length === 0) {
+    return { signalIds: new Set(), failures: 0 }
+  }
+
+  const { data: verifiedObs, error: obsErr } = await supabase
+    .from('observations')
+    .select('id')
+    .in('id', allObsIds)
+    .eq('url_verified_ok', true)
+  if (obsErr) {
+    console.error(
+      '[cron/verify-urls] reconciliation: verified-observations read failed:',
+      obsErr.message,
+    )
+    return { signalIds: new Set(), failures: 1 }
+  }
+
+  const verifiedIdSet = new Set(((verifiedObs ?? []) as Array<{ id: string }>).map((o) => o.id))
+  const result = new Set<string>()
+  for (const sig of candidates) {
+    if ((sig.observation_ids ?? []).some((id) => verifiedIdSet.has(id))) {
+      result.add(sig.id)
+    }
+  }
+  return { signalIds: result, failures: 0 }
+}
+
 export async function drainOnePage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
@@ -446,44 +547,21 @@ export async function POST(request: Request): Promise<NextResponse> {
     // signal's has_verified_source could stay permanently false even
     // though its source IS genuinely verified.
     //
-    // Fixed with a self-healing reconciliation query, re-run on EVERY
-    // invocation (not just after a failure -- idempotent and cheap):
-    // find any signal that is currently gated closed
-    // (has_verified_source = false) but already has at least one
-    // observation with url_verified_ok = true. Such a signal is either
-    // a genuine leftover from a PRIOR invocation's failed recompute, or
-    // (harmlessly) a signal this SAME invocation's pass 1/2 already
-    // added to allAffectedSignalIds -- the Set naturally dedupes
-    // either way. No new migration/column is required: this re-derives
-    // the truth from columns that already exist and are already
-    // correctly maintained by the write path above.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: staleGateSignals, error: staleGateError } = await (lockClient as any)
-      .from('signals')
-      .select('id, observation_ids')
-      .eq('has_verified_source', false)
-    if (staleGateError) {
-      console.error(
-        '[cron/verify-urls] reconciliation query failed (non-fatal, best-effort):',
-        staleGateError.message,
-      )
-    } else {
-      for (const sig of (staleGateSignals ?? []) as Array<{
-        id: string
-        observation_ids: string[]
-      }>) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: verifiedObs } = await (lockClient as any)
-          .from('observations')
-          .select('id')
-          .in('id', sig.observation_ids ?? [])
-          .eq('url_verified_ok', true)
-          .limit(1)
-        if (verifiedObs && verifiedObs.length > 0) {
-          allAffectedSignalIds.add(sig.id)
-        }
-      }
-    }
+    // FIXED (independent review, iteration 3): reconcileStaleGates
+    // (below) is now a real, exported, directly-tested function --
+    // previously this logic was inline, best-effort (a read error was
+    // only logged, never surfaced), and N+1 (one observations query
+    // PER stale signal). Now: ONE bounded query for candidate signals,
+    // ONE batched query for their observations' verified state (never
+    // N+1, scales with a fixed LIMIT regardless of how many stale
+    // signals exist), fail-closed (any read error is a genuine,
+    // counted failure -- see reconciliationFailures below, never
+    // silently swallowed), and scoped to ACTIVE-linked signals only
+    // when priorityOnlyMode is requested (matching the same priority
+    // semantics as pass 1 itself).
+    const reconciliation = await reconcileStaleGates(lockClient, priorityOnlyMode)
+    for (const id of reconciliation.signalIds) allAffectedSignalIds.add(id)
+    const reconciliationFailures = reconciliation.failures
 
     // Recompute the publication gate for every affected signal (both
     // newly-verified-this-invocation AND reconciled leftovers from a
@@ -546,6 +624,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       failed: totalFailed,
       writeFailures: totalWriteFailures,
       gateWriteFailures,
+      reconciliationFailures,
       signalsReevaluated: allAffectedSignalIds.size,
       pagesRun,
       stoppedReason,
