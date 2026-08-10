@@ -41,6 +41,16 @@ export PATH="$PGBIN:$PATH"
 
 MIGRATION="supabase/migrations/20260808150000_create_ai_token_budget.sql"
 HARDENING_MIGRATION="supabase/migrations/20260809040000_harden_ai_token_budget_grants.sql"
+VERIFICATION_STATE_MIGRATION="supabase/migrations/20260809090000_add_signal_verification_state.sql"
+PUBLICATION_GATE_MIGRATION="supabase/migrations/20260809095000_add_url_verification_and_publication_gate.sql"
+[[ -f "$PUBLICATION_GATE_MIGRATION" ]] || { echo "FATAL: $PUBLICATION_GATE_MIGRATION not found (run from repo root)"; exit 1; }
+[[ -f "$VERIFICATION_STATE_MIGRATION" ]] || { echo "FATAL: $VERIFICATION_STATE_MIGRATION not found (run from repo root)"; exit 1; }
+CORROBORATION_MIGRATION="supabase/migrations/20260809100000_atomic_signal_corroboration.sql"
+[[ -f "$CORROBORATION_MIGRATION" ]] || { echo "FATAL: $CORROBORATION_MIGRATION not found (run from repo root)"; exit 1; }
+METRICS_MIGRATION="supabase/migrations/20260809120000_create_pipeline_metrics.sql"
+METRICS_EXTEND_MIGRATION="supabase/migrations/20260809130000_extend_pipeline_metrics.sql"
+[[ -f "$METRICS_EXTEND_MIGRATION" ]] || { echo "FATAL: $METRICS_EXTEND_MIGRATION not found (run from repo root)"; exit 1; }
+[[ -f "$METRICS_MIGRATION" ]] || { echo "FATAL: $METRICS_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -94,6 +104,62 @@ $PG -v ON_ERROR_STOP=1 -f "$MIGRATION" >/dev/null
 
 echo "Applying the hardening migration (grants + search_path)..."
 $PG -v ON_ERROR_STOP=1 -f "$HARDENING_MIGRATION" >/dev/null
+
+# Minimal fixture tables for apply_signal_corroboration() -- that
+# function references public.signals/observations/signal_decision_log,
+# which are base-schema tables not created by any migration in this
+# repo (they predate the migrations directory). Only the columns the
+# function actually touches are created here, matching production's
+# real column names/types (verified against production via
+# information_schema before writing this fixture) closely enough to
+# prove real atomicity, without attempting to reproduce the full
+# production schema in a throwaway test cluster.
+echo "Creating minimal fixture tables for signal-corroboration atomicity tests..."
+$PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE public.signals (
+  id UUID PRIMARY KEY,
+  observation_ids UUID[] NOT NULL DEFAULT '{}',
+  confidence_score INT NOT NULL DEFAULT 60,
+  qualification_score NUMERIC,
+  momentum_score INT NOT NULL DEFAULT 0,
+  momentum_last_calculated TIMESTAMPTZ
+);
+CREATE TABLE public.observations (
+  id UUID PRIMARY KEY,
+  qualification_result TEXT,
+  qualification_score NUMERIC,
+  engine_version TEXT
+);
+CREATE TABLE public.signal_decision_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  signal_id UUID,
+  observation_id UUID NOT NULL,
+  decision TEXT NOT NULL,
+  qualification_score NUMERIC,
+  qualification_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+  human_relevance_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+  thresholds_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rule_trace JSONB NOT NULL DEFAULT '[]'::jsonb,
+  engine_justification TEXT,
+  engine_version TEXT NOT NULL DEFAULT 'v2.0',
+  decided_at TIMESTAMPTZ DEFAULT now()
+);
+SQL
+
+echo "Applying the signal-verification-state migration..."
+$PG -v ON_ERROR_STOP=1 -f "$VERIFICATION_STATE_MIGRATION" >/dev/null
+
+echo "Applying the URL-verification / publication-gate migration..."
+$PG -v ON_ERROR_STOP=1 -f "$PUBLICATION_GATE_MIGRATION" >/dev/null
+
+echo "Applying the corroboration-atomicity migration..."
+$PG -v ON_ERROR_STOP=1 -f "$CORROBORATION_MIGRATION" >/dev/null
+
+echo "Applying the pipeline-metrics migration..."
+$PG -v ON_ERROR_STOP=1 -f "$METRICS_MIGRATION" >/dev/null
+
+echo "Applying the pipeline-metrics extension migration (p50/p95, queue depth)..."
+$PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
 
 fail=0
 check() { # name expected actual
@@ -214,6 +280,27 @@ check "budget decisions proceed while the enrichment lock is held" "t" \
   "$($PG -c "SELECT allowed FROM public.consume_ai_token_budget('test-model','signal_engine',100,100000,0.9);")"
 
 echo ""
+echo "TEST 11b — collection_cycle lock: same mechanism, a DIFFERENT lock name"
+# Real gap this closes: /api/cron/collect's own execution lock uses a
+# distinct 'collection_cycle' lock_name (separate from enrichment's
+# 'enrichment_cycle', since the two operations are not mutually
+# exclusive) via the same acquire_execution_lock/release_execution_lock
+# functions, but had no dedicated concurrency proof of its own before
+# this test -- only the enrichment lock name was ever exercised here.
+$PG -c "DELETE FROM public.execution_locks;" >/dev/null
+: > "$DIR/collectlockresults"
+for holder in github-collect-run manual-dispatch-run; do
+  ( $PG -c "SELECT public.acquire_execution_lock('collection_cycle','$holder','5 minutes');" >> "$DIR/collectlockresults" ) &
+done
+wait
+collect_won="$(grep -c '^t$' "$DIR/collectlockresults" || true)"
+collect_lost="$(grep -c '^f$' "$DIR/collectlockresults" || true)"
+check "exactly one collection run acquires the lock" "1" "$collect_won"
+check "the competing collection run is refused" "1" "$collect_lost"
+check "an unrelated enrichment_cycle lock is unaffected by a held collection_cycle lock (different lock_name)" "t" \
+  "$($PG -c "SELECT public.acquire_execution_lock('enrichment_cycle','some-enrichment-holder','5 minutes');")"
+
+echo ""
 echo "TEST 12 — hardening migration: grants and search_path"
 $PG -c "TRUNCATE public.ai_token_usage; TRUNCATE public.execution_locks;" >/dev/null
 
@@ -264,6 +351,149 @@ do
 done
 
 $PG -c "TRUNCATE public.ai_token_usage; TRUNCATE public.execution_locks;" >/dev/null
+
+echo ""
+echo "TEST 13 — apply_signal_corroboration: real transactional atomicity"
+$PG -c "TRUNCATE public.signals, public.observations, public.signal_decision_log;" >/dev/null
+
+SIG_ID="11111111-1111-1111-1111-111111111111"
+OBS_A="22222222-2222-2222-2222-222222222222"
+OBS_B="33333333-3333-3333-3333-333333333333"
+MISSING_SIG="99999999-9999-9999-9999-999999999999"
+MISSING_OBS="88888888-8888-8888-8888-888888888888"
+
+$PG -c "INSERT INTO public.signals (id, observation_ids, confidence_score, qualification_score, momentum_score) VALUES ('$SIG_ID', ARRAY['$OBS_A']::uuid[], 60, 7.2, 20);" >/dev/null
+$PG -c "INSERT INTO public.observations (id) VALUES ('$OBS_B');" >/dev/null
+
+echo "  -- success case: all three writes commit together --"
+check "success case returns true" "t" \
+  "$($PG -c "SELECT public.apply_signal_corroboration('$SIG_ID','$OBS_B', ARRAY['$OBS_A','$OBS_B']::uuid[], 65, 40, 'v2.0', 'test corroboration');")"
+check "signal.observation_ids genuinely updated" "2" \
+  "$($PG -c "SELECT array_length(observation_ids,1) FROM public.signals WHERE id='$SIG_ID';")"
+check "signal.confidence_score genuinely updated" "65" \
+  "$($PG -c "SELECT confidence_score FROM public.signals WHERE id='$SIG_ID';")"
+check "observation.qualification_result genuinely updated" "SIGNAL" \
+  "$($PG -c "SELECT qualification_result FROM public.observations WHERE id='$OBS_B';")"
+check "observation.qualification_score inherits the REAL signal score (7.2), not NULL -- the exact 'false SIGNAL with NULL score' bug this closes" "7.2" \
+  "$($PG -c "SELECT qualification_score FROM public.observations WHERE id='$OBS_B';")"
+check "decision log entry genuinely written" "1" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$OBS_B';")"
+check "decision log qualification_score also matches -- three-way consistency (signal/observation/decision_log)" "7.2" \
+  "$($PG -c "SELECT qualification_score FROM public.signal_decision_log WHERE observation_id='$OBS_B';")"
+check "verification_state becomes CORROBORATED at exactly 2 independent observations" "CORROBORATED" \
+  "$($PG -c "SELECT verification_state FROM public.signals WHERE id='$SIG_ID';")"
+
+echo "  -- failure case: nonexistent signal -- must roll back EVERYTHING, not partially apply --"
+$PG -c "INSERT INTO public.observations (id) VALUES ('$MISSING_OBS');" >/dev/null
+FAIL1_ERR="$($PG -c "SELECT public.apply_signal_corroboration('$MISSING_SIG','$MISSING_OBS', ARRAY['$MISSING_OBS']::uuid[], 99, 99, 'v2.0', 'should not apply');" 2>&1 | grep -c 'not found' || true)"
+check "raises an error naming the missing signal" "1" "$FAIL1_ERR"
+check "the observation was NOT updated despite being real and valid" "" \
+  "$($PG -c "SELECT qualification_result FROM public.observations WHERE id='$MISSING_OBS';")"
+check "no decision log entry was written for the failed attempt" "0" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$MISSING_OBS';")"
+
+echo "  -- failure case: nonexistent observation -- signal update must ALSO roll back, not just the observation --"
+MISSING_OBS_2="77777777-7777-7777-7777-777777777777"
+$PG -c "INSERT INTO public.signals (id, observation_ids) VALUES ('44444444-4444-4444-4444-444444444444', ARRAY['$OBS_A']::uuid[]);" >/dev/null
+FAIL2_ERR="$($PG -c "SELECT public.apply_signal_corroboration('44444444-4444-4444-4444-444444444444','$MISSING_OBS_2', ARRAY['$OBS_A','$MISSING_OBS_2']::uuid[], 99, 99, 'v2.0', 'should not apply');" 2>&1 | grep -c 'not found' || true)"
+check "raises an error naming the missing observation" "1" "$FAIL2_ERR"
+check "the SIGNAL was NOT updated even though its own row exists and is valid -- proves this is one transaction, not two independent writes" "1" \
+  "$($PG -c "SELECT array_length(observation_ids,1) FROM public.signals WHERE id='44444444-4444-4444-4444-444444444444';")"
+
+echo ""
+echo "TEST 14 — pipeline_metrics: write, read, grants, prune"
+$PG -c "TRUNCATE public.pipeline_metrics;" >/dev/null
+
+$PG -c "INSERT INTO public.pipeline_metrics
+  (cycle_type, started_at, completed_at, duration_ms, items_attempted, items_succeeded, items_failed, failure_breakdown, stopped_reason, latency_p50_ms, latency_p95_ms, queue_depth, oldest_pending_age_seconds)
+  VALUES ('enrichment', now() - interval '1 hour', now() - interval '55 minutes', 300000, 5, 3, 2,
+          '{\"rate_limit\":1,\"deadline_exceeded\":1}'::jsonb, 'queue_empty', 1320, 1980, 6412, 172800);" >/dev/null
+
+check "row was written and readable" "1" \
+  "$($PG -c "SELECT count(*) FROM public.pipeline_metrics WHERE cycle_type='enrichment';")"
+check "failure_breakdown is real structured jsonb, queryable by key" "1" \
+  "$($PG -c "SELECT count(*) FROM public.pipeline_metrics WHERE (failure_breakdown->>'rate_limit')::int = 1;")"
+check "latency_p50_ms/p95_ms are real, queryable columns" "1320" \
+  "$($PG -c "SELECT latency_p50_ms FROM public.pipeline_metrics WHERE cycle_type='enrichment';")"
+check "queue_depth is a real, queryable column" "6412" \
+  "$($PG -c "SELECT queue_depth FROM public.pipeline_metrics WHERE cycle_type='enrichment';")"
+check "oldest_pending_age_seconds is a real, queryable column" "172800" \
+  "$($PG -c "SELECT oldest_pending_age_seconds FROM public.pipeline_metrics WHERE cycle_type='enrichment';")"
+
+echo "  -- anon/authenticated must not read pipeline_metrics --"
+anon_metrics_err="$($PG -c "SET ROLE anon; SELECT * FROM public.pipeline_metrics; RESET ROLE;" 2>&1 | grep -c 'permission denied' || true)"
+check "anon: SELECT on pipeline_metrics is permission denied" "1" "$anon_metrics_err"
+
+echo "  -- prune respects retention, does not touch in-window rows --"
+$PG -c "INSERT INTO public.pipeline_metrics
+  (cycle_type, started_at, completed_at, duration_ms, items_attempted, items_succeeded, items_failed)
+  VALUES ('collection', now() - interval '40 days', now() - interval '40 days', 1000, 1, 1, 0);" >/dev/null
+PRUNED="$($PG -c "SELECT public.prune_pipeline_metrics();")"
+check "exactly the 40-day-old row is pruned, not the 1-hour-old one" "1" "$PRUNED"
+check "the in-window row survives pruning" "1" \
+  "$($PG -c "SELECT count(*) FROM public.pipeline_metrics;")"
+
+$PG -c "TRUNCATE public.pipeline_metrics;" >/dev/null
+
+echo ""
+echo "TEST 15 — verification_state: distinct from confidence/qualification/status, correct thresholds"
+check "compute_verification_state(1) = SINGLE_SOURCE_UNVERIFIED" "SINGLE_SOURCE_UNVERIFIED" \
+  "$($PG -c "SELECT public.compute_verification_state(1);")"
+check "compute_verification_state(2) = CORROBORATED (exact boundary)" "CORROBORATED" \
+  "$($PG -c "SELECT public.compute_verification_state(2);")"
+check "compute_verification_state(3) = VERIFIED (exact boundary)" "VERIFIED" \
+  "$($PG -c "SELECT public.compute_verification_state(3);")"
+check "compute_verification_state(10) = VERIFIED (well above boundary)" "VERIFIED" \
+  "$($PG -c "SELECT public.compute_verification_state(10);")"
+
+echo "  -- a freshly-inserted signal defaults to SINGLE_SOURCE_UNVERIFIED without the application setting it explicitly --"
+$PG -c "TRUNCATE public.signals;" >/dev/null
+$PG -c "INSERT INTO public.signals (id, observation_ids) VALUES ('55555555-5555-5555-5555-555555555555', ARRAY['$OBS_A']::uuid[]);" >/dev/null
+check "default verification_state on insert" "SINGLE_SOURCE_UNVERIFIED" \
+  "$($PG -c "SELECT verification_state FROM public.signals WHERE id='55555555-5555-5555-5555-555555555555';")"
+
+echo "  -- verification_state, confidence_score, and status are genuinely independent columns --"
+$PG -c "UPDATE public.signals SET confidence_score=95, verification_state='DISPUTED' WHERE id='55555555-5555-5555-5555-555555555555';" >/dev/null
+check "confidence_score change does not affect verification_state" "DISPUTED" \
+  "$($PG -c "SELECT verification_state FROM public.signals WHERE id='55555555-5555-5555-5555-555555555555';")"
+check "verification_state change does not affect confidence_score" "95" \
+  "$($PG -c "SELECT confidence_score FROM public.signals WHERE id='55555555-5555-5555-5555-555555555555';")"
+
+echo "  -- the CHECK constraint rejects an invalid state --"
+INVALID_ERR="$($PG -c "UPDATE public.signals SET verification_state='NOT_A_REAL_STATE' WHERE id='55555555-5555-5555-5555-555555555555';" 2>&1 | grep -c 'violates check constraint' || true)"
+check "invalid verification_state is rejected by the CHECK constraint" "1" "$INVALID_ERR"
+
+$PG -c "TRUNCATE public.signals;" >/dev/null
+
+echo ""
+echo "TEST 16 — publication gate: has_verified_source, compute_has_verified_source"
+$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+
+OBS_VERIFIED="66666666-6666-6666-6666-666666666666"
+OBS_UNVERIFIED="16161616-1616-1616-1616-161616161616"
+OBS_NEVER_CHECKED="26262626-2626-2626-2626-262626262626"
+
+$PG -c "INSERT INTO public.observations (id, url_verified_ok) VALUES
+  ('$OBS_VERIFIED', true), ('$OBS_UNVERIFIED', false), ('$OBS_NEVER_CHECKED', NULL);" >/dev/null
+
+check "a signal with a verified source is gated OPEN" "t" \
+  "$($PG -c "SELECT public.compute_has_verified_source(ARRAY['$OBS_VERIFIED']::uuid[]);")"
+check "a signal whose source failed verification is gated CLOSED" "f" \
+  "$($PG -c "SELECT public.compute_has_verified_source(ARRAY['$OBS_UNVERIFIED']::uuid[]);")"
+check "a signal whose source was never checked (NULL) is gated CLOSED -- fail-closed default" "f" \
+  "$($PG -c "SELECT public.compute_has_verified_source(ARRAY['$OBS_NEVER_CHECKED']::uuid[]);")"
+check "a signal with ONE verified source among several unverified ones is still gated OPEN" "t" \
+  "$($PG -c "SELECT public.compute_has_verified_source(ARRAY['$OBS_UNVERIFIED','$OBS_VERIFIED','$OBS_NEVER_CHECKED']::uuid[]);")"
+check "a signal with zero verified sources among several is gated CLOSED" "f" \
+  "$($PG -c "SELECT public.compute_has_verified_source(ARRAY['$OBS_UNVERIFIED','$OBS_NEVER_CHECKED']::uuid[]);")"
+
+echo "  -- corroboration re-evaluates the gate atomically: an unverified signal becomes verified once its corroborating source is confirmed --"
+$PG -c "INSERT INTO public.signals (id, observation_ids, has_verified_source) VALUES ('$SIG_ID', ARRAY['$OBS_UNVERIFIED']::uuid[], false);" >/dev/null
+$PG -c "SELECT public.apply_signal_corroboration('$SIG_ID','$OBS_VERIFIED', ARRAY['$OBS_UNVERIFIED','$OBS_VERIFIED']::uuid[], 65, 40, 'v2.0', 'corroborated by a verified source');" >/dev/null
+check "has_verified_source flips to true after corroboration by a verified source, in the SAME transaction" "t" \
+  "$($PG -c "SELECT has_verified_source FROM public.signals WHERE id='$SIG_ID';")"
+
+$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then

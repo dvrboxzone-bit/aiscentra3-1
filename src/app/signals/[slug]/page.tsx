@@ -6,6 +6,8 @@ import { ScoreBar } from '@/components/ui/score-bar'
 import { SignalIllustration } from '@/components/signals/signal-illustration'
 import { getSignalById } from '@/modules/signals/queries'
 import { getEventsBySignal } from '@/modules/events/queries'
+import { getSourceLinksForSignal } from '@/modules/observations/queries'
+import { SourceFaviconStrip } from '@/components/signals/source-favicon-strip'
 import { formatDate, formatRelativeTime, formatCategory } from '@/lib/utils/format'
 import { getSignalSeverity } from '@/types/database'
 
@@ -33,6 +35,13 @@ export async function generateMetadata({ params }: SignalPageProps): Promise<Met
 export default async function SignalPage({ params }: SignalPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
   const [signal, relatedEvents] = await Promise.all([getSignalById(slug), getEventsBySignal(slug)])
+
+  // Fetched only after getSignalById has confirmed the signal is
+  // publicly visible (it uses the RLS-bound public client) -- see
+  // getSourceLinksForSignal's own docstring for why that ordering is
+  // the safety boundary here. Already filtered to safe URLs only by
+  // that function.
+  const sourceLinks = signal ? await getSourceLinksForSignal(signal.observation_ids) : []
 
   if (!signal) notFound()
 
@@ -86,6 +95,11 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
               SIGNAL ANALYSIS
             </h2>
             <p className="text-sm leading-relaxed text-text-secondary">{signal.description}</p>
+            {sourceLinks.length > 0 && (
+              <div className="mt-3">
+                <SourceFaviconStrip sources={sourceLinks} />
+              </div>
+            )}
           </section>
 
           {/* Related events */}

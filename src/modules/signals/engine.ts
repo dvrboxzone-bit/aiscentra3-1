@@ -27,12 +27,17 @@ import {
   buildEnrichmentPrompt,
 } from './enrichment-prompt'
 import { SISOutputSchema, SIS_SYSTEM_PROMPT, buildSISPrompt, computeSIS } from './strategic-score'
-import { checkHardRejection, V2_THRESHOLDS } from './pre-qualification'
+import {
+  checkHardRejection,
+  checkPreFilter,
+  PRE_FILTER_MIN,
+  V2_THRESHOLDS,
+} from './pre-qualification'
 import { computeAllScores, computeMomentumScore, validateFactors } from './scoring'
 import { validateSignal } from './validation'
-import { checkDuplicate, getRecentSignalTitles } from './deduplication'
+import { checkDuplicate, checkCorroboration, getRecentSignalTitles } from './deduplication'
 import type { ObservationRow } from '@/modules/observations/queries'
-import type { SignalCategory } from '@/types/database'
+import type { SignalCategory, QualificationResult } from '@/types/database'
 
 // ── Engine version ────────────────────────────────────────────────────────────
 
@@ -61,11 +66,47 @@ function truncateForTokenBudget(content: string): string {
 
 // ── Result type ───────────────────────────────────────────────────────────────
 
+// ── Weak-signal classification ──────────────────────────────────────────────
+//
+// Extracted as its own pure, exported function specifically so the real
+// bug this fixes is directly unit-testable without needing a full
+// processObservation() integration test: classifyBySIS() (src/types/
+// database.ts) returns FOUR possible values -- 'SIGNAL' | 'WEAK_SIGNAL' |
+// 'ARCHIVE' | 'DISCARD' -- but the inline check this replaced tested
+// ONLY `=== 'WEAK_SIGNAL'`. A SIS score of 2.0-3.99 classifies as
+// 'ARCHIVE', which is neither 'WEAK_SIGNAL' nor 'DISCARD' (DISCARD is
+// handled earlier in the pipeline and never reaches this decision), so
+// the old check evaluated to `false` and the signal became fully
+// ACTIVE. Confirmed against production: ACTIVE signals existed with SIS
+// 2.20-3.90, squarely inside the previously-unchecked ARCHIVE band --
+// the exact opposite of Constitution Article 3.3's "scarcity
+// philosophy" (prefer no Signal over a wrong one).
+//
+// Both 'WEAK_SIGNAL' and 'ARCHIVE' now map to non-ACTIVE. An
+// ARCHIVE-tier SIS score is weaker evidence than WEAK_SIGNAL-tier, so it
+// must never be treated as MORE trustworthy by falling through
+// unchecked to ACTIVE.
+export function isWeakSignalDecision(
+  sisDecision: QualificationResult | undefined,
+  signalScore: number,
+): boolean {
+  if (sisDecision === undefined) {
+    // SIS was unavailable for this observation (see engine's own
+    // "SIS failure -> proceed without SIS" fallback) -- fall back to the
+    // V1 signal_score threshold, unchanged from the pre-existing
+    // behavior for this specific case.
+    return signalScore < 55
+  }
+  return sisDecision === 'WEAK_SIGNAL' || sisDecision === 'ARCHIVE'
+}
+
 export interface SignalEngineResult {
   observationId: string
   outcome:
     | 'signal_created'
     | 'weak_signal_created'
+    | 'corroborated_existing_signal'
+    | 'archived_prefilter'
     | 'rejected_duplicate'
     | 'rejected_marketing'
     | 'rejected_hard_rule'
@@ -210,6 +251,49 @@ export async function processObservation(
     }
   }
 
+  // ── Stage 1b: Deterministic pre-filter (zero AI cost) ─────────────────────
+  // Real, measured problem this closes: at ~2,527 tokens per real
+  // enrichment (70b) call against Groq's real 100,000 TPD limit, Signal
+  // Engine can process at most ~39.6 observations/day via the full
+  // AI path -- against real intake of ~400/day, ~10x too much for
+  // full AI treatment. checkPreFilter (pre-qualification.ts) provides
+  // a free, keyword-based signal-worthiness score; anything below
+  // PRE_FILTER_MIN is archived WITHOUT spending any AI budget, but the
+  // observation ROW ITSELF is preserved (never deleted) -- it can
+  // still be found, audited, or reprocessed later (e.g. if the filter
+  // is tuned), it simply does not reach SIS/enrichment now.
+  const preFilter = checkPreFilter(observation)
+  if (!preFilter.passed) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'ARCHIVE',
+        rejection_code: 'R-13',
+        rejection_reason: `Deterministic pre-filter score ${preFilter.score.toFixed(1)} below minimum ${PRE_FILTER_MIN}`,
+        qualification_score: preFilter.score,
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
+
+    await writeDecisionLog({
+      supabase,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'ARCHIVE',
+      rejection_code: 'R-13',
+      rejection_reason: `Deterministic pre-filter score ${preFilter.score.toFixed(1)} below minimum ${PRE_FILTER_MIN}`,
+      engine_justification: `Zero-AI-cost keyword score ${preFilter.score.toFixed(1)}/10 did not meet the ${PRE_FILTER_MIN} threshold required to spend AI budget on SIS/enrichment. Observation preserved, not deleted.`,
+      qualification_score: preFilter.score,
+    })
+
+    return {
+      observationId: observation.id,
+      outcome: 'archived_prefilter',
+      reason: `R-13: deterministic pre-filter score ${preFilter.score.toFixed(1)} < ${PRE_FILTER_MIN}`,
+    }
+  }
+
   function preAssignCategory(title: string, content: string): string {
     const CATS = [
       { cat: 'REGULATION', kw: ['regulation', 'policy', 'law', 'compliance', 'government'] },
@@ -237,8 +321,28 @@ export async function processObservation(
     observation.content,
   ) as SignalCategory
 
-  const dupCheck = await checkDuplicate(observation.title, candidateCategory)
+  const dupCheck = await checkDuplicate(observation.title, candidateCategory, observation.source_id)
   if (dupCheck.isDuplicate) {
+    // REAL GAP FOUND AND FIXED: every OTHER rejection path in this
+    // function (hard rejection, pre-filter, SIS-level discard) updates
+    // the observation row itself with a matching qualification_result/
+    // rejection_code -- this was the one path that wrote a
+    // signal_decision_log entry explaining WHY (R-11, duplicate) but
+    // left the observation's own qualification_result/rejection_code
+    // unset, so an auditor reading only the observations table (not
+    // joining to signal_decision_log) could not see why this specific
+    // row was rejected.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'DISCARD',
+        rejection_code: 'R-11',
+        rejection_reason: dupCheck.reason,
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
+
     await writeDecisionLog({
       supabase,
       signal_id: null,
@@ -252,6 +356,105 @@ export async function processObservation(
       observationId: observation.id,
       outcome: 'rejected_duplicate',
       reason: dupCheck.reason,
+    }
+  }
+
+  // ── Stage 2a2: Corroboration Check (source diversification) ──────────────
+  // Runs BEFORE the expensive SIS/enrichment AI stages deliberately: if
+  // this observation corroborates an existing signal, there is no need
+  // to spend AI budget writing a brand-new description for what is, in
+  // substance, the same event -- the existing signal is strengthened
+  // instead. See checkCorroboration's own docstring in deduplication.ts
+  // for the full rationale and the real gap this closes (every signal
+  // was single-sourced by construction until this fix).
+  const corrCheck = await checkCorroboration(
+    observation.title,
+    candidateCategory,
+    observation.source_id,
+    observation.published_at,
+  )
+  if (corrCheck.isCorroboration && corrCheck.matchedSignalId && corrCheck.matchedObservationIds) {
+    const updatedObservationIds = [...corrCheck.matchedObservationIds, observation.id]
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: matchedSignal } = await (supabase as any)
+      .from('signals')
+      .select('confidence_score')
+      .eq('id', corrCheck.matchedSignalId)
+      .single()
+
+    // Modest, explicit bump for one additional independent confirmation
+    // -- matches SIGNAL_LIFECYCLE.md's "Strengthened" stage ("independent
+    // confirmation... Importance Score increases"), capped at 100.
+    // Recomputed momentum now reflects the REAL distinct source count
+    // (>=2) instead of the hardcoded 1 every prior signal was created
+    // with -- this is the only place in the codebase where
+    // distinctSourceCount is genuinely >1.
+    const priorConfidence = (matchedSignal?.confidence_score as number | undefined) ?? 60
+    const newConfidence = Math.min(100, priorConfidence + 5)
+    const newMomentum = computeMomentumScore({
+      newObservationsCount: 1,
+      distinctSourceCount: updatedObservationIds.length,
+      crossCategoryRefCount: 0,
+      daysSinceCreation: 0,
+    })
+
+    // REAL BUG FIXED: this used to be three separate, unchecked `await`
+    // writes (signal update, observation update, decision log insert) --
+    // none checked for an `error` in the response, so a failure on any
+    // ONE of them still let execution continue to the next write and
+    // still returned outcome:'corroborated_existing_signal', a
+    // partially-applied merge with a decision log claiming success.
+    //
+    // Now a single atomic RPC (apply_signal_corroboration, see
+    // supabase/migrations/20260809100000_atomic_signal_corroboration.sql)
+    // performs all three writes inside ONE PostgreSQL transaction --
+    // if the RPC throws, NONE of the three writes are committed, full
+    // stop, verified directly by a real-PostgreSQL atomicity test.
+    //
+    // FAIL-CLOSED, not fail-lost: on failure, this observation is NOT
+    // marked as corroborated and NO decision log entry claims it was --
+    // but it is also not silently dropped. Falling through to the
+    // normal pipeline below (rather than returning an error outcome
+    // here) means the observation proceeds through SIS/enrichment and,
+    // worst case, becomes its own standalone signal -- exactly the
+    // behavior that existed before corroboration was implemented at
+    // all, which is the safe, conservative degradation.
+    const justification = `Corroborates existing signal "${corrCheck.matchedTitle}" (similarity=${((corrCheck.similarityScore ?? 0) * 100).toFixed(1)}%, independent source) -- merged as additional evidence rather than creating a duplicate single-source signal.`
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: applied, error: rpcError } = await (supabase as any).rpc(
+        'apply_signal_corroboration',
+        {
+          p_signal_id: corrCheck.matchedSignalId,
+          p_new_observation_id: observation.id,
+          p_updated_observation_ids: updatedObservationIds,
+          p_new_confidence_score: newConfidence,
+          p_new_momentum_score: newMomentum,
+          p_engine_version: ENGINE_VERSION,
+          p_engine_justification: justification,
+        },
+      )
+
+      if (rpcError || applied !== true) {
+        console.error(
+          '[engine] apply_signal_corroboration failed -- falling through to normal pipeline (fail-closed, not fail-lost):',
+          rpcError?.message ?? 'RPC returned falsy',
+        )
+      } else {
+        return {
+          observationId: observation.id,
+          outcome: 'corroborated_existing_signal',
+          signalId: corrCheck.matchedSignalId,
+          reason: `Corroborates "${corrCheck.matchedTitle}" from an independent source`,
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[engine] apply_signal_corroboration threw -- falling through to normal pipeline (fail-closed, not fail-lost):',
+        err instanceof Error ? err.message : String(err),
+      )
     }
   }
 
@@ -329,6 +532,11 @@ export async function processObservation(
       rejection_code: 'R-09',
       rejection_reason: `SIS_FINAL=${sisResult.sis.final.toFixed(2)} below threshold ${V2_THRESHOLDS.SIS_WEAK_MIN}`,
       engine_justification: sisResult.engine_justification,
+      // REAL BUG FIXED: this call previously omitted qualification_score
+      // while the observation UPDATE immediately above correctly set it
+      // to sisResult.sis.final -- signal_decision_log silently got NULL
+      // for a value that had a genuine, computed number just lines away.
+      qualification_score: sisResult.sis.final,
       sis_novelty: sisResult.sis.novelty,
       sis_importance: sisResult.sis.importance,
       sis_urgency: sisResult.sis.urgency,
@@ -465,8 +673,30 @@ export async function processObservation(
   }
 
   // ── Stage 6: Determine Signal vs Weak Signal ──────────────────────────────
-  // Weak Signal: SIS between 4.0-5.9, or SIS unavailable but score < 55
-  const isWeakSignal = sisResult ? sisResult.decision === 'WEAK_SIGNAL' : signal_score < 55
+  // REAL BUG FIXED HERE: classifyBySIS() (src/types/database.ts) returns
+  // FOUR possible values -- 'SIGNAL' | 'WEAK_SIGNAL' | 'ARCHIVE' | 'DISCARD'
+  // -- but this check previously tested ONLY `=== 'WEAK_SIGNAL'`. A SIS
+  // score of 2.0-3.99 classifies as 'ARCHIVE', which is neither
+  // 'WEAK_SIGNAL' nor 'DISCARD' (DISCARD is already handled earlier and
+  // never reaches this line), so `isWeakSignal` evaluated to `false` and
+  // the signal became fully ACTIVE -- confirmed against production:
+  // ACTIVE signals existed with SIS 2.20-3.90, squarely inside the
+  // unchecked ARCHIVE band. This is the exact opposite of Constitution
+  // Article 3.3's "scarcity philosophy" (prefer no Signal over a wrong
+  // one) -- a signal scoring below even the WEAK_SIGNAL floor was being
+  // published with full ACTIVE status, indistinguishable from a strong
+  // signal to any reader or to the Assistant/Forecast systems that treat
+  // ACTIVE signals as reliable evidence.
+  //
+  // Fixed to treat BOTH 'WEAK_SIGNAL' and 'ARCHIVE' as non-ACTIVE: an
+  // ARCHIVE-tier SIS score is weaker evidence than WEAK_SIGNAL-tier, so it
+  // must never be treated as MORE trustworthy by falling through
+  // unchecked. Mapped to the same 'WEAK' status/'WEAK_SIGNAL' intelligence
+  // type as an explicit WEAK_SIGNAL decision, rather than inventing a new
+  // status this session -- ARCHIVE-tier material is kept (matching the
+  // Constitution's "no silent deletion" stance) but never surfaces as a
+  // full-strength Signal.
+  const isWeakSignal = isWeakSignalDecision(sisResult?.decision, signal_score)
 
   const signalStatus = isWeakSignal ? 'WEAK' : 'ACTIVE'
   const intelligenceType = isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL'
@@ -516,6 +746,26 @@ export async function processObservation(
       sis_urgency: sisResult?.sis.urgency ?? null,
       sis_confidence: sisResult?.sis.confidence ?? null,
       sis_final: sisResult?.sis.final ?? null,
+      // REAL BUG FIXED: qualification_score was never included in this
+      // INSERT at all (only sis_final, a different column, was set) --
+      // every signal's qualification_score defaulted to NULL at the
+      // database level, confirmed against production: all 17 signals
+      // created in the prior 24h had qualification_score=NULL. Uses the
+      // same fallback chain already used for the OBSERVATION row's own
+      // qualification_score a few lines below in this function, so the
+      // signal and its source observation agree on this value.
+      qualification_score: sisResult?.sis.final ?? signal_score,
+
+      // Real publication gate: "без безопасной и подтверждённо
+      // доступной ссылки на оригинальный материал сигнал публично не
+      // показывается." At creation time this is normally FALSE --
+      // url_verified_ok is typically still NULL here (verification is
+      // a separate, decoupled pass, see /api/cron/verify-urls's own
+      // docstring for why) -- a safe, fail-closed default. The signal
+      // becomes eligible for public display once that pass confirms
+      // this observation's own URL is reachable and re-evaluates this
+      // flag; it never blocks on that at creation time.
+      has_verified_source: observation.url_verified_ok === true,
 
       // V2: Human relevance
       human_relevance_flags: sisResult?.human_relevance ?? {},
@@ -564,6 +814,14 @@ export async function processObservation(
   const signalId = signal.id as string
 
   // ── Write Decision Log ────────────────────────────────────────────────────
+  // REAL BUG FIXED: this call previously omitted qualification_score
+  // entirely, even though writeDecisionLog itself accepts and writes
+  // it. The signal INSERT above and the observation UPDATE below both
+  // correctly set qualification_score to the same value
+  // (sisResult?.sis.final ?? signal_score) -- but signal_decision_log
+  // silently got NULL for every normal signal creation, a genuine
+  // three-way inconsistency between signal/observation/decision_log
+  // for the exact same qualifying event.
   await writeDecisionLog({
     supabase,
     signal_id: signalId,
@@ -572,6 +830,7 @@ export async function processObservation(
     engine_justification:
       sisResult?.engine_justification ??
       `Signal created via V1 scoring. signal_score=${signal_score}, confidence=${confidence_score}. SIS evaluation unavailable.`,
+    qualification_score: sisResult?.sis.final ?? signal_score,
     sis_novelty: sisResult?.sis.novelty ?? null,
     sis_importance: sisResult?.sis.importance ?? null,
     sis_urgency: sisResult?.sis.urgency ?? null,

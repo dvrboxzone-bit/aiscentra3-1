@@ -31,10 +31,17 @@ function makeObservation(): ObservationRow {
   return {
     id: 'obs-budget-test',
     source_id: 'source-1',
-    title: 'A Genuinely Substantive AI Research Observation About Model Training',
+    title: 'New Model Release Achieves Record Benchmark Results',
     content:
       'Researchers describe a new training technique that improves sample efficiency ' +
-      'for large language models, with benchmark results across several standard tasks. ' +
+      'for large language models. The new model release achieves state-of-the-art benchmark ' +
+      'results across several standard tasks, outperforming prior methods. ' +
+      // Genuinely clears the deterministic pre-filter (checkPreFilter,
+      // pre-qualification.ts) with real positive-term matches
+      // ("release", "achieves", "benchmark", "state-of-the-art",
+      // "outperforming") so this fixture reaches the SIS/enrichment
+      // stage this test actually exercises, rather than being archived
+      // by the pre-filter before ever reaching it.
       'The approach avoids the common failure modes of prior methods.',
     url: 'https://example.com/paper',
     published_at: '2026-08-08T00:00:00Z',

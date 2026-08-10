@@ -1,0 +1,61 @@
+name: Verify Source URLs (every 4h)
+
+# Real requirement this closes: the publication gate (has_verified_source,
+# migration 20260809095000) means a signal is NOT publicly shown until
+# its own source URL is confirmed reachable. Without a scheduled
+# trigger for /api/cron/verify-urls, that gate would leave the site
+# permanently empty -- every newly-collected observation starts with
+# url_verified_ok=NULL, and nothing ever flips it to true.
+#
+# Same free, Vercel-cron-limit-independent mechanism already proven for
+# collection (collect-4h.yml) and enrichment (enrich-batch-hourly.yml).
+
+on:
+  schedule:
+    # Offset 15 minutes after each collection cycle (collect-4h.yml:
+    # '0 1,5,9,13,17,21 * * *'), so newly-collected observations exist
+    # before this tries to verify them.
+    - cron: '15 1,5,9,13,17,21 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: verify-urls
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-verify-urls:
+    name: Trigger /api/cron/verify-urls
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call verify-urls endpoint (POST)
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.APP_URL || 'https://aiscentra.com' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set."
+            exit 1
+          fi
+
+          HTTP_STATUS="$(curl -sS -o /tmp/verify-response.json -w '%{http_code}' \
+            -X POST "${APP_URL}/api/cron/verify-urls" \
+            -H "Authorization: Bearer ${CRON_SECRET}")"
+
+          echo "HTTP status: $HTTP_STATUS"
+          cat /tmp/verify-response.json
+          echo ""
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "::notice::verify-urls call succeeded (HTTP $HTTP_STATUS)."
+          else
+            echo "::error::verify-urls call failed with HTTP $HTTP_STATUS."
+            exit 1
+          fi
+
+          rm -f /tmp/verify-response.json

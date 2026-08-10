@@ -139,6 +139,33 @@
       "hasCallerFacingRateLimit": false
     },
     {
+      "path": "/api/cron/verify-urls",
+      "file": "src/app/api/cron/verify-urls/route.ts",
+      "methods": ["POST"],
+      "category": "cron",
+      "guard": "centralized isAuthorizedCronRequest (cron-guard.ts, crypto.timingSafeEqual)",
+      "authMechanism": "shared-secret-constant-time",
+      "authzMechanism": "none beyond secret match",
+      "featureFlag": "none",
+      "inputValidation": "n/a (no request body)",
+      "aiCall": false,
+      "serviceRole": true,
+      "databaseRead": true,
+      "databaseWrite": true,
+      "externalNetworkCall": true,
+      "costSensitive": false,
+      "rateLimit": "missing",
+      "budgetGuard": "missing",
+      "publicResponseDto": "verified/ok/failed/writeFailures/gateWriteFailures/signalsReevaluated summary",
+      "rawErrorExposureRisk": "NO -- DB/RPC errors logged server-side only, client receives a generic 'Internal error' message (fixed in second architectural review)",
+      "productionState": "NOT registered in vercel.json crons (Vercel Hobby: 1 cron only, already used by /api/cron/pipeline); triggered by .github/workflows/verify-urls-4h.yml (POST), 6x/day, same GitHub-Actions-based mechanism as collect-4h.yml and enrich-batch-hourly.yml",
+      "risk": "P3",
+      "notes": "Performs real outbound HTTP HEAD/GET requests to arbitrary observation URLs (verifyUrlReachable in source-links.ts, with real DNS-pinning via a per-hop undici Agent to prevent DNS-rebinding SSRF) to populate the publication gate (has_verified_source, migration 20260809095000). Guarded by an execution lock ('verify_urls_cycle', same acquire/release_execution_lock mechanism as collection/enrichment) to prevent overlapping runs. Moved from GET to POST (a GET route with real DB side effects is a CSRF-adjacent risk) and from a per-route weak secret comparison to the centralized, constant-time cron-guard.ts in the second architectural review -- risk downgraded from P2 to P3 accordingly.",
+      "aiCallMode": "none",
+      "weakSharedSecret": false,
+      "hasCallerFacingRateLimit": false
+    },
+    {
       "path": "/api/cron/enrich",
       "file": "src/app/api/cron/enrich/route.ts",
       "methods": ["GET"],
@@ -410,32 +437,32 @@
     }
   ],
   "summary": {
-    "totalRoutes": 15,
+    "totalRoutes": 16,
     "categoryCounts": {
       "public-read": 2,
       "authenticated-user": 0,
       "admin": 1,
-      "cron": 11,
+      "cron": 12,
       "internal-machine": 1,
       "disabled": 0
     },
     "directAiRoutes": 7,
     "indirectAiRoutes": 4,
-    "serviceRoleRoutes": 12,
-    "databaseReadRoutes": 14,
-    "databaseWriteRoutes": 7,
-    "rateLimitMissingLiteralCount": 13,
-    "routesWithoutRealCallerFacingRateLimit": 15,
-    "budgetGuardMissingLiteralCount": 14,
+    "serviceRoleRoutes": 13,
+    "databaseReadRoutes": 15,
+    "databaseWriteRoutes": 8,
+    "rateLimitMissingLiteralCount": 14,
+    "routesWithoutRealCallerFacingRateLimit": 16,
+    "budgetGuardMissingLiteralCount": 15,
     "costSensitiveRoutes": 11,
-    "externalNetworkRoutes": 13,
+    "externalNetworkRoutes": 14,
     "weakSharedSecretRoutes": 11,
     "confirmedRawErrorRoutes": 5,
     "riskCounts": {
       "P0": 0,
       "P1": 13,
       "P2": 2,
-      "P3": 0
+      "P3": 1
     }
   }
 }

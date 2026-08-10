@@ -56,10 +56,15 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation } from '@/modules/signals/engine'
-import { markObservationProcessed, markObservationForRetry } from '@/modules/observations/queries'
+import {
+  markObservationProcessed,
+  markObservationForRetry,
+  getObservationStats,
+} from '@/modules/observations/queries'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
+import { recordCycleMetrics } from '@/lib/metrics'
 import {
   acquireEnrichmentLock,
   releaseEnrichmentLock,
@@ -82,7 +87,23 @@ const BUDGET_RETRY_MS = 60_000 // backoff after AI_TOKEN_BUDGET_EXCEEDED -- long
 // since a daily/rolling-window budget refusal will not resolve in seconds. The real backstop
 // is the next scheduled enrichment cycle (~4h away, see enrich-batch-hourly.yml), which will
 // re-fetch this observation regardless of the exact value once its retry_after has passed.
-const INTER_REQUEST_MS = 6_000 // 6s between requests — 10 RPM effective rate
+// THROUGHPUT FIX: was 6_000ms (10 RPM effective). Confirmed against
+// Groq's own published Free-plan limits for llama-3.3-70b-versatile:
+// 30 RPM, 100,000 TPD. 6s pacing was calibrated BEFORE the atomic TPD
+// budget gate (src/lib/ai/budget-gate.ts, PR #43) existed, when a fixed
+// delay was the only real protection against overrunning limits. Now
+// that every real provider attempt is gated by an atomic, per-attempt
+// budget reservation BEFORE it reaches Groq (see agent.ts), the fixed
+// delay's job is only to stay under the RPM ceiling, not TPD -- 6s (10
+// RPM) was 3x more conservative than the real 30 RPM limit requires.
+// 2,200ms gives ~27.3 RPM, a real safety margin under 30 rather than
+// cutting it exactly to the limit. This does not touch BATCH_SIZE or
+// TIME_BUDGET, and the TPD ceiling itself is enforced by the budget
+// gate regardless of this value -- reducing this delay increases how
+// many observations a single enrichment cycle can drain within its
+// existing time budget without spending the daily token budget any
+// faster than the gate already allows.
+const INTER_REQUEST_MS = 2_200 // ~27.3 RPM, safety margin under Groq's real 30 RPM limit
 
 export interface BatchStats {
   processed: number
@@ -90,6 +111,10 @@ export interface BatchStats {
   rejected: number
   retried: number
   errors: number
+  /** Real per-item processing latencies (ms), collected during this
+   * batch. Used to compute real p50/p95 for the whole cycle -- see
+   * recordCycleMetrics's own call site below. */
+  item_latencies_ms: number[]
   stopped_reason:
     | 'queue_empty'
     | 'time_budget'
@@ -118,6 +143,7 @@ function freshStats(): BatchStats {
     rejected: 0,
     retried: 0,
     errors: 0,
+    item_latencies_ms: [],
     stopped_reason: 'queue_empty',
     error_breakdown: {
       rate_limit: 0,
@@ -179,6 +205,7 @@ export async function processBatchOfObservations(
     try {
       const { trustScore, sourceName } = await deps.fetchSourceInfo(observation.source_id)
 
+      const itemStartedAt = Date.now()
       const result = await deps.processObservation(
         observation,
         trustScore,
@@ -186,6 +213,7 @@ export async function processBatchOfObservations(
         '',
         deadlineAt,
       )
+      stats.item_latencies_ms.push(Date.now() - itemStartedAt)
 
       await deps.markObservationProcessed(
         observation.id,
@@ -405,6 +433,10 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const combinedStats = freshStats()
 
+    // Real queue-depth/oldest-pending snapshot taken BEFORE this cycle
+    // drains anything -- "at the start of this cycle," not after.
+    const queueSnapshot = await getObservationStats()
+
     // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
     while (true) {
       if (Date.now() >= deadlineAt) {
@@ -447,6 +479,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       combinedStats.rejected += batchStats.rejected
       combinedStats.retried += batchStats.retried
       combinedStats.errors += batchStats.errors
+      combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
       combinedStats.stopped_reason = batchStats.stopped_reason
       for (const key of Object.keys(batchStats.error_breakdown) as Array<
         keyof BatchStats['error_breakdown']
@@ -471,6 +504,22 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const duration = Date.now() - startedAt
+
+    // Real, persisted metrics -- previously this data existed only in
+    // this HTTP response body, never queryable after the fact.
+    await recordCycleMetrics(lockClient, {
+      cycleType: 'enrichment',
+      startedAt,
+      completedAt: startedAt + duration,
+      itemsAttempted: combinedStats.processed + combinedStats.errors + combinedStats.rejected,
+      itemsSucceeded: combinedStats.signal_created,
+      itemsFailed: combinedStats.errors,
+      failureBreakdown: combinedStats.error_breakdown as unknown as Record<string, number>,
+      stoppedReason: combinedStats.stopped_reason,
+      itemLatenciesMs: combinedStats.item_latencies_ms,
+      queueDepth: queueSnapshot.unprocessed,
+      oldestPendingAgeSeconds: queueSnapshot.oldestPendingAgeSeconds,
+    })
 
     return NextResponse.json({
       ...combinedStats,
