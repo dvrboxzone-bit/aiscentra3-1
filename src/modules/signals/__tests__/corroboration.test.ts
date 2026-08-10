@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import {
   checkCorroboration,
   extractEntityAnchors as extractEntityAnchorsForTest,
+  extractAction,
   type CorroborationQueryClient,
 } from '../deduplication'
 
@@ -603,5 +604,54 @@ describe('checkCorroboration — deterministic event key (real hardening: entity
       false,
       'neither title has a detectable action verb -- this is ambiguous and must remain a separate, single-source observation',
     )
+  })
+})
+
+describe('extractAction — real word-boundary matching (fourth architectural review)', () => {
+  // REAL BUG FIXED: `lower.includes(verb)` matched ANY substring
+  // occurrence -- "ban" inside "urban", "raise" inside "praise",
+  // "close" inside "disclose" -- corrupting the deterministic event
+  // key. Fixed with real \b-bounded word matching.
+
+  test('"urban" does NOT trigger the BAN action', () => {
+    assert.equal(extractAction('This report covers urban AI adoption trends'), null)
+  })
+
+  test('"praise" does NOT trigger the FUNDING action (raise)', () => {
+    assert.equal(extractAction('Researchers praise the new benchmark results'), null)
+  })
+
+  test('"disclose" does NOT trigger the CLOSE action', () => {
+    assert.equal(extractAction('The company plans to disclose more details next week'), null)
+  })
+
+  test('other real substring-collision risks: "database" does not trigger BAN, "purchase" does not trigger CLOSE-adjacent matches', () => {
+    assert.equal(extractAction('A new database architecture was announced'), null)
+    assert.equal(extractAction('The purchase agreement was finalized quietly'), null)
+  })
+
+  test('a genuine standalone "Bans" still correctly triggers the BAN action', () => {
+    assert.equal(extractAction('OpenAI Bans Microsoft'), 'BAN')
+  })
+
+  test('a genuine standalone "raise" still correctly triggers the FUNDING action', () => {
+    assert.equal(extractAction('Investors raise concerns about the valuation'), 'FUNDING')
+  })
+
+  test('a genuine standalone "close" still correctly triggers the CLOSE action', () => {
+    assert.equal(extractAction('The office will close early today'), 'CLOSE')
+  })
+
+  test('word-boundary matching is case-insensitive for genuine matches', () => {
+    assert.equal(extractAction('OPENAI BANS MICROSOFT'), 'BAN')
+    assert.equal(extractAction('openai bans microsoft'), 'BAN')
+  })
+
+  test('punctuation-adjacent genuine words still match (word boundary, not whitespace boundary)', () => {
+    assert.equal(extractAction('OpenAI bans, Microsoft objects.'), 'BAN')
+  })
+
+  test('no verb at all returns null, not a false positive', () => {
+    assert.equal(extractAction('Anthropic and Claude Opus 5 In The News Today'), null)
   })
 })

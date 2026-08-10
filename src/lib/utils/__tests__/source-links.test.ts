@@ -289,6 +289,74 @@ describe('isSafeSourceUrl — comprehensive IANA special-purpose range coverage 
   })
 })
 
+describe('isSafeSourceUrl — real IPv6 parsing + bitwise CIDR comparison (fourth architectural review)', () => {
+  // REAL BUG FIXED: string-prefix checks (e.g. ipv6.startsWith('100::'))
+  // relied on the input already being in Node's specific canonical
+  // compressed form -- not a genuine network-layer guarantee. Replaced
+  // with a real IPv6-to-128-bit-BigInt parser and bitwise CIDR
+  // comparison, which is correct for ANY valid textual form.
+
+  test('a fully EXPANDED (non-compressed) form of a denylisted range is still rejected', () => {
+    // 100::1, fully expanded with leading zeros in every group --
+    // would NOT match a naive `startsWith('100::')` string check.
+    assert.equal(isSafeSourceUrl('http://[0100:0000:0000:0000:0000:0000:0000:0001]/'), false)
+  })
+
+  test('an expanded form with leading zeros in each group is still rejected (benchmarking range)', () => {
+    assert.equal(isSafeSourceUrl('http://[2001:0002:0000:0000:0000:0000:0000:0001]/'), false)
+  })
+
+  test('an expanded, UPPERCASE form is still rejected (link-local)', () => {
+    assert.equal(isSafeSourceUrl('http://[FE80:0000:0000:0000:0000:0000:0000:0001]/'), false)
+  })
+
+  test('a partially-expanded mixed form is still rejected (multicast)', () => {
+    assert.equal(isSafeSourceUrl('http://[FF02:0:0:0:0:0:0:1]/'), false)
+  })
+
+  test('64:ff9b:1::/48 (NAT64 local-use prefix) is rejected -- explicitly required range', () => {
+    assert.equal(isSafeSourceUrl('http://[64:ff9b:1::1]/'), false)
+  })
+
+  test('64:ff9b::/96 (NAT64 well-known prefix) is also rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[64:ff9b::1]/'), false)
+  })
+
+  test('2001:2::/48 (benchmarking) is rejected -- explicitly required range', () => {
+    assert.equal(isSafeSourceUrl('http://[2001:2::1]/'), false)
+  })
+
+  test('3fff::/20 (documentation, RFC 9637) is rejected -- explicitly required range', () => {
+    assert.equal(isSafeSourceUrl('http://[3fff::1]/'), false)
+  })
+
+  test('5f00::/16 (former 6bone space) is rejected -- explicitly required range', () => {
+    assert.equal(isSafeSourceUrl('http://[5f00::1]/'), false)
+  })
+
+  test('an IPv4-mapped address embedding a genuinely PUBLIC IPv4 is allowed -- the /96 block itself is not a blanket reject', () => {
+    assert.equal(isSafeSourceUrl('http://[::ffff:8.8.8.8]/'), true)
+  })
+
+  test('an IPv4-mapped address embedding a PRIVATE IPv4 is still rejected, decoded correctly from the parsed 128-bit value', () => {
+    assert.equal(isSafeSourceUrl('http://[::ffff:10.0.0.1]/'), false)
+  })
+
+  test('a real, currently-allocated public IPv6 address remains allowed', () => {
+    assert.equal(isSafeSourceUrl('http://[2606:4700::1]/'), true) // Cloudflare's real public range
+  })
+
+  test('a malformed IPv6-looking string fails closed as an ordinary (non-IP) hostname, not thrown', () => {
+    assert.doesNotThrow(() =>
+      isSafeSourceUrl('http://[not:a:real:ipv6:address:with:too:many:groups:here]/'),
+    )
+  })
+
+  test('a string with more than one "::" is invalid and does not crash', () => {
+    assert.doesNotThrow(() => isSafeSourceUrl('http://[fe80::1::2]/'))
+  })
+})
+
 describe('verifyUrlReachable — SSRF via redirect (real bypass class, real DI)', () => {
   // Real requirement: verifyUrlReachable now uses undici's fetch
   // directly (for real DNS-pinning dispatchers, see the function's own

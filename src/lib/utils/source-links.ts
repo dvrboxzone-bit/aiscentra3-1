@@ -109,6 +109,128 @@ function parseIPv4(host: string): [number, number, number, number] | null {
  * hex-normalized notation -- the specific, confirmed bypass class
  * found during review.
  */
+/**
+ * Parses any valid textual IPv6 address (canonical/compressed,
+ * fully-expanded, mixed-case, non-maximal zero-run, or with an
+ * IPv4-mapped dotted-quad tail) into a single 128-bit BigInt.
+ * Returns null for anything that does not parse as a valid IPv6
+ * address.
+ *
+ * FOURTH ARCHITECTURAL REVIEW: replaces the earlier string-prefix
+ * checks (`ipv6.startsWith('100::')`, ad-hoc regexes like
+ * `/^ff[0-9a-f]{2}:/`) entirely. Those relied on the STRING already
+ * being in the specific canonical form Node's URL parser happens to
+ * produce -- correct for the inputs tested, but not a genuine
+ * network-layer guarantee, and fragile against any expanded,
+ * padded, or otherwise non-canonical textual form reaching this
+ * function by a path other than `new URL(...).hostname` (e.g. a
+ * future caller passing a raw resolved DNS address string directly).
+ * Real, robust fix: parse into a full 128-bit numeric value and do
+ * genuine bitwise CIDR (network/prefix-length) comparison -- the
+ * same technique any correct IP-range library uses, immune to
+ * textual formatting entirely.
+ */
+function parseIPv6ToBigInt(input: string): bigint | null {
+  let s = input.toLowerCase()
+  if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1)
+
+  // IPv4-mapped/embedded dotted-quad tail (e.g. "::ffff:127.0.0.1" or
+  // "64:ff9b::127.0.0.1") -- convert the trailing dotted-quad into its
+  // two equivalent 16-bit hex groups before general parsing.
+  const dottedTailMatch = /^(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(s)
+  if (dottedTailMatch?.[1] && dottedTailMatch[2]) {
+    const octets = parseIPv4(dottedTailMatch[2])
+    if (!octets) return null
+    const [a, b, c, d] = octets
+    const word1 = ((a << 8) | b).toString(16)
+    const word2 = ((c << 8) | d).toString(16)
+    s = `${dottedTailMatch[1]}${word1}:${word2}`
+  }
+
+  if ((s.match(/::/g) ?? []).length > 1) return null // at most one "::" is valid
+
+  let left: string[]
+  let right: string[]
+  if (s.includes('::')) {
+    const [l, r] = s.split('::')
+    left = l ? l.split(':') : []
+    right = r ? r.split(':') : []
+  } else {
+    left = s.split(':')
+    right = []
+  }
+
+  const totalExplicit = left.length + right.length
+  if (totalExplicit > 8) return null
+  const missing = 8 - totalExplicit
+  if (!s.includes('::') && missing !== 0) return null // no compression, must be exactly 8 groups
+
+  const groups = [...left, ...Array(missing).fill('0'), ...right]
+  if (groups.length !== 8) return null
+
+  let value = 0n
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null
+    value = (value << 16n) | BigInt(parseInt(g, 16))
+  }
+  return value
+}
+
+interface Ipv6Range {
+  network: bigint
+  prefixBits: number
+  name: string
+}
+
+function cidr6(address: string, prefixBits: number, name: string): Ipv6Range {
+  const network = parseIPv6ToBigInt(address)
+  if (network === null) throw new Error(`invalid IPv6 literal in denylist definition: ${address}`)
+  return { network, prefixBits, name }
+}
+
+/**
+ * Full IANA "IPv6 Special-Purpose Address Registry" coverage,
+ * expressed as genuine CIDR ranges (network + prefix length),
+ * compared via real bitwise masking -- not string matching. Includes
+ * the four ranges specifically identified as missing in the fourth
+ * architectural review: 64:ff9b:1::/48 (NAT64 local-use), 2001:2::/48
+ * (benchmarking), 3fff::/20 (documentation, RFC 9637), and 5f00::/16
+ * (former 6bone space, returned/reserved).
+ */
+const IPV6_DENYLIST: Ipv6Range[] = [
+  cidr6('::', 128, 'unspecified'),
+  cidr6('::1', 128, 'loopback'),
+  // NOTE: ::ffff:0:0/96 (IPv4-mapped) is deliberately NOT listed here
+  // as a blanket-reject entry -- doing so would make the dedicated
+  // decode-and-recheck logic in isPrivateOrLoopbackHost below
+  // unreachable dead code, and would incorrectly reject a mapped
+  // address embedding a genuinely public IPv4 (e.g. ::ffff:8.8.8.8,
+  // a real, legitimate way to represent a public DNS server's address
+  // in IPv6 notation). The embedded IPv4 is checked on its own merits
+  // instead -- ::ffff:127.0.0.1 (embeds a private address) is still
+  // rejected via that separate path.
+  cidr6('64:ff9b::', 96, 'NAT64 well-known prefix'),
+  cidr6('64:ff9b:1::', 48, 'NAT64 local-use prefix'),
+  cidr6('100::', 64, 'discard-only'),
+  cidr6('100:0:0:1::', 64, 'dummy IPv6 prefix'),
+  cidr6('2001::', 23, 'IETF protocol assignments'),
+  cidr6('2001:2::', 48, 'benchmarking'),
+  cidr6('2001:db8::', 32, 'documentation'),
+  cidr6('3fff::', 20, 'documentation (RFC 9637)'),
+  cidr6('5f00::', 16, 'former 6bone space (reserved)'),
+  cidr6('fc00::', 7, 'unique-local'),
+  cidr6('fe80::', 10, 'link-local'),
+  cidr6('ff00::', 8, 'multicast'),
+]
+
+function isPrivateIPv6(addressValue: bigint): boolean {
+  for (const range of IPV6_DENYLIST) {
+    const shift = BigInt(128 - range.prefixBits)
+    if (addressValue >> shift === range.network >> shift) return true
+  }
+  return false
+}
+
 function isPrivateOrLoopbackHost(hostname: string): boolean {
   const h = hostname.toLowerCase()
 
@@ -118,41 +240,32 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
 
   // IPv6 forms. URL.hostname wraps IPv6 in brackets in the ORIGINAL
   // input but reports it WITHOUT brackets via .hostname in Node's URL
-  // implementation -- handle both defensively.
-  const ipv6 = h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h
-  // THIRD ARCHITECTURAL REVIEW: extended to the FULL IANA "IPv6
-  // Special-Purpose Address Registry" -- the earlier version only
-  // covered loopback/link-local/unique-local.
-  if (ipv6 === '::' || ipv6 === '0:0:0:0:0:0:0:0') return true // ::/128 unspecified address
-  if (ipv6 === '::1' || ipv6 === '0:0:0:0:0:0:0:1') return true // ::1/128 loopback
-  if (/^fe[89ab][0-9a-f]:/.test(ipv6)) return true // fe80::/10 link-local
-  if (/^f[cd][0-9a-f]{2}:/.test(ipv6)) return true // fc00::/7 unique-local
-  if (/^ff[0-9a-f]{2}:/.test(ipv6)) return true // ff00::/8 multicast
-  if (/^2001:0*db8:/.test(ipv6)) return true // 2001:db8::/32 documentation
-  if (ipv6.startsWith('100::')) return true // 100::/64 discard-only
+  // implementation -- parseIPv6ToBigInt strips brackets defensively
+  // regardless.
+  const ipv6Value = parseIPv6ToBigInt(h)
+  if (ipv6Value !== null) {
+    if (isPrivateIPv6(ipv6Value)) return true
 
-  // IPv4-mapped IPv6, dotted form: ::ffff:127.0.0.1
-  const dottedMapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(ipv6)
-  if (dottedMapped?.[1]) {
-    const mapped = parseIPv4(dottedMapped[1])
-    if (mapped && isPrivateIPv4Octets(mapped)) return true
-  }
-
-  // IPv4-mapped IPv6, HEX-normalized form: ::ffff:7f00:1 -- this is
-  // what Node's URL parser actually produces for ::ffff:127.0.0.1
-  // internally (confirmed via current SSRF advisory research). The
-  // last two hex groups encode the 4 IPv4 octets as 2x16-bit words.
-  const hexMapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ipv6)
-  if (hexMapped?.[1] && hexMapped[2]) {
-    const word1 = parseInt(hexMapped[1], 16)
-    const word2 = parseInt(hexMapped[2], 16)
-    const octets: [number, number, number, number] = [
-      (word1 >> 8) & 0xff,
-      word1 & 0xff,
-      (word2 >> 8) & 0xff,
-      word2 & 0xff,
-    ]
-    if (isPrivateIPv4Octets(octets)) return true
+    // IPv4-mapped IPv6 (::ffff:0:0/96, already denylisted as a whole
+    // range above for the case where the MAPPED address itself is
+    // meaningless/reserved) -- additionally decode the embedded IPv4
+    // address and re-check it against the full IPv4 denylist, since
+    // ::ffff:8.8.8.8 is a real, publicly-routable mapped address that
+    // the /96 registry entry alone does not reject, but
+    // ::ffff:127.0.0.1 (embedding a real private IPv4 address) must
+    // still be rejected. Top 96 bits of a ::ffff:0:0/96 address are
+    // exactly 80 zero bits followed by 16 bits of 0xffff -- i.e. the
+    // value of the top 96 bits, as a number, is exactly 0xffff.
+    if (ipv6Value >> 32n === 0xffffn) {
+      const embeddedIpv4 = ipv6Value & 0xffffffffn
+      const octets: [number, number, number, number] = [
+        Number((embeddedIpv4 >> 24n) & 0xffn),
+        Number((embeddedIpv4 >> 16n) & 0xffn),
+        Number((embeddedIpv4 >> 8n) & 0xffn),
+        Number(embeddedIpv4 & 0xffn),
+      ]
+      if (isPrivateIPv4Octets(octets)) return true
+    }
   }
 
   return false

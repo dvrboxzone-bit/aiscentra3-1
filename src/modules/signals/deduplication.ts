@@ -556,18 +556,40 @@ const ACTION_GROUPS: Record<string, string[]> = {
   PARTNER: ['partner', 'partners', 'partnership'],
 }
 
-/** Canonical action GROUP name for the first matching verb found, or
+/**
+ * Canonical action GROUP name for the first matching verb found, or
  * null if none -- e.g. both "Unveils" and "Launches" resolve to
  * 'RELEASE', so genuinely synonymous real-world reporting of the same
  * release event correctly counts as the same action. Deliberately
  * "first match" rather than "all matches" to keep the key a single,
- * comparable token per side. */
-function extractAction(text: string): string | null {
-  const lower = text.toLowerCase()
-  for (const [group, verbs] of Object.entries(ACTION_GROUPS)) {
-    for (const verb of verbs) {
-      if (lower.includes(verb)) return group
-    }
+ * comparable token per side.
+ *
+ * REAL BUG FIXED (fourth architectural review): `lower.includes(verb)`
+ * matches ANY substring occurrence, not whole words -- "ban" matches
+ * inside "urban", "raise" matches inside "praise", "close" matches
+ * inside "disclose". A title merely mentioning "urban AI adoption" or
+ * "researchers praise the results" would be incorrectly assigned a
+ * BAN or FUNDING action it never described, corrupting the
+ * deterministic event key this function feeds into. Fixed with real
+ * word-boundary matching via RegExp `\b...\b` -- a verb only matches
+ * as a genuinely standalone word. Multi-word verbs ("shut down") use
+ * `\b` only at the true start/end of the phrase, which already works
+ * correctly for phrases (no false substring risk changes for those).
+ * Each verb's regex is built once and cached (module-level, not
+ * per-call) since ACTION_GROUPS is a fixed, known-safe set of literal
+ * strings -- safe to interpolate directly into a RegExp without
+ * escaping concerns particular to this verb list (no regex
+ * metacharacters appear in any entry).
+ */
+const ACTION_VERB_PATTERNS: Array<{ group: string; pattern: RegExp }> = Object.entries(
+  ACTION_GROUPS,
+).flatMap(([group, verbs]) =>
+  verbs.map((verb) => ({ group, pattern: new RegExp(`\\b${verb}\\b`, 'i') })),
+)
+
+export function extractAction(text: string): string | null {
+  for (const { group, pattern } of ACTION_VERB_PATTERNS) {
+    if (pattern.test(text)) return group
   }
   return null
 }
