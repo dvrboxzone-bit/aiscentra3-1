@@ -469,18 +469,170 @@ export function extractEntityAnchors(title: string): Set<string> {
  */
 const MIN_SHARED_ANCHORS = 2
 
-function sharesEntityAnchor(titleA: string, titleB: string): boolean {
-  const anchorsA = extractEntityAnchors(titleA)
-  const anchorsB = extractEntityAnchors(titleB)
-  let sharedCount = 0
-  for (const a of anchorsA) {
-    if (anchorsB.has(a)) {
-      sharedCount++
-      if (sharedCount >= MIN_SHARED_ANCHORS) return true
+/**
+ * REAL BUG FIXED (second architectural review): similarity + shared
+ * entity anchors is STILL a fuzzy heuristic -- two DIFFERENT events
+ * about the SAME product can share both a high similarity score and
+ * 2+ entity anchors (e.g. "OpenAI Releases GPT-5" vs "OpenAI
+ * Discontinues GPT-5" -- same company, same product name, completely
+ * different, even opposite, events). Neither similarity nor anchor
+ * count encodes WHAT actually happened or WHEN.
+ *
+ * Replaced with a deterministic event key requiring genuine agreement
+ * on FOUR independent dimensions, not a single fuzzy score:
+ *   1. entities  -- same as before (>=2 shared anchors)
+ *   2. action    -- a controlled verb vocabulary (release, discontinue,
+ *                   acquire, sue, ban, ...). Must be the SAME action on
+ *                   both sides. If EITHER side has no detectable
+ *                   action, the pair is AMBIGUOUS and does not merge
+ *                   -- "неоднозначный кандидат остается отдельным
+ *                   наблюдением."
+ *   3. version   -- a detected version/numeric product identifier
+ *                   ("5", "Opus 5", "v2"). If BOTH sides have one, they
+ *                   must match. If ONLY one side has a detected
+ *                   version, that is treated as a mismatch (ambiguous),
+ *                   not a pass -- a version difference (or an
+ *                   undetectable one) must never be silently ignored.
+ *   4. date      -- the REAL observation date (not parsed from title
+ *                   text), within a bounded window of each other. Two
+ *                   independent outlets reporting the same real-world
+ *                   event publish close in time; a wide date gap is
+ *                   itself evidence of a different event even with
+ *                   identical wording (e.g. an anniversary retrospective
+ *                   reusing the same headline).
+ *
+ * ALL FOUR must agree for corroboration; any disagreement or
+ * ambiguity on any one dimension refuses the merge.
+ */
+const DATE_WINDOW_DAYS = 3
+
+// REAL FINDING (discovered while calibrating tests for this exact
+// change): grouping raw verb strings without canonicalization is too
+// brittle -- two independent outlets reporting the SAME real-world
+// release commonly use different synonyms ("Unveils" vs "Launches"),
+// which a raw string-equality check would incorrectly treat as
+// different actions, defeating the entire point of source
+// corroboration. Grouped into canonical action categories instead: any
+// verb within the same group counts as the "same action" for the
+// event-key comparison in sameEvent() below.
+const ACTION_GROUPS: Record<string, string[]> = {
+  RELEASE: [
+    'release',
+    'releases',
+    'released',
+    'launch',
+    'launches',
+    'launched',
+    'unveil',
+    'unveils',
+    'unveiled',
+  ],
+  DISCONTINUE: [
+    'discontinue',
+    'discontinues',
+    'discontinued',
+    'deprecate',
+    'deprecates',
+    'deprecated',
+    'shut down',
+    'shuts down',
+  ],
+  ACQUIRE: ['acquire', 'acquires', 'acquired', 'acquisition'],
+  LEGAL: [
+    'sue',
+    'sues',
+    'sued',
+    'lawsuit',
+    'ban',
+    'bans',
+    'banned',
+    'recall',
+    'recalls',
+    'recalled',
+  ],
+  FUNDING: ['raise', 'raises', 'raised'],
+  CLOSE: ['close', 'closes', 'closed'],
+  FIX: ['patch', 'patches', 'patched', 'fix', 'fixes', 'fixed'],
+  PARTNER: ['partner', 'partners', 'partnership'],
+}
+
+/** Canonical action GROUP name for the first matching verb found, or
+ * null if none -- e.g. both "Unveils" and "Launches" resolve to
+ * 'RELEASE', so genuinely synonymous real-world reporting of the same
+ * release event correctly counts as the same action. Deliberately
+ * "first match" rather than "all matches" to keep the key a single,
+ * comparable token per side. */
+function extractAction(text: string): string | null {
+  const lower = text.toLowerCase()
+  for (const [group, verbs] of Object.entries(ACTION_GROUPS)) {
+    for (const verb of verbs) {
+      if (lower.includes(verb)) return group
     }
   }
-  return false
+  return null
 }
+
+/** A version/numeric product identifier: a standalone number (with
+ * optional leading "v"/"V") of 1-3 digits, optionally followed by a
+ * decimal point and more digits (e.g. "5", "v2", "4.5", "GPT-5" ->
+ * captures "5"). Deliberately narrow -- this is a proxy for "which
+ * specific release/model number," not a general number extractor
+ * (which would false-positive on unrelated figures like a percentage
+ * or a year). */
+function extractVersion(text: string): string | null {
+  const match = /\bv?(\d{1,3}(?:\.\d{1,2})?)\b/i.exec(text)
+  return match?.[1] ?? null
+}
+
+interface EventKey {
+  entities: string[]
+  action: string | null
+  version: string | null
+  dateMs: number | null
+}
+
+function buildEventKey(title: string, dateIso: string | null | undefined): EventKey {
+  return {
+    entities: [...extractEntityAnchors(title)].sort(),
+    action: extractAction(title),
+    version: extractVersion(title),
+    dateMs: dateIso ? new Date(dateIso).getTime() : null,
+  }
+}
+
+/**
+ * True only if all four event-key dimensions genuinely agree. Any
+ * ambiguity (missing action on either side, mismatched version
+ * presence, missing/unbounded date) refuses the match rather than
+ * treating absence as a pass.
+ */
+function sameEvent(a: EventKey, b: EventKey): boolean {
+  let sharedEntities = 0
+  for (const e of a.entities) {
+    if (b.entities.includes(e)) sharedEntities++
+  }
+  if (sharedEntities < MIN_SHARED_ANCHORS) return false
+
+  if (!a.action || !b.action || a.action !== b.action) return false
+
+  // Version: if EITHER side detected one, both must detect the SAME
+  // one. Only "neither side detected a version at all" is a pass on
+  // this dimension (many genuine events, e.g. lawsuits or bans, have
+  // no version number at all).
+  if (a.version || b.version) {
+    if (a.version !== b.version) return false
+  }
+
+  if (a.dateMs === null || b.dateMs === null) return false
+  const gapDays = Math.abs(a.dateMs - b.dateMs) / (24 * 60 * 60 * 1000)
+  if (gapDays > DATE_WINDOW_DAYS) return false
+
+  return true
+}
+
+// sharesEntityAnchor (previously the sole entity check) has been
+// superseded by sameEvent() above, which requires entity, action,
+// version, AND date agreement -- see sameEvent's own docstring.
 
 export interface CorroborationResult {
   isCorroboration: boolean
@@ -528,6 +680,7 @@ export async function checkCorroboration(
   candidateTitle: string,
   candidateCategory: string,
   candidateSourceId: string,
+  candidateDate: string,
   client?: CorroborationQueryClient,
 ): Promise<CorroborationResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -537,7 +690,7 @@ export async function checkCorroboration(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: recentSignals, error } = await (supabase as any)
     .from('signals')
-    .select('id, title, observation_ids, confidence_score')
+    .select('id, title, observation_ids, confidence_score, created_at')
     .eq('category', candidateCategory)
     .in('status', ['ACTIVE', 'PROMOTED'])
     .gte('created_at', cutoff)
@@ -555,20 +708,29 @@ export async function checkCorroboration(
     return { isCorroboration: false }
   }
 
+  const candidateKey = buildEventKey(candidateTitle, candidateDate)
+
   let best: { id: string; title: string; observation_ids: string[]; score: number } | null = null
 
   for (const signal of recentSignals as Array<{
     id: string
     title: string
     observation_ids: string[]
+    created_at: string
   }>) {
     const score = similarity(candidateTitle, signal.title)
     if (score < CORROBORATION_MIN) continue
-    // Confirmed event identity requires BOTH raised similarity AND a
-    // shared entity anchor -- see this function's own docstring for
-    // why pure similarity, even at 0.70+, is not sufficient on its
-    // own to safely merge two different observations.
-    if (!sharesEntityAnchor(candidateTitle, signal.title)) continue
+    // REAL BUG FIXED (second architectural review): similarity + a
+    // shared-anchor count is STILL a fuzzy heuristic that cannot tell
+    // apart two DIFFERENT events about the SAME product (e.g. a
+    // release vs. a discontinuation of the same model). Replaced with
+    // a deterministic event key requiring genuine agreement on
+    // entities, action, version, AND date -- see sameEvent's own
+    // docstring for the full rationale. Similarity is now only a
+    // cheap pre-filter to shortlist candidates before the real,
+    // decisive check.
+    const signalKey = buildEventKey(signal.title, signal.created_at)
+    if (!sameEvent(candidateKey, signalKey)) continue
     if (!best || score > best.score) {
       best = { id: signal.id, title: signal.title, observation_ids: signal.observation_ids, score }
     }

@@ -50,6 +50,7 @@ TEST_DIRS=(
   "src/components/signals/__tests__"
   "src/modules/observations/__tests__"
   "src/app/api/enrich/batch/__tests__"
+  "src/app/api/cron/verify-urls/__tests__"
   "src/modules/assistant/__tests__"
 )
 

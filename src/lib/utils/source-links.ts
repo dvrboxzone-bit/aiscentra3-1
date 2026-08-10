@@ -47,6 +47,9 @@
  * revalidation).
  */
 
+import { lookup as dnsLookup } from 'node:dns/promises'
+import { Agent as UndiciAgent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici'
+
 /**
  * True if a numeric IPv4 address (already parsed into 4 octets) falls
  * in a private/loopback/link-local/reserved range that must never be
@@ -184,26 +187,141 @@ export interface SourceLink {
  */
 const MAX_REDIRECT_HOPS = 5
 
-export async function verifyUrlReachable(url: string, timeoutMs = 5_000): Promise<boolean> {
+/**
+ * Real requirement: "хранить результат и время проверки URL; не
+ * выполнять внешний запрос при каждом render." This function performs
+ * the ONE real network check -- called exactly once per observation
+ * (see /api/cron/verify-urls), never at render time. The result is
+ * stored and read back, never re-checked per page view.
+ *
+ * REAL DNS-REBINDING FIX (second architectural review): the earlier
+ * version validated only the URL's HOSTNAME string (or IP literal) --
+ * for a genuine domain name, no DNS resolution ever happened here at
+ * all. isSafeSourceUrl passing a hostname string proves NOTHING about
+ * what IP that hostname actually resolves to. This is the textbook
+ * DNS-rebinding gap: an attacker's domain can return a safe public IP
+ * to a check performed at one moment, then return a private/internal
+ * IP to the ACTUAL fetch() a moment later (the DNS TTL can be set to 0
+ * for exactly this purpose) -- fetch() does its own independent DNS
+ * resolution at connect time, completely bypassing any earlier
+ * hostname-string check.
+ *
+ * Fixed with genuine DNS pinning, not just an earlier check:
+ * 1. Explicitly resolve the hostname via dns.promises.lookup (all
+ *    addresses, not just the first).
+ * 2. Reject if ANY resolved address is private/reserved (an attacker
+ *    could return multiple A/AAAA records and rely on the client
+ *    picking the "safe-looking" one).
+ * 3. Build an undici Agent with a `connect.lookup` override that
+ *    returns ONLY the already-validated IP -- the actual TCP
+ *    connection is forced to that exact address. No second,
+ *    independent DNS resolution ever happens at connect time, closing
+ *    the check-then-use gap that makes rebinding possible.
+ * 4. Every redirect hop repeats this ENTIRE process (fresh resolve,
+ *    fresh validation, fresh pinned Agent) for the new hostname --
+ *    Location headers are never treated as pre-validated.
+ */
+export type DnsLookupFn = (
+  hostname: string,
+  options: { all: true; verbatim: true },
+) => Promise<{ address: string; family: number }[]>
+
+/**
+ * Real, live DNS resolver used in production. Tests inject a fake
+ * implementation via verifyUrlReachable's own optional parameter
+ * (see below) -- this keeps adversarial DNS-rebinding tests fully
+ * deterministic and portable (no /etc/hosts or real network DNS
+ * dependency in CI), while production always uses this real resolver.
+ */
+const realDnsLookup: DnsLookupFn = dnsLookup as unknown as DnsLookupFn
+
+async function resolveAndPinIp(hostname: string, lookupFn: DnsLookupFn): Promise<string | null> {
+  let addresses: { address: string; family: number }[]
+  try {
+    addresses = await lookupFn(hostname, { all: true, verbatim: true })
+  } catch {
+    return null // resolution failure -- cannot be verified as safe, fail closed
+  }
+  if (addresses.length === 0) return null
+  for (const { address } of addresses) {
+    if (isPrivateOrLoopbackHost(address)) return null // ANY unsafe resolved address rejects the whole hostname
+  }
+  return addresses[0]?.address ?? null
+}
+
+function buildPinnedAgent(pinnedIp: string, family: number): InstanceType<typeof UndiciAgent> {
+  return new UndiciAgent({
+    connect: {
+      // Real DNS pin: this `lookup` override is what the TCP socket
+      // actually connects to -- it is NOT a second, independent DNS
+      // resolution, so nothing can change between validation and
+      // connection.
+      lookup: (_hostname, _options, callback) => {
+        callback(null, [{ address: pinnedIp, family }])
+      },
+    },
+  })
+}
+
+/**
+ * Minimal shape of the fetch call this function needs -- injectable so
+ * adversarial redirect tests can simulate HTTP responses (status
+ * codes, Location headers) deterministically, without needing a real
+ * reachable server. Defaults to the real undici fetch in production.
+ * The DNS-pinning Agent is still always built and passed for every
+ * call, real or injected -- a test's fake fetchFn receives the SAME
+ * pinned dispatcher a real request would, so tests exercise the real
+ * per-hop pin/re-resolve structure, only the actual network I/O is
+ * swapped out.
+ */
+export type FetchFn = (
+  url: string,
+  init: RequestInit & { dispatcher?: unknown },
+) => Promise<UndiciResponse>
+
+const realFetch: FetchFn = undiciFetch as unknown as FetchFn
+
+export async function verifyUrlReachable(
+  url: string,
+  timeoutMs = 5_000,
+  lookupFn: DnsLookupFn = realDnsLookup,
+  fetchFn: FetchFn = realFetch,
+): Promise<boolean> {
   if (!isSafeSourceUrl(url)) return false
 
   const attempt = async (method: 'HEAD' | 'GET', targetUrl: string): Promise<boolean> => {
     let currentUrl = targetUrl
     for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-      if (!isSafeSourceUrl(currentUrl)) return false // real for every hop, including the first
+      if (!isSafeSourceUrl(currentUrl)) return false // string-level check, every hop
+
+      let hostname: string
+      try {
+        hostname = new URL(currentUrl).hostname
+      } catch {
+        return false
+      }
+
+      const pinnedIp = await resolveAndPinIp(hostname, lookupFn)
+      if (!pinnedIp) return false // unresolvable or resolves to an unsafe address -- fail closed
+
+      const family = pinnedIp.includes(':') ? 6 : 4
+      const agent = buildPinnedAgent(pinnedIp, family)
+
       try {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), timeoutMs)
-        let res: Response
+        let res: UndiciResponse
         try {
-          res = await fetch(currentUrl, {
+          res = await fetchFn(currentUrl, {
             method,
             redirect: 'manual',
             signal: controller.signal,
             headers: method === 'GET' ? { Range: 'bytes=0-0' } : {},
+            dispatcher: agent,
           })
         } finally {
           clearTimeout(timer)
+          await agent.close().catch(() => {})
         }
 
         if (res.status >= 200 && res.status < 300) return true
@@ -215,7 +333,7 @@ export async function verifyUrlReachable(url: string, timeoutMs = 5_000): Promis
           } catch {
             return false
           }
-          continue // re-validate the NEW target at the top of the loop
+          continue // re-validate AND re-resolve the NEW target at the top of the loop
         }
         return false // 4xx/5xx -- not genuinely reachable
       } catch {

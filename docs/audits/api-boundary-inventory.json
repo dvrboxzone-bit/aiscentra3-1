@@ -141,10 +141,10 @@
     {
       "path": "/api/cron/verify-urls",
       "file": "src/app/api/cron/verify-urls/route.ts",
-      "methods": ["GET"],
+      "methods": ["POST"],
       "category": "cron",
-      "guard": "inline check (authHeader !== `Bearer ${CRON_SECRET}`)",
-      "authMechanism": "shared-secret-non-constant-time",
+      "guard": "centralized isAuthorizedCronRequest (cron-guard.ts, crypto.timingSafeEqual)",
+      "authMechanism": "shared-secret-constant-time",
       "authzMechanism": "none beyond secret match",
       "featureFlag": "none",
       "inputValidation": "n/a (no request body)",
@@ -156,13 +156,13 @@
       "costSensitive": false,
       "rateLimit": "missing",
       "budgetGuard": "missing",
-      "publicResponseDto": "verified/ok/failed/signalsReevaluated summary",
-      "rawErrorExposureRisk": "YES -- raw Supabase error.message returned directly to caller",
-      "productionState": "NOT registered in vercel.json crons (Vercel Hobby: 1 cron only, already used by /api/cron/pipeline); triggered by .github/workflows/verify-urls-4h.yml, 6x/day, same GitHub-Actions-based mechanism as collect-4h.yml and enrich-batch-hourly.yml",
-      "risk": "P2",
-      "notes": "Performs real outbound HTTP HEAD/GET requests to arbitrary observation URLs (verifyUrlReachable in source-links.ts) to populate the publication gate (has_verified_source, migration 20260809095000). Guarded by an execution lock ('verify_urls_cycle', same acquire/release_execution_lock mechanism as collection/enrichment) to prevent overlapping runs. Same weak-secret-comparison and raw-error-leak pattern as the other cron endpoints in this table -- not newly introduced by this route, a pre-existing project-wide pattern.",
+      "publicResponseDto": "verified/ok/failed/writeFailures/gateWriteFailures/signalsReevaluated summary",
+      "rawErrorExposureRisk": "NO -- DB/RPC errors logged server-side only, client receives a generic 'Internal error' message (fixed in second architectural review)",
+      "productionState": "NOT registered in vercel.json crons (Vercel Hobby: 1 cron only, already used by /api/cron/pipeline); triggered by .github/workflows/verify-urls-4h.yml (POST), 6x/day, same GitHub-Actions-based mechanism as collect-4h.yml and enrich-batch-hourly.yml",
+      "risk": "P3",
+      "notes": "Performs real outbound HTTP HEAD/GET requests to arbitrary observation URLs (verifyUrlReachable in source-links.ts, with real DNS-pinning via a per-hop undici Agent to prevent DNS-rebinding SSRF) to populate the publication gate (has_verified_source, migration 20260809095000). Guarded by an execution lock ('verify_urls_cycle', same acquire/release_execution_lock mechanism as collection/enrichment) to prevent overlapping runs. Moved from GET to POST (a GET route with real DB side effects is a CSRF-adjacent risk) and from a per-route weak secret comparison to the centralized, constant-time cron-guard.ts in the second architectural review -- risk downgraded from P2 to P3 accordingly.",
       "aiCallMode": "none",
-      "weakSharedSecret": true,
+      "weakSharedSecret": false,
       "hasCallerFacingRateLimit": false
     },
     {
@@ -456,13 +456,13 @@
     "budgetGuardMissingLiteralCount": 15,
     "costSensitiveRoutes": 11,
     "externalNetworkRoutes": 14,
-    "weakSharedSecretRoutes": 12,
-    "confirmedRawErrorRoutes": 6,
+    "weakSharedSecretRoutes": 11,
+    "confirmedRawErrorRoutes": 5,
     "riskCounts": {
       "P0": 0,
       "P1": 13,
-      "P2": 3,
-      "P3": 0
+      "P2": 2,
+      "P3": 1
     }
   }
 }

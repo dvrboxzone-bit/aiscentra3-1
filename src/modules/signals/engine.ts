@@ -371,6 +371,7 @@ export async function processObservation(
     observation.title,
     candidateCategory,
     observation.source_id,
+    observation.published_at,
   )
   if (corrCheck.isCorroboration && corrCheck.matchedSignalId && corrCheck.matchedObservationIds) {
     const updatedObservationIds = [...corrCheck.matchedObservationIds, observation.id]

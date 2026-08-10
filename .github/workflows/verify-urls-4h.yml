@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Call verify-urls endpoint
+      - name: Call verify-urls endpoint (POST)
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           APP_URL: ${{ vars.APP_URL || 'https://aiscentra.com' }}
@@ -44,7 +44,7 @@ jobs:
           fi
 
           HTTP_STATUS="$(curl -sS -o /tmp/verify-response.json -w '%{http_code}' \
-            -X GET "${APP_URL}/api/cron/verify-urls" \
+            -X POST "${APP_URL}/api/cron/verify-urls" \
             -H "Authorization: Bearer ${CRON_SECRET}")"
 
           echo "HTTP status: $HTTP_STATUS"

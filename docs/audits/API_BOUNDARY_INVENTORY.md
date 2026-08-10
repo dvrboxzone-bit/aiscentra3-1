@@ -84,12 +84,12 @@ claim to.
 | Literal budgetGuard="missing" count                 |    15 |
 | Cost-sensitive routes                               |    11 |
 | External-network-call routes                        |    14 |
-| Weak shared-secret (non-constant-time) routes       |    12 |
-| Confirmed raw-error-exposure routes                 |     6 |
+| Weak shared-secret (non-constant-time) routes       |    11 |
+| Confirmed raw-error-exposure routes                 |     5 |
 | Risk: P0                                            |     0 |
 | Risk: P1                                            |    13 |
-| Risk: P2                                            |     3 |
-| Risk: P3                                            |     0 |
+| Risk: P2                                            |     2 |
+| Risk: P3                                            |     1 |
 
 <!-- API_INVENTORY_SUMMARY_END -->
 

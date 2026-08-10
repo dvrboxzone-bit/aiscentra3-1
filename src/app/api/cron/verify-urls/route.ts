@@ -1,7 +1,23 @@
 /**
  * AIscentra — Cron: URL Reachability Verification
  *
- * GET /api/cron/verify-urls
+ * POST /api/cron/verify-urls
+ *
+ * REAL CHANGES (second architectural review):
+ * - Moved from GET to POST. A GET endpoint that performs real
+ *   database writes (updates url_verified_ok/has_verified_source) is
+ *   a real CSRF/side-effect-via-GET risk class -- GET requests are
+ *   trivially triggerable cross-origin (an <img> tag, a link
+ *   prefetch, a browser's own speculative preloading), none of which
+ *   should be able to trigger writes. POST does not eliminate the
+ *   need for the auth check below, but removes GET-specific
+ *   side-effect risk.
+ * - Auth check now uses the centralized, constant-time
+ *   isAuthorizedCronRequest (cron-guard.ts) instead of a per-route
+ *   `!==` string comparison -- see that module's own docstring for
+ *   the timing-side-channel rationale.
+ * - Raw Supabase error messages are no longer returned to the caller
+ *   (see the error-handling block below) -- logged server-side only.
  *
  * Real requirement this closes: "без безопасной и подтверждённо
  * доступной ссылки на оригинальный материал сигнал публично не
@@ -29,6 +45,7 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { verifyUrlReachable } from '@/lib/utils/source-links'
 import { acquireEnrichmentLock, releaseEnrichmentLock } from '@/lib/ai/execution-lock'
+import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 
 export const maxDuration = 30
 export const dynamic = 'force-dynamic'
@@ -43,9 +60,8 @@ const BATCH_SIZE = 30
 
 const VERIFY_URLS_LOCK = 'verify_urls_cycle'
 
-export async function GET(request: Request): Promise<NextResponse> {
-  const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env['CRON_SECRET']}`) {
+export async function POST(request: Request): Promise<NextResponse> {
+  if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -67,8 +83,11 @@ export async function GET(request: Request): Promise<NextResponse> {
       .limit(BATCH_SIZE)
 
     if (error) {
+      // Real fix: raw Supabase/Postgres error messages can leak schema
+      // details (column/table names, constraint names) to a caller --
+      // logged server-side only; the client gets a generic message.
       console.error('[cron/verify-urls] fetch failed:', error.message)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: 'Internal error' }, { status: 500 })
     }
 
     const rows = (pending ?? []) as Array<{ id: string; url: string; signal_id: string | null }>

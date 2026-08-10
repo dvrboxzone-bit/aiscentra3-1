@@ -125,8 +125,10 @@ interface LabeledPair {
   reason: string
   candidateTitle: string
   candidateSourceId: string
+  candidateDate: string
   existingTitle: string
   existingSourceId: string
+  existingDate: string
   expectedSameEvent: boolean // author's own ground-truth judgment
 }
 
@@ -143,8 +145,10 @@ const pairs: LabeledPair[] = [
       'two genuinely different real ArXiv papers, same category (MODELS), both real sample rows',
     candidateTitle: 'Dirac-Frenkel Dynamics',
     candidateSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    candidateDate: '2026-08-08T13:36:17.319078+00:00',
     existingTitle: 'Deep Transformer Expressivity',
     existingSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    existingDate: '2026-08-08T13:36:07.438304+00:00',
     expectedSameEvent: false,
   },
   {
@@ -153,8 +157,10 @@ const pairs: LabeledPair[] = [
       'two genuinely different real ArXiv papers, same category (RESEARCH), both real sample rows',
     candidateTitle: 'Graph Prediction',
     candidateSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    candidateDate: '2026-08-08T09:24:30.744113+00:00',
     existingTitle: 'Conformal Prediction',
     existingSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    existingDate: '2026-08-08T08:24:18.403534+00:00',
     expectedSameEvent: false,
   },
   // CONSTRUCTED pairs, explicitly marked as such: built to exercise
@@ -171,8 +177,10 @@ const pairs: LabeledPair[] = [
       'same event, SAME source republishing under a near-identical headline (real similarity 0.875, confirmed >= the 0.85 duplicate threshold) -- must be a true duplicate, not corroboration',
     candidateTitle: 'OpenAI Releases GPT-5 Turbo With Extended Context',
     candidateSourceId: '1c46d1c9-3a60-4629-9bcf-63300649439d',
+    candidateDate: '2026-08-09T14:09:06.697724+00:00',
     existingTitle: 'OpenAI Releases GPT-5 Turbo With Extended Context Window',
     existingSourceId: '1c46d1c9-3a60-4629-9bcf-63300649439d',
+    existingDate: '2026-08-09T14:09:06.697724+00:00',
     expectedSameEvent: true, // same event AND same source -> duplicate, not corroboration
   },
   {
@@ -181,8 +189,10 @@ const pairs: LabeledPair[] = [
       'same event, INDEPENDENT source, near-identical headline (>=0.85-band) -- must be corroboration',
     candidateTitle: 'Anthropic Launches Claude Opus 5',
     candidateSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b', // different from existing's source
+    candidateDate: '2026-08-09T14:09:06.697724+00:00',
     existingTitle: 'Anthropic Unveils Claude Opus 5',
     existingSourceId: '1c46d1c9-3a60-4629-9bcf-63300649439d',
+    existingDate: '2026-08-09T14:09:06.697724+00:00',
     expectedSameEvent: true,
   },
   {
@@ -191,8 +201,10 @@ const pairs: LabeledPair[] = [
       'DIFFERENT events, independent sources, but a coincidentally similar generic phrase pattern -- must NOT be flagged (no shared entity anchor)',
     candidateTitle: 'Company Releases New Model With Improved Benchmarks Today',
     candidateSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    candidateDate: '2026-08-09T14:09:06.697724+00:00',
     existingTitle: 'Startup Ships New Model With Better Benchmarks This Week',
     existingSourceId: '1c46d1c9-3a60-4629-9bcf-63300649439d',
+    existingDate: '2026-08-09T14:09:06.697724+00:00',
     expectedSameEvent: false,
   },
   {
@@ -201,13 +213,31 @@ const pairs: LabeledPair[] = [
       'DIFFERENT events, independent sources, weak/borderline similarity (~0.55 band) -- must remain ambiguous (neither duplicate nor corroboration)',
     candidateTitle: 'OpenAI Releases New Reasoning Model With Improved Benchmarks',
     candidateSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    candidateDate: '2026-08-09T14:09:06.697724+00:00',
     existingTitle: 'OpenAI Ships New Reasoning Model, Benchmark Scores Improve',
     existingSourceId: '1c46d1c9-3a60-4629-9bcf-63300649439d',
+    existingDate: '2026-08-09T14:09:06.697724+00:00',
     expectedSameEvent: false, // deliberately treated as "not confirmed same event" -- ambiguous stays separate per the owner's own instruction
+  },
+  {
+    label: 'CONSTRUCTED',
+    reason:
+      'SAME entities/product (Anthropic, Opus), DIFFERENT real action (release vs. discontinue) -- must NOT merge; this is the exact adversarial case the deterministic event key exists to prevent',
+    candidateTitle: 'Anthropic Discontinues Claude Opus 5',
+    candidateSourceId: 'd0b027dd-b139-4f56-958a-830377d59e0b',
+    candidateDate: '2026-08-09T14:09:06.697724+00:00',
+    existingTitle: 'Anthropic Releases Claude Opus 5',
+    existingSourceId: '1c46d1c9-3a60-4629-9bcf-63300649439d',
+    existingDate: '2026-08-09T14:09:06.697724+00:00',
+    expectedSameEvent: false,
   },
 ]
 
-function makeClient(existingTitle: string, existingSourceId: string): CorroborationQueryClient {
+function makeClient(
+  existingTitle: string,
+  existingSourceId: string,
+  existingDate: string,
+): CorroborationQueryClient {
   const signalId = 'sig-replay-1'
   const obsId = 'obs-replay-existing'
   return {
@@ -219,7 +249,14 @@ function makeClient(existingTitle: string, existingSourceId: string): Corroborat
               in: () => ({
                 gte: () => ({
                   limit: async () => ({
-                    data: [{ id: signalId, title: existingTitle, observation_ids: [obsId] }],
+                    data: [
+                      {
+                        id: signalId,
+                        title: existingTitle,
+                        observation_ids: [obsId],
+                        created_at: existingDate,
+                      },
+                    ],
                     error: null,
                   }),
                 }),
@@ -246,11 +283,17 @@ async function main(): Promise<void> {
 
   async function runPairs(): Promise<void> {
     for (const p of pairs) {
-      const client = makeClient(p.existingTitle, p.existingSourceId)
+      const client = makeClient(p.existingTitle, p.existingSourceId, p.existingDate)
       const dup = await checkDuplicate(p.candidateTitle, 'Models', p.candidateSourceId, client)
       const corr = dup.isDuplicate
         ? { isCorroboration: false }
-        : await checkCorroboration(p.candidateTitle, 'Models', p.candidateSourceId, client)
+        : await checkCorroboration(
+            p.candidateTitle,
+            'Models',
+            p.candidateSourceId,
+            p.candidateDate,
+            client,
+          )
       const anchors = [...extractEntityAnchors(p.candidateTitle)].join(',') || '(none)'
       const flaggedSameEvent = dup.isDuplicate || corr.isCorroboration
 
