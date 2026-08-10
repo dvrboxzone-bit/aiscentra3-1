@@ -232,6 +232,63 @@ describe('isSafeSourceUrl — SSRF protection (real bypass classes)', () => {
   })
 })
 
+describe('isSafeSourceUrl — comprehensive IANA special-purpose range coverage (third architectural review)', () => {
+  test('::/128 (unspecified address) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[::]/'), false)
+  })
+
+  test('IPv4 multicast (224.0.0.0/4) is rejected, at both boundaries', () => {
+    assert.equal(isSafeSourceUrl('http://224.0.0.1/'), false) // lower bound
+    assert.equal(isSafeSourceUrl('http://239.255.255.255/'), false) // upper bound
+  })
+
+  test('the address immediately BEFORE the multicast range is still correctly allowed', () => {
+    assert.equal(isSafeSourceUrl('http://223.255.255.255/'), true)
+  })
+
+  test('IPv4 reserved (240.0.0.0/4) and broadcast (255.255.255.255) are rejected', () => {
+    assert.equal(isSafeSourceUrl('http://240.0.0.1/'), false)
+    assert.equal(isSafeSourceUrl('http://255.255.255.255/'), false)
+  })
+
+  test('IPv6 multicast (ff00::/8) is rejected, at the lower boundary', () => {
+    assert.equal(isSafeSourceUrl('http://[ff00::]/'), false)
+    assert.equal(isSafeSourceUrl('http://[ff02::1]/'), false) // a real multicast address in use (all-nodes)
+  })
+
+  test('the address immediately BEFORE the IPv6 multicast range is still correctly allowed', () => {
+    assert.equal(isSafeSourceUrl('http://[fe00::1]/'), true)
+  })
+
+  test('2001:db8::/32 (documentation range) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[2001:db8::1]/'), false)
+  })
+
+  test('100::/64 (discard-only range) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[100::1]/'), false)
+  })
+
+  test('TEST-NET-1/2/3 (documentation ranges, RFC 5737) are all rejected', () => {
+    assert.equal(isSafeSourceUrl('http://192.0.2.1/'), false)
+    assert.equal(isSafeSourceUrl('http://198.51.100.1/'), false)
+    assert.equal(isSafeSourceUrl('http://203.0.113.1/'), false)
+  })
+
+  test('198.18.0.0/15 (benchmarking, RFC 2544) is rejected, boundary checked', () => {
+    assert.equal(isSafeSourceUrl('http://198.18.0.1/'), false)
+    assert.equal(isSafeSourceUrl('http://198.19.255.255/'), false) // upper bound of /15
+    assert.equal(isSafeSourceUrl('http://198.17.255.255/'), true) // immediately before -- must be allowed
+  })
+
+  test('192.0.0.0/24 (IETF protocol assignments) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://192.0.0.1/'), false)
+  })
+
+  test('192.88.99.0/24 (6to4 relay anycast) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://192.88.99.1/'), false)
+  })
+})
+
 describe('verifyUrlReachable — SSRF via redirect (real bypass class, real DI)', () => {
   // Real requirement: verifyUrlReachable now uses undici's fetch
   // directly (for real DNS-pinning dispatchers, see the function's own

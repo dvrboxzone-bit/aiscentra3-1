@@ -538,18 +538,18 @@ const ACTION_GROUPS: Record<string, string[]> = {
     'shuts down',
   ],
   ACQUIRE: ['acquire', 'acquires', 'acquired', 'acquisition'],
-  LEGAL: [
-    'sue',
-    'sues',
-    'sued',
-    'lawsuit',
-    'ban',
-    'bans',
-    'banned',
-    'recall',
-    'recalls',
-    'recalled',
-  ],
+  // REAL BUG FIXED (third architectural review): LAWSUIT and BAN were
+  // grouped into a single LEGAL category -- but a company suing
+  // another and a company/product being banned are genuinely
+  // DIFFERENT real-world events, even involving the same two entities
+  // (e.g. "OpenAI Sues Microsoft" vs "OpenAI Bans Microsoft" must be
+  // treated as different events, not merged). RECALL was also folded
+  // into the same overly-broad group and is likewise its own distinct
+  // action (a product recall is neither a lawsuit nor a ban). Split
+  // into three genuinely separate action groups.
+  LAWSUIT: ['sue', 'sues', 'sued', 'lawsuit'],
+  BAN: ['ban', 'bans', 'banned'],
+  RECALL: ['recall', 'recalls', 'recalled'],
   FUNDING: ['raise', 'raises', 'raised'],
   CLOSE: ['close', 'closes', 'closed'],
   FIX: ['patch', 'patches', 'patched', 'fix', 'fixes', 'fixed'],

@@ -82,6 +82,44 @@ describe('verifyCronSecret', () => {
       `comparison time for a last-byte mismatch must not be dramatically slower than a first-byte mismatch (ratio=${ratio.toFixed(2)}) -- a naive !== comparison would show a much larger ratio here`,
     )
   })
+
+  test('comparison time does not scale with GUESS LENGTH -- the real third-review fix (hash-then-compare removes the length-check branch)', () => {
+    // The specific gap this closes: the previous version of this guard
+    // did `if (providedBuf.length !== realBuf.length) return false`
+    // BEFORE calling timingSafeEqual -- a length comparison that is
+    // itself not constant-time, potentially leaking the real secret's
+    // LENGTH to an attacker sending guesses of many different lengths
+    // and measuring response time. Hashing both sides with SHA-256
+    // first means every comparison is between two 32-byte digests
+    // regardless of guess length -- there is no length-dependent
+    // branch on the secret anywhere in this function anymore.
+    const shortGuess = 'x'
+    const sameLengthGuess = 'x'.repeat(process.env['CRON_SECRET']?.length ?? 24)
+    const longGuess = 'x'.repeat(500)
+    const SAMPLES = 3000
+
+    const timeFor = (guess: string): number => {
+      const start = process.hrtime.bigint()
+      for (let i = 0; i < SAMPLES; i++) verifyCronSecret(guess)
+      return Number(process.hrtime.bigint() - start)
+    }
+
+    const tShort = timeFor(shortGuess)
+    const tSame = timeFor(sameLengthGuess)
+    const tLong = timeFor(longGuess)
+
+    // A generous bound (5x) for the same real-world scheduler/GC noise
+    // reasons as the test above -- the real property being proven is
+    // that guess length does not produce a LARGE, systematic timing
+    // difference (which a naive length-check-then-compare pattern
+    // would show: longer guesses take measurably longer to reach the
+    // point of rejection in some naive implementations).
+    const maxRatio = Math.max(tShort, tSame, tLong) / Math.min(tShort, tSame, tLong)
+    assert.ok(
+      maxRatio < 5,
+      `comparison time must not scale meaningfully with guess length (ratio=${maxRatio.toFixed(2)}) -- hashing before comparison removes this signal entirely`,
+    )
+  })
 })
 
 describe('extractCronSecret', () => {

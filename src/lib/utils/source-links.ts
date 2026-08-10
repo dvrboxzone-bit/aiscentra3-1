@@ -52,11 +52,18 @@ import { Agent as UndiciAgent, fetch as undiciFetch, type Response as UndiciResp
 
 /**
  * True if a numeric IPv4 address (already parsed into 4 octets) falls
- * in a private/loopback/link-local/reserved range that must never be
- * reachable from this server's own network position.
+ * in ANY non-public IANA special-purpose range -- private, loopback,
+ * link-local, reserved, multicast, broadcast, or documentation/
+ * benchmark ranges that must never be treated as a real, reachable
+ * public destination.
+ *
+ * THIRD ARCHITECTURAL REVIEW: the earlier version only covered
+ * private/loopback/link-local/CGNAT. Extended to the FULL IANA
+ * "IPv4 Special-Purpose Address Registry" so the denylist covers every
+ * non-public range, not just the commonly-cited private ones.
  */
 function isPrivateIPv4Octets(o: [number, number, number, number]): boolean {
-  const [a, b] = o
+  const [a, b, c] = o
   if (a === 127) return true // 127.0.0.0/8 loopback
   if (a === 10) return true // 10.0.0.0/8
   if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
@@ -64,6 +71,14 @@ function isPrivateIPv4Octets(o: [number, number, number, number]): boolean {
   if (a === 169 && b === 254) return true // 169.254.0.0/16 link-local
   if (a === 0) return true // 0.0.0.0/8 "this network"
   if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 CGNAT
+  if (a === 192 && b === 0 && c === 0) return true // 192.0.0.0/24 IETF protocol assignments
+  if (a === 192 && b === 0 && c === 2) return true // 192.0.2.0/24 TEST-NET-1
+  if (a === 192 && b === 88 && c === 99) return true // 192.88.99.0/24 6to4 relay anycast
+  if (a === 198 && b >= 18 && b <= 19) return true // 198.18.0.0/15 benchmarking
+  if (a === 198 && b === 51 && c === 100) return true // 198.51.100.0/24 TEST-NET-2
+  if (a === 203 && b === 0 && c === 113) return true // 203.0.113.0/24 TEST-NET-3
+  if (a >= 224 && a <= 239) return true // 224.0.0.0/4 multicast
+  if (a >= 240) return true // 240.0.0.0/4 reserved (includes 255.255.255.255/32 broadcast)
   return false
 }
 
@@ -105,9 +120,16 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   // input but reports it WITHOUT brackets via .hostname in Node's URL
   // implementation -- handle both defensively.
   const ipv6 = h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h
-  if (ipv6 === '::1' || ipv6 === '0:0:0:0:0:0:0:1') return true // loopback
+  // THIRD ARCHITECTURAL REVIEW: extended to the FULL IANA "IPv6
+  // Special-Purpose Address Registry" -- the earlier version only
+  // covered loopback/link-local/unique-local.
+  if (ipv6 === '::' || ipv6 === '0:0:0:0:0:0:0:0') return true // ::/128 unspecified address
+  if (ipv6 === '::1' || ipv6 === '0:0:0:0:0:0:0:1') return true // ::1/128 loopback
   if (/^fe[89ab][0-9a-f]:/.test(ipv6)) return true // fe80::/10 link-local
   if (/^f[cd][0-9a-f]{2}:/.test(ipv6)) return true // fc00::/7 unique-local
+  if (/^ff[0-9a-f]{2}:/.test(ipv6)) return true // ff00::/8 multicast
+  if (/^2001:0*db8:/.test(ipv6)) return true // 2001:db8::/32 documentation
+  if (ipv6.startsWith('100::')) return true // 100::/64 discard-only
 
   // IPv4-mapped IPv6, dotted form: ::ffff:127.0.0.1
   const dottedMapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(ipv6)

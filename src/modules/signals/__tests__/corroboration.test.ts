@@ -340,6 +340,94 @@ describe('checkCorroboration — a failed source lookup FAILS CLOSED (no corrobo
 })
 
 describe('checkCorroboration — deterministic event key (real hardening: entity+action+version+date, not fuzzy similarity)', () => {
+  test('SAME entities, but "Sues" vs "Bans" -- LAWSUIT and BAN must be DIFFERENT action groups, must NOT merge', async () => {
+    // Third architectural review: these were previously grouped into a
+    // single LEGAL category, which would have incorrectly treated a
+    // lawsuit and a ban of the same two companies as the same event.
+    const client = makeMockClient({
+      signals: [
+        {
+          id: 'sig-1',
+          title: 'OpenAI Sues Microsoft',
+          observation_ids: ['obs-a'],
+          confidence_score: 60,
+          created_at: BASE_DATE,
+        },
+      ],
+      existingSourceIds: ['source-a'],
+    })
+
+    const result = await checkCorroboration(
+      'OpenAI Bans Microsoft',
+      'Models',
+      'source-b',
+      BASE_DATE,
+      client,
+    )
+
+    assert.equal(
+      result.isCorroboration,
+      false,
+      'a lawsuit and a ban involving the same two companies are genuinely different real-world events and must never be merged',
+    )
+  })
+
+  test('SAME entities, "Sues" vs "Sued" (same LAWSUIT group) -- genuinely the same action, corroborates', async () => {
+    const client = makeMockClient({
+      signals: [
+        {
+          id: 'sig-1',
+          title: 'OpenAI Sues Microsoft Over Patent Dispute',
+          observation_ids: ['obs-a'],
+          confidence_score: 60,
+          created_at: BASE_DATE,
+        },
+      ],
+      existingSourceIds: ['source-a'],
+    })
+
+    const result = await checkCorroboration(
+      'OpenAI Sued Microsoft Over Patent Dispute',
+      'Models',
+      'source-b',
+      BASE_DATE,
+      client,
+    )
+    assert.equal(
+      result.isCorroboration,
+      true,
+      'both "sues" and "sued" are the same LAWSUIT action group',
+    )
+  })
+
+  test('SAME entities, "Bans" vs "Recalls" -- BAN and RECALL must also be DIFFERENT action groups', async () => {
+    const client = makeMockClient({
+      signals: [
+        {
+          id: 'sig-1',
+          title: 'Regulator Bans OpenAI Product',
+          observation_ids: ['obs-a'],
+          confidence_score: 60,
+          created_at: BASE_DATE,
+        },
+      ],
+      existingSourceIds: ['source-a'],
+    })
+
+    const result = await checkCorroboration(
+      'Regulator Recalls OpenAI Product',
+      'Models',
+      'source-b',
+      BASE_DATE,
+      client,
+    )
+    assert.equal(
+      result.isCorroboration,
+      false,
+      'a ban and a recall are different real-world regulatory actions',
+    )
+  })
+
   test('SAME entities + product, but DIFFERENT action (release vs. discontinue) -- must NOT merge, the exact scenario this fix closes', async () => {
     const client = makeMockClient({
       signals: [
