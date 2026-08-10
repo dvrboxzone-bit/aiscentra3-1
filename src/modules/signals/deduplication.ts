@@ -159,10 +159,34 @@ export async function checkDuplicate(
     // any caller that hasn't been updated to pass it.
     if (candidateSourceId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: existingObs } = await (supabase as any)
+      const { data: existingObs, error: sourceLookupError } = await (supabase as any)
         .from('observations')
         .select('source_id')
         .in('id', bestMatch.observation_ids)
+
+      // REAL BUG FIXED (architectural review): a failed source lookup
+      // previously fell through silently -- (existingObs ?? []) became
+      // an empty set, `.has(candidateSourceId)` was therefore always
+      // false, and a source that could NOT be verified was treated as
+      // if it were confirmed INDEPENDENT, letting it through to
+      // checkCorroboration as if genuinely different-source evidence.
+      // A lookup failure proves nothing about independence -- fail
+      // closed: treat it the same as the "no candidateSourceId"
+      // conservative default (same-source), which means REJECT as a
+      // duplicate rather than risk merging on unverifiable grounds.
+      if (sourceLookupError) {
+        console.error(
+          '[deduplication] source lookup failed during duplicate check -- failing closed (treated as same-source, not independent):',
+          sourceLookupError.message,
+        )
+        return {
+          isDuplicate: true,
+          matchedSignalId: bestMatch.id,
+          matchedTitle: bestMatch.title,
+          similarityScore: highestSimilarity,
+          reason: 'REJECT: source_verification_failed (fail-closed, treated as duplicate)',
+        }
+      }
 
       const existingSourceIds = new Set(
         ((existingObs ?? []) as Array<{ source_id: string }>).map((o) => o.source_id),
@@ -432,11 +456,28 @@ export function extractEntityAnchors(title: string): Set<string> {
   return anchors
 }
 
+/**
+ * REAL BUG FIXED (architectural review): a single shared entity anchor
+ * was too weak on its own -- two genuinely different stories can
+ * coincidentally share exactly one proper-noun-like token (e.g. both
+ * mention "OpenAI" while describing completely unrelated events: a
+ * funding announcement and an unrelated safety incident). Requiring
+ * >=2 distinct shared anchors is a materially stronger signal that the
+ * SAME specific event is being described (e.g. both a company name
+ * AND a product/model name matching), not just that both stories
+ * happen to be about the same company in general.
+ */
+const MIN_SHARED_ANCHORS = 2
+
 function sharesEntityAnchor(titleA: string, titleB: string): boolean {
   const anchorsA = extractEntityAnchors(titleA)
   const anchorsB = extractEntityAnchors(titleB)
+  let sharedCount = 0
   for (const a of anchorsA) {
-    if (anchorsB.has(a)) return true
+    if (anchorsB.has(a)) {
+      sharedCount++
+      if (sharedCount >= MIN_SHARED_ANCHORS) return true
+    }
   }
   return false
 }
@@ -537,10 +578,27 @@ export async function checkCorroboration(
 
   // Exclude same-source matches -- see docstring above.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: existingObs } = await (supabase as any)
+  const { data: existingObs, error: sourceLookupError } = await (supabase as any)
     .from('observations')
     .select('source_id')
     .in('id', best.observation_ids)
+
+  // REAL BUG FIXED (architectural review): same class of bug as
+  // checkDuplicate's identical fix above -- a failed lookup here
+  // previously fell through to an empty existingSourceIds set, making
+  // the same-source check always false and letting an UNVERIFIABLE
+  // source through as if confirmed independent, triggering a
+  // corroboration merge on no real evidence at all. Fail closed
+  // instead: an unverifiable source proves nothing, so refuse
+  // corroboration rather than risk merging two potentially-same-source
+  // (or worse, unrelated) observations.
+  if (sourceLookupError) {
+    console.error(
+      '[deduplication] source lookup failed during corroboration check -- failing closed (no corroboration):',
+      sourceLookupError.message,
+    )
+    return { isCorroboration: false }
+  }
 
   const existingSourceIds = new Set(
     ((existingObs ?? []) as Array<{ source_id: string }>).map((o) => o.source_id),

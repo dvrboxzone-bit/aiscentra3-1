@@ -151,7 +151,32 @@ export function checkHardRejection(
 // (survey/review/tutorial framing rarely describes a discrete,
 // dateable event the way a genuine Signal must, per Constitution
 // Article 3.2's own Signal definition).
-export const PRE_FILTER_MIN = 5
+//
+// REAL BUG FIXED (found via architectural review, confirmed by
+// re-deriving the arithmetic directly): the ORIGINAL baseline (5) and
+// threshold (5) were EQUAL, meaning an observation with ZERO keyword
+// matches at all -- neither positive nor negative -- passed by
+// default (5 >= 5). Since most real news text does not happen to
+// contain one of a small, specific negative-phrase list
+// (survey/review/tutorial/etc), the filter was effectively a weak
+// negative-only screen: it caught obvious junk but did NOT require any
+// positive evidence of newsworthiness to admit something to the
+// expensive AI path. This directly explains why the replay's own
+// throughput arithmetic never showed a real backlog reduction from
+// this filter -- it was not meaningfully selective.
+//
+// Redesigned so PASSING requires genuine positive evidence, not mere
+// absence of a few negative phrases: baseline is now LOW (1, well
+// below threshold on its own), a single positive term is still
+// insufficient (1 + 1.5 = 2.5 < 3), genuine multi-signal newsworthiness
+// (>=2 distinct positive terms) is required to clear the bar, and a
+// SINGLE negative term is now decisive (-3, driving the score to 0 or
+// negative from any realistic starting point) rather than merely
+// nudging it down.
+export const PRE_FILTER_MIN = 3
+const PRE_FILTER_BASELINE = 1
+const POSITIVE_WEIGHT = 1.5
+const NEGATIVE_WEIGHT = 3
 
 const POSITIVE_TERMS = [
   'release',
@@ -207,30 +232,32 @@ const NEGATIVE_TERMS = [
 ]
 
 /**
- * Deterministic, zero-AI-cost score in [0, 10]. Starts at a neutral
- * baseline (5), +1 per distinct positive term matched (capped),
- * -1.5 per distinct negative term matched (capped) -- negative terms
- * weighted more heavily since generic listicle/tutorial framing is a
- * stronger negative signal than the absence of a positive one.
+ * Deterministic, zero-AI-cost score in [0, 10]. Starts at a LOW
+ * baseline (1) -- see the note above on why this changed from an
+ * earlier, ineffective design -- +1.5 per distinct positive term
+ * matched (capped at 4 matches), -3 per distinct negative term matched
+ * (capped at 3 matches). A single negative term is decisive; genuine
+ * newsworthiness requires at least 2 distinct positive signals to
+ * clear PRE_FILTER_MIN.
  */
 export function computeDeterministicPreScore(title: string, content: string): number {
   const text = `${title} ${content}`.toLowerCase()
 
-  let score = 5
+  let score = PRE_FILTER_BASELINE
   let positiveMatches = 0
   let negativeMatches = 0
 
   for (const term of POSITIVE_TERMS) {
     if (positiveMatches >= 4) break // cap: no single observation dominates purely by keyword stuffing
     if (text.includes(term)) {
-      score += 1
+      score += POSITIVE_WEIGHT
       positiveMatches++
     }
   }
   for (const term of NEGATIVE_TERMS) {
     if (negativeMatches >= 3) break
     if (text.includes(term)) {
-      score -= 1.5
+      score -= NEGATIVE_WEIGHT
       negativeMatches++
     }
   }

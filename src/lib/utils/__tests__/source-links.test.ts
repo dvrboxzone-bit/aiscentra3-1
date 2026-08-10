@@ -166,3 +166,125 @@ describe('verifyUrlReachable', () => {
     assert.equal(await verifyUrlReachable('https://example.com/slow', 50), false)
   })
 })
+
+describe('isSafeSourceUrl — SSRF protection (real bypass classes)', () => {
+  test('IPv4-mapped IPv6 loopback, dotted notation, is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[::ffff:127.0.0.1]/'), false)
+  })
+
+  test('IPv4-mapped IPv6 loopback, HEX-normalized notation, is rejected -- the real, documented bypass class this closes', () => {
+    // Node's own URL parser normalizes ::ffff:127.0.0.1 to this exact
+    // hex form (confirmed directly: new URL('http://[::ffff:127.0.0.1]/').hostname === '[::ffff:7f00:1]')
+    // -- a check that only matched the dotted form would never see this.
+    assert.equal(isSafeSourceUrl('http://[::ffff:7f00:1]/'), false)
+  })
+
+  test('IPv4-mapped IPv6 cloud metadata endpoint (169.254.169.254), hex form, is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[::ffff:a9fe:a9fe]/'), false)
+  })
+
+  test('172.16.0.0/12 private range is rejected -- missing entirely before this fix', () => {
+    assert.equal(isSafeSourceUrl('http://172.16.0.1/'), false)
+    assert.equal(isSafeSourceUrl('http://172.20.5.1/'), false)
+    assert.equal(isSafeSourceUrl('http://172.31.255.255/'), false)
+  })
+
+  test('addresses just outside 172.16.0.0/12 are correctly still allowed', () => {
+    assert.equal(isSafeSourceUrl('http://172.15.255.255/'), true)
+    assert.equal(isSafeSourceUrl('http://172.32.0.1/'), true)
+  })
+
+  test('IPv6 link-local (fe80::/10) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[fe80::1]/'), false)
+  })
+
+  test('IPv6 unique-local (fc00::/7) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://[fc00::1]/'), false)
+    assert.equal(isSafeSourceUrl('http://[fd12:3456::1]/'), false)
+  })
+
+  test('CGNAT range (100.64.0.0/10) is rejected', () => {
+    assert.equal(isSafeSourceUrl('http://100.64.0.1/'), false)
+    assert.equal(isSafeSourceUrl('http://100.127.255.255/'), false)
+  })
+
+  test('a normal real public URL remains allowed after all the above tightening', () => {
+    assert.equal(isSafeSourceUrl('https://openai.com/blog/post'), true)
+    assert.equal(isSafeSourceUrl('https://arxiv.org/abs/1234.5678'), true)
+  })
+})
+
+describe('verifyUrlReachable — SSRF via redirect (real bypass class)', () => {
+  const originalFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  test('a redirect to a private/internal address is NOT followed -- the real fix', async () => {
+    let calls = 0
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      calls++
+      const urlStr = typeof url === 'string' ? url : url.toString()
+      if (urlStr.includes('safe-looking.example.com')) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+        })
+      }
+      // Should NEVER be reached -- the redirect target is unsafe.
+      return new Response('secret metadata', { status: 200 })
+    }) as typeof fetch
+
+    const result = await verifyUrlReachable('https://safe-looking.example.com/article')
+    assert.equal(
+      result,
+      false,
+      'a redirect to an internal address must never be followed as reachable',
+    )
+    assert.ok(calls <= 4, 'must not retry indefinitely against the same unsafe redirect')
+  })
+
+  test('a redirect to another SAFE public URL is correctly followed and can succeed', async () => {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const urlStr = typeof url === 'string' ? url : url.toString()
+      if (urlStr.includes('first-hop.example.com')) {
+        return new Response(null, {
+          status: 301,
+          headers: { location: 'https://second-hop.example.com/final' },
+        })
+      }
+      return new Response('', { status: 200 })
+    }) as typeof fetch
+
+    const result = await verifyUrlReachable('https://first-hop.example.com/article')
+    assert.equal(
+      result,
+      true,
+      'a redirect to another safe public URL must be followed and can succeed',
+    )
+  })
+
+  test('an excessive redirect chain is bounded, not followed forever', async () => {
+    let hops = 0
+    globalThis.fetch = (async () => {
+      hops++
+      return new Response(null, {
+        status: 302,
+        headers: { location: `https://example.com/hop-${hops}` },
+      })
+    }) as typeof fetch
+
+    const result = await verifyUrlReachable('https://example.com/start')
+    assert.equal(
+      result,
+      false,
+      'an endless redirect chain must eventually be treated as unreachable, not hang',
+    )
+    assert.ok(hops < 20, `must be bounded, got ${hops} hops`)
+  })
+
+  test('a redirect with no Location header is treated as unreachable, not thrown', async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 302 })) as typeof fetch
+    assert.equal(await verifyUrlReachable('https://example.com/x'), false)
+  })
+})

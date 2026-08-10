@@ -127,7 +127,7 @@ describe('checkDuplicate — source-aware', () => {
     )
   })
 
-  test('a database error on the source lookup fails safe (not a duplicate) rather than throwing', async () => {
+  test('a database error on the source lookup FAILS CLOSED (treated as duplicate, not independent) -- the real security fix', async () => {
     const client: CorroborationQueryClient = {
       from: (table: string) => {
         if (table === 'signals') {
@@ -168,9 +168,18 @@ describe('checkDuplicate — source-aware', () => {
       'source-arxiv',
       client,
     )
-    // existingSourceIds ends up empty (data: null -> (data ?? []) = [])
-    // on a lookup error, so candidateSourceId is correctly NOT found
-    // among them -- same safe outcome as a genuine independent source.
-    assert.equal(result.isDuplicate, false)
+    // REAL BUG FIXED: previously a failed lookup fell through to an
+    // empty existingSourceIds set, making candidateSourceId "not
+    // found" and therefore treated as CONFIRMED INDEPENDENT --
+    // exactly backwards, since a lookup failure proves nothing about
+    // independence. Now fails closed: an unverifiable source is
+    // treated the same as same-source (the existing conservative
+    // default), which means REJECT as a duplicate rather than risk a
+    // merge on unverifiable grounds.
+    assert.equal(
+      result.isDuplicate,
+      true,
+      'an unverifiable source lookup must fail closed (duplicate), never be silently treated as a confirmed independent source',
+    )
   })
 })

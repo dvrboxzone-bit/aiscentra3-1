@@ -118,11 +118,17 @@ export async function getFeaturedSignals(): Promise<Signal[]> {
 export async function getSignalsByEntity(entityId: string): Promise<Signal[]> {
   const supabase = await createClient()
 
+  // REAL BUG FIXED (architectural review): this query previously had
+  // no has_verified_source filter at all -- a signal with zero safe,
+  // reachable sources could still be surfaced here, bypassing the
+  // publication gate that getSignals/getSignalById both already
+  // enforce. Same gate applied here for consistency.
   const { data, error } = await supabase
     .from('signals')
     .select('*')
     .contains('entity_ids', [entityId])
     .eq('status', 'ACTIVE')
+    .eq('has_verified_source', true)
     .order('signal_score', { ascending: false })
     .limit(20)
 

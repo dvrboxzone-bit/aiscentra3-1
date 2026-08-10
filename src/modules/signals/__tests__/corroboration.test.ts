@@ -229,3 +229,110 @@ describe('checkCorroboration', () => {
     assert.equal(result.isCorroboration, false)
   })
 })
+
+describe('checkCorroboration — requires >=2 shared entity anchors (real hardening)', () => {
+  test('exactly ONE shared anchor is NOT enough -- two different events mentioning the same single company must not merge', async () => {
+    const client = makeMockClient({
+      signals: [
+        {
+          id: 'sig-1',
+          title: 'OpenAI Announces New Safety Framework',
+          observation_ids: ['obs-a'],
+          confidence_score: 60,
+        },
+      ],
+      existingSourceIds: ['source-a'],
+    })
+
+    // Shares only "OpenAI" as an anchor -- genuinely different events
+    // (a safety framework vs. an unrelated funding announcement).
+    const result = await checkCorroboration(
+      'OpenAI Closes New Funding Round At Record Valuation',
+      'Models',
+      'source-b',
+      client,
+    )
+
+    assert.equal(
+      result.isCorroboration,
+      false,
+      'a single shared entity anchor (just the company name) must not be enough to merge two different events -- real hardening fix',
+    )
+  })
+
+  test('TWO shared anchors (company + product/model name) correctly indicates the same event', async () => {
+    const client = makeMockClient({
+      signals: [
+        {
+          id: 'sig-1',
+          title: 'Anthropic Unveils Claude Opus 5',
+          observation_ids: ['obs-a'],
+          confidence_score: 60,
+        },
+      ],
+      existingSourceIds: ['source-a'],
+    })
+
+    const result = await checkCorroboration(
+      'Anthropic Launches Claude Opus 5',
+      'Models',
+      'source-b',
+      client,
+    )
+    assert.equal(
+      result.isCorroboration,
+      true,
+      'two genuinely shared anchors (Anthropic + Opus) is real corroboration evidence',
+    )
+  })
+})
+
+describe('checkCorroboration — a failed source lookup FAILS CLOSED (no corroboration), the real security fix', () => {
+  test('a database error on the source lookup refuses corroboration rather than assuming independence', async () => {
+    const client: CorroborationQueryClient = {
+      from: (table: string) => {
+        if (table === 'signals') {
+          return {
+            select: () => ({
+              eq: () => ({
+                in: () => ({
+                  gte: () => ({
+                    limit: async () => ({
+                      data: [
+                        {
+                          id: 'sig-1',
+                          title: 'Anthropic Unveils Claude Opus 5',
+                          observation_ids: ['obs-a'],
+                        },
+                      ],
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+              in: async () => ({ data: [], error: null }),
+            }),
+          }
+        }
+        return {
+          select: () => ({
+            eq: async () => ({ data: [], error: null }),
+            in: async () => ({ data: null, error: { message: 'connection reset' } }),
+          }),
+        }
+      },
+    } as unknown as CorroborationQueryClient
+
+    const result = await checkCorroboration(
+      'Anthropic Launches Claude Opus 5',
+      'Models',
+      'source-b',
+      client,
+    )
+    assert.equal(
+      result.isCorroboration,
+      false,
+      'an unverifiable source lookup must fail closed -- a lookup failure proves nothing about independence, so corroboration must be refused, not silently granted',
+    )
+  })
+})
