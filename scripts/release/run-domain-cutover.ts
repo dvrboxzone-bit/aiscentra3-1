@@ -46,6 +46,7 @@ import {
   safeDetail,
   checkRootContent,
   checkHealthJson,
+  checkSignalFeedNonEmpty,
   checkCommitSha,
   checkOpenGraphTagPresent,
   extractOpenGraphImageUrl,
@@ -270,6 +271,25 @@ async function main(): Promise<void> {
       }
       const healthCheck = checkHealthJson(healthJson)
       if (!healthCheck.ok) return { ok: false, detail: healthCheck.detail }
+
+      // 2b. Signal feed -- bounded fetch, size-capped body. Real
+      // incident this closes: health above only proves DATABASE
+      // CONNECTIVITY, not that the actual signal-listing query
+      // succeeds and returns something non-empty -- see
+      // checkSignalFeedNonEmpty's own docstring for the full
+      // rationale. Runs on the LIVE domain, immediately after cutover,
+      // in the SAME verify-then-rollback pass as every other check
+      // here -- a failure here triggers the identical automatic
+      // rollback already wired for root/health/SHA/OG.
+      const signalsResp = await fetch(`https://${domain}/signals`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      if (signalsResp.status !== 200) return fail('HTTP_STATUS', `signals ${signalsResp.status}`)
+      const signalsBytes = await readCapped(signalsResp.body, MAX_HTML_BYTES)
+      if (signalsBytes === null) return fail('BODY_TOO_LARGE', 'signals')
+      const signalsText = new TextDecoder().decode(signalsBytes)
+      const signalFeedCheck = checkSignalFeedNonEmpty(signalsText)
+      if (!signalFeedCheck.ok) return { ok: false, detail: signalFeedCheck.detail }
 
       // 3. Exact commit SHA. Read by STAGED DEPLOYMENT ID, not by domain
       // string. Confirmed via a real release attempt: `vercel inspect

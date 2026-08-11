@@ -27,6 +27,7 @@ import {
   reconcileHolder,
   checkRootContent,
   checkHealthJson,
+  checkSignalFeedNonEmpty,
   checkCommitSha,
   checkOpenGraphTagPresent,
   extractOpenGraphImageUrl,
@@ -637,6 +638,44 @@ describe('pure content checks', () => {
     assert.equal(checkHealthJson({ status: 'degraded', checks: { database: 'ok' } }).ok, false)
     assert.equal(checkHealthJson({ status: 'ok', checks: { database: 'down' } }).ok, false)
     assert.equal(checkHealthJson({}).ok, false)
+  })
+
+  test('signal feed non-empty -- real incident-driven check (health alone would have missed this)', () => {
+    // A real page fragment matching /signals's own rendering pattern.
+    assert.equal(
+      checkSignalFeedNonEmpty('<html><p>42 active signals detected</p></html>').ok,
+      true,
+      'a genuine positive count must pass',
+    )
+    assert.equal(
+      checkSignalFeedNonEmpty('<html><p>1 active signal detected</p></html>').ok,
+      true,
+      'singular form (1 signal, no trailing s) must also pass',
+    )
+  })
+
+  test('signal feed EMPTY (the exact PR #45 incident failure mode) is correctly rejected', () => {
+    assert.equal(
+      checkSignalFeedNonEmpty('<html><p>No signals detected in this category yet.</p></html>').ok,
+      false,
+      'the real empty-state marker must fail this check -- this IS the incident PR #45 caused',
+    )
+  })
+
+  test('a page with neither marker (structure changed, or genuinely zero with no empty-state text) fails closed', () => {
+    assert.equal(
+      checkSignalFeedNonEmpty('<html><p>Something else entirely</p></html>').ok,
+      false,
+      'absence of the expected positive-count marker must fail closed, not pass by default',
+    )
+  })
+
+  test('a zero count (if ever rendered as "0 active signals detected") does NOT pass -- only a real positive count does', () => {
+    assert.equal(
+      checkSignalFeedNonEmpty('<html><p>0 active signals detected</p></html>').ok,
+      false,
+      'zero is not a genuine non-empty feed, even if rendered without the "No signals detected" empty-state text',
+    )
   })
 
   test('commit sha', () => {

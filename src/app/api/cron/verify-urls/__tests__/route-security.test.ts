@@ -56,3 +56,52 @@ describe('/api/cron/verify-urls route — security properties', () => {
     assert.match(s, /console\.error\('\[cron\/verify-urls\]/)
   })
 })
+
+describe('/api/cron/verify-urls route — independent-review fixes (source-level, complementing drainOnePage-level tests above)', () => {
+  test('STARTED_AT/DEADLINE_AT are computed INSIDE the POST handler, not at module level -- the real warm-instance bug fix', () => {
+    const s = src()
+    // Must NOT exist as a module-level (outside any function) const.
+    assert.doesNotMatch(
+      s,
+      /^const (STARTED_AT|DEADLINE_AT)\s*=/m,
+      'STARTED_AT/DEADLINE_AT must not be module-level constants -- computed once at cold start, stale on warm invocations',
+    )
+    // Must exist as local declarations inside POST.
+    const postIdx = s.indexOf('export async function POST(')
+    const startedAtIdx = s.indexOf('const startedAt = Date.now()')
+    assert.ok(startedAtIdx > postIdx, 'startedAt must be declared inside the POST handler')
+  })
+
+  test('a genuine database error during backfill produces a real, non-200 HTTP response -- errors are never counted as success', () => {
+    const s = src()
+    assert.match(
+      s,
+      /dbErrorEncountered/,
+      'must track a genuine DB error distinctly from an empty queue',
+    )
+    assert.match(
+      s,
+      /if \(dbErrorEncountered\)[\s\S]{0,600}status:\s*500/,
+      'a genuine DB error must produce a real 500 response, not a 200 masked as success',
+    )
+  })
+
+  test('drainOnePage never masks a DB error as rowsFetched=0-means-empty at the type level', () => {
+    const s = src()
+    assert.match(
+      s,
+      /dbError:\s*string \| null/,
+      'the page outcome type must carry an explicit dbError field',
+    )
+  })
+
+  test('a priorityOnly request option exists, for release-time bounded priority backfill (no fire-and-forget)', () => {
+    const s = src()
+    assert.match(s, /priorityOnly/)
+    assert.match(
+      s,
+      /request\.json\(\)/,
+      'must read the option from the real request body, not a hardcoded value',
+    )
+  })
+})
