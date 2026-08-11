@@ -403,12 +403,31 @@ export type DnsLookupFn = (
  */
 const realDnsLookup: DnsLookupFn = dnsLookup as unknown as DnsLookupFn
 
-async function resolveAndPinIp(hostname: string, lookupFn: DnsLookupFn): Promise<string | null> {
+async function resolveAndPinIp(
+  hostname: string,
+  lookupFn: DnsLookupFn,
+  timeoutMs: number,
+): Promise<string | null> {
+  if (timeoutMs <= 0) return null // no budget remains -- fail closed, never start new work
+
   let addresses: { address: string; family: number }[]
   try {
-    addresses = await lookupFn(hostname, { all: true, verbatim: true })
+    // REAL FIX (production incident): DNS resolution previously had NO
+    // timeout at all -- a slow-resolving hostname could stall the
+    // entire call indefinitely, well past what the caller's own
+    // deadline implied. Raced against the remaining budget so a slow
+    // DNS lookup fails closed rather than hanging.
+    addresses = await Promise.race([
+      lookupFn(hostname, { all: true, verbatim: true }),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(
+          () => reject(new Error('DNS resolution exceeded remaining time budget')),
+          timeoutMs,
+        )
+      }),
+    ])
   } catch {
-    return null // resolution failure -- cannot be verified as safe, fail closed
+    return null // resolution failure (including a timeout) -- cannot be verified as safe, fail closed
   }
   if (addresses.length === 0) return null
   for (const { address } of addresses) {
@@ -449,6 +468,25 @@ export type FetchFn = (
 
 const realFetch: FetchFn = undiciFetch as unknown as FetchFn
 
+/**
+ * REAL BUG FIXED (production incident: FUNCTION_INVOCATION_TIMEOUT
+ * during a priority-backfill run): the earlier version reset a fresh
+ * timeoutMs timer on EVERY redirect hop's fetch call, applied NO
+ * timeout at all to DNS resolution, and started an entirely FRESH set
+ * of timers again for the GET fallback after HEAD. Worst case: up to
+ * MAX_REDIRECT_HOPS=5 hops x (unbounded DNS + timeoutMs fetch) for
+ * HEAD, then the SAME again for GET -- a single URL check could take
+ * far longer than timeoutMs ever implied, and a page of PAGE_SIZE
+ * concurrent checks (Promise.all waits for the slowest) could push
+ * the whole request well past the endpoint's own maxDuration, exactly
+ * what happened in production.
+ *
+ * Fixed with a genuine SINGLE absolute deadline for the entire call --
+ * DNS resolution, every redirect hop, HEAD, and the GET fallback all
+ * share the SAME deadline, computed once at the start. Every internal
+ * operation is bounded by the REMAINING time until that deadline, not
+ * a fresh per-step timer -- the timer is never restarted.
+ */
 export async function verifyUrlReachable(
   url: string,
   timeoutMs = 5_000,
@@ -457,9 +495,14 @@ export async function verifyUrlReachable(
 ): Promise<boolean> {
   if (!isSafeSourceUrl(url)) return false
 
+  const deadlineAt = Date.now() + timeoutMs
+
   const attempt = async (method: 'HEAD' | 'GET', targetUrl: string): Promise<boolean> => {
     let currentUrl = targetUrl
     for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+      const remainingMs = deadlineAt - Date.now()
+      if (remainingMs <= 0) return false // the single absolute deadline is already spent -- never start new work
+
       if (!isSafeSourceUrl(currentUrl)) return false // string-level check, every hop
 
       let hostname: string
@@ -469,15 +512,23 @@ export async function verifyUrlReachable(
         return false
       }
 
-      const pinnedIp = await resolveAndPinIp(hostname, lookupFn)
-      if (!pinnedIp) return false // unresolvable or resolves to an unsafe address -- fail closed
+      // REAL FIX: DNS resolution is now bounded by the SAME remaining
+      // budget -- previously entirely unbounded, on every hop.
+      const pinnedIp = await resolveAndPinIp(hostname, lookupFn, remainingMs)
+      if (!pinnedIp) return false // unresolvable, unsafe, or DNS itself timed out -- fail closed
 
       const family = pinnedIp.includes(':') ? 6 : 4
       const agent = buildPinnedAgent(pinnedIp, family)
 
+      const fetchBudgetMs = deadlineAt - Date.now()
+      if (fetchBudgetMs <= 0) {
+        await agent.close().catch(() => {})
+        return false
+      }
+
       try {
         const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), timeoutMs)
+        const timer = setTimeout(() => controller.abort(), fetchBudgetMs) // REAL FIX: bounded by remaining budget, not a fresh timeoutMs
         let res: UndiciResponse
         try {
           res = await fetchFn(currentUrl, {
@@ -501,7 +552,7 @@ export async function verifyUrlReachable(
           } catch {
             return false
           }
-          continue // re-validate AND re-resolve the NEW target at the top of the loop
+          continue // re-validate AND re-resolve the NEW target at the top of the loop, same deadline
         }
         return false // 4xx/5xx -- not genuinely reachable
       } catch {
@@ -513,7 +564,9 @@ export async function verifyUrlReachable(
 
   if (await attempt('HEAD', url)) return true
   // Some origins reject HEAD specifically (405/501) but serve GET
-  // fine -- one bounded retry, not a silent false negative.
+  // fine -- one bounded retry, not a silent false negative. Uses the
+  // SAME absolute deadlineAt -- not a fresh timeoutMs budget.
+  if (deadlineAt - Date.now() <= 0) return false
   return attempt('GET', url)
 }
 

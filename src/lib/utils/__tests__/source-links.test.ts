@@ -648,3 +648,155 @@ describe('verifyUrlReachable — real DNS-rebinding protection (injected resolve
     assert.equal(result, true)
   })
 })
+
+describe('verifyUrlReachable — single absolute deadline (production incident fix: FUNCTION_INVOCATION_TIMEOUT)', () => {
+  // REAL BUG FIXED: the timer previously reset on every redirect hop's
+  // fetch call, DNS resolution had no timeout at all, and the GET
+  // fallback after HEAD got an entirely fresh set of timers -- a
+  // single URL check could take far longer than the caller's
+  // timeoutMs ever implied, causing a real production
+  // FUNCTION_INVOCATION_TIMEOUT during a priority-backfill run.
+
+  test('a slow DNS resolution alone consumes the WHOLE budget -- no fetch is ever attempted, and the call returns within the overall timeout, not hanging indefinitely', async () => {
+    const slowLookup: DnsLookupFn = () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve([{ address: '93.184.216.34', family: 4 }]), 10_000) // far exceeds the 200ms budget below
+      })
+    let fetchAttempted = false
+    const fakeFetch: FetchFn = async () => {
+      fetchAttempted = true
+      return new UndiciResponse('', { status: 200 })
+    }
+
+    const start = Date.now()
+    const result = await verifyUrlReachable(
+      'https://slow-dns.example.com/x',
+      200,
+      slowLookup,
+      fakeFetch,
+    )
+    const elapsed = Date.now() - start
+
+    assert.equal(result, false, 'a DNS resolution that exceeds the overall budget must fail closed')
+    assert.equal(
+      fetchAttempted,
+      false,
+      'the HTTP layer must never be reached if DNS alone exhausts the budget',
+    )
+    assert.ok(
+      elapsed < 1000,
+      `must return promptly once the budget is spent, not wait for the full 10s DNS delay (took ${elapsed}ms)`,
+    )
+  })
+
+  test('a chain of redirects sharing ONE absolute deadline -- the timer is never reset per hop', async () => {
+    // Each hop's fetch takes real time (simulated via a real delay);
+    // with a fresh-per-hop timer this would never exceed a single
+    // hop's own budget, but with a single SHARED deadline, enough
+    // slow hops must eventually exhaust the overall budget.
+    let hopCount = 0
+    const fastLookup: DnsLookupFn = async () => [{ address: '93.184.216.34', family: 4 }]
+    const slowRedirectFetch: FetchFn = async (_currentUrl) => {
+      hopCount++
+      await new Promise((r) => setTimeout(r, 150)) // each hop takes real time
+      return new UndiciResponse(null, {
+        status: 302,
+        headers: { location: `https://redirect-chain.example.com/hop-${hopCount}` },
+      })
+    }
+
+    const result = await verifyUrlReachable(
+      'https://redirect-chain.example.com/start',
+      400, // budget only large enough for ~2-3 real 150ms hops, not all 6 (MAX_REDIRECT_HOPS+1)
+      fastLookup,
+      slowRedirectFetch,
+    )
+
+    assert.equal(
+      result,
+      false,
+      'an endless/long redirect chain must fail closed once the shared deadline is spent',
+    )
+    assert.ok(
+      hopCount < 6,
+      `must stop well before exhausting all possible hops once the shared budget runs out (got ${hopCount} hops)`,
+    )
+  })
+
+  test('HEAD failing then GET fallback -- BOTH share the same absolute deadline, not two fresh budgets', async () => {
+    const fastLookup: DnsLookupFn = async () => [{ address: '93.184.216.34', family: 4 }]
+    let headCalled = false
+    let getCalled = false
+    const respectingDelay = (ms: number, signal?: AbortSignal): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const t = setTimeout(resolve, ms)
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t)
+          reject(new DOMException('The operation was aborted', 'AbortError'))
+        })
+      })
+    const slowThenSlowerFetch: FetchFn = async (_url, init) => {
+      if (init.method === 'HEAD') {
+        headCalled = true
+        await respectingDelay(250, init.signal as AbortSignal | undefined)
+        return new UndiciResponse('', { status: 405 }) // rejected, falls through to GET
+      }
+      getCalled = true
+      await respectingDelay(250, init.signal as AbortSignal | undefined) // by now, most of a 300ms total budget is already spent
+      return new UndiciResponse('', { status: 200 })
+    }
+
+    const result = await verifyUrlReachable(
+      'https://head-then-get.example.com/x',
+      300, // only enough real time for HEAD (250ms) to complete, not also a full fresh GET
+      fastLookup,
+      slowThenSlowerFetch,
+    )
+
+    assert.equal(headCalled, true, 'HEAD must be attempted first')
+    assert.equal(
+      result,
+      false,
+      'the GET fallback must share the SAME absolute deadline as HEAD -- not get a fresh budget of its own',
+    )
+    // getCalled may be true (the call was attempted) or false (budget
+    // already exhausted before starting it) depending on real timing
+    // slack -- either is consistent with a shared deadline; what must
+    // NOT happen is the overall call succeeding on a fresh GET budget.
+    void getCalled
+  })
+
+  test('no false priorityQueueExhausted-style success: a URL that would only succeed with a FRESH per-step budget correctly fails under the shared-deadline fix', async () => {
+    // Directly proves the regression this fix closes: under the OLD
+    // per-step-timer behavior, DNS (100ms) + HEAD (100ms) + GET
+    // (100ms) = 300ms of real work would have fit within three
+    // separate ~150ms-per-step budgets. Under a single shared 150ms
+    // deadline, it must not.
+    const okButSlowLookup: DnsLookupFn = () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve([{ address: '93.184.216.34', family: 4 }]), 100)
+      })
+    const okButSlowFetch: FetchFn = async (_url, init) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 100)
+        ;(init.signal as AbortSignal | undefined)?.addEventListener('abort', () => {
+          clearTimeout(t)
+          reject(new DOMException('The operation was aborted', 'AbortError'))
+        })
+      })
+      return new UndiciResponse('', { status: 200 })
+    }
+
+    const result = await verifyUrlReachable(
+      'https://budget-check.example.com/x',
+      150,
+      okButSlowLookup,
+      okButSlowFetch,
+    )
+    assert.equal(
+      result,
+      false,
+      'DNS (100ms) alone consumes most of a 150ms shared budget -- the subsequent fetch must not get a fresh timer to still succeed',
+    )
+  })
+})
