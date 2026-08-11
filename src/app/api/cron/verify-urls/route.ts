@@ -216,11 +216,27 @@ export async function reconcileStaleGates(
   supabase: any,
   activeOnly: boolean,
 ): Promise<ReconcileOutcome> {
-  const query = supabase
+  // REAL BUG FIXED (independent review, iteration 4): activeOnly was
+  // previously applied AFTER `.limit(RECONCILE_LIMIT)`, as an in-memory
+  // JS filter on whatever 500 rows the SQL layer happened to return --
+  // with no ORDER BY at all, that set of 500 was not even
+  // deterministic. As the signals table grows past RECONCILE_LIMIT, a
+  // real ACTIVE stale signal could sit outside the first 500 rows
+  // returned (order undefined without ORDER BY), get silently dropped
+  // by the in-memory filter, and the release gate would falsely report
+  // a clean reconciliation. Fixed: `.eq('status','ACTIVE')` is now
+  // applied directly in the query, BEFORE `.limit()`, when
+  // activeOnly=true -- the database does the filtering, not JS after
+  // an already-truncated result set. `.order('id', {ascending:true})`
+  // added for genuine determinism regardless of activeOnly.
+  let query = supabase
     .from('signals')
     .select('id, observation_ids, status')
     .eq('has_verified_source', false)
-    .limit(RECONCILE_LIMIT)
+  if (activeOnly) {
+    query = query.eq('status', 'ACTIVE')
+  }
+  query = query.order('id', { ascending: true }).limit(RECONCILE_LIMIT)
 
   const { data: staleSignals, error: staleErr } = await query
   if (staleErr) {
@@ -228,14 +244,11 @@ export async function reconcileStaleGates(
     return { signalIds: new Set(), failures: 1 }
   }
 
-  let candidates = (staleSignals ?? []) as Array<{
+  const candidates = (staleSignals ?? []) as Array<{
     id: string
     observation_ids: string[]
     status: string
   }>
-  if (activeOnly) {
-    candidates = candidates.filter((s) => s.status === 'ACTIVE')
-  }
   if (candidates.length === 0) {
     return { signalIds: new Set(), failures: 0 }
   }

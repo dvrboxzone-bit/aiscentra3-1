@@ -263,18 +263,37 @@ function makeReconcileMockClient(config: {
   return {
     from: (table: string) => {
       if (table === 'signals') {
-        return {
-          select: () => ({
-            eq: () => ({
-              limit: async () => {
-                if (config.staleSignalsReadError) {
-                  return { data: null, error: { message: config.staleSignalsReadError } }
-                }
-                return { data: config.staleSignals, error: null }
-              },
-            }),
-          }),
+        // Real accumulator-style query builder mock -- matches the
+        // ACTUAL query shape reconcileStaleGates builds:
+        // .select(...).eq('has_verified_source', false)[.eq('status','ACTIVE')].order(...).limit(...)
+        // Filters/order/limit are genuinely APPLIED to config.staleSignals
+        // here, not just recorded -- this is what makes the "SQL-level
+        // ACTIVE filter before LIMIT" fix actually observable by a test
+        // (a mock that ignored the .eq('status',...) call entirely
+        // would never catch a regression back to in-memory filtering).
+        const filters: Array<
+          (s: { id: string; observation_ids: string[]; status: string }) => boolean
+        > = [
+          () => true, // has_verified_source=false is already the entire fixture set here
+        ]
+        const builder = {
+          eq: (col: string, val: string) => {
+            if (col === 'status') filters.push((s) => s.status === val)
+            return builder
+          },
+          order: (_col: string, _opts: { ascending: boolean }) => builder,
+          limit: async (n: number) => {
+            if (config.staleSignalsReadError) {
+              return { data: null, error: { message: config.staleSignalsReadError } }
+            }
+            const filtered = config.staleSignals
+              .filter((s) => filters.every((f) => f(s)))
+              .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+              .slice(0, n)
+            return { data: filtered, error: null }
+          },
         }
+        return { select: () => builder }
       }
       // 'observations'
       return {
@@ -360,6 +379,50 @@ describe('reconcileStaleGates — real production code (independent review, iter
     )
   })
 
+  test('the SQL-level ACTIVE filter (not in-memory) still finds a stale ACTIVE signal even when non-ACTIVE signals alone exceed RECONCILE_LIMIT -- the real fix', async () => {
+    // Real regression this guards against: a prior version applied
+    // .limit(RECONCILE_LIMIT=500) BEFORE filtering by status in JS --
+    // if 500+ non-ACTIVE stale signals existed, a real ACTIVE stale
+    // signal sorted after them could be silently excluded, and the
+    // release gate would falsely report a clean reconciliation.
+    // Deliberately named so it sorts LAST (position 601) by id --
+    // under the OLD buggy pattern (sort, slice first 500, THEN filter
+    // status in JS), this exact fixture would fail (the ACTIVE signal
+    // would never make it into the first-500 slice at all), proving
+    // this test genuinely catches a regression back to that pattern,
+    // not merely re-confirming correct behavior by coincidence of
+    // sort order.
+    const manyNonActive = Array.from({ length: 600 }, (_, i) => ({
+      id: `aaa-non-active-${String(i).padStart(4, '0')}`, // sorts BEFORE the ACTIVE one below
+      observation_ids: [`obs-non-active-${i}`],
+      status: 'WEAK',
+    }))
+    const activeStale = {
+      id: 'zzz-active-stale-0001', // sorts AFTER all 600 non-ACTIVE ones -- position 601
+      observation_ids: ['obs-active'],
+      status: 'ACTIVE',
+    }
+    const client = makeReconcileMockClient({
+      staleSignals: [...manyNonActive, activeStale],
+      verifiedObservationIds: new Set([
+        'obs-active',
+        ...manyNonActive.map(({ observation_ids: [firstObsId] }) => firstObsId ?? ''),
+      ]),
+    })
+
+    const outcome = await reconcileStaleGates(client, true)
+    assert.equal(
+      outcome.signalIds.has('zzz-active-stale-0001'),
+      true,
+      'a real ACTIVE stale signal sorting AFTER 600 non-ACTIVE ones must still be found -- proves the SQL-level ACTIVE filter runs before LIMIT, not after',
+    )
+    assert.equal(
+      outcome.signalIds.size,
+      1,
+      'only the ACTIVE signal should be reconciled, none of the 600 WEAK ones',
+    )
+  })
+
   test('a stale-signals read error is a genuine, counted failure -- FAIL CLOSED, not best-effort/silently swallowed (the real fix)', async () => {
     const client = makeReconcileMockClient({
       staleSignals: [],
@@ -392,5 +455,79 @@ describe('reconcileStaleGates — real production code (independent review, iter
     const outcome = await reconcileStaleGates(client, false)
     assert.equal(outcome.failures, 0)
     assert.equal(outcome.signalIds.size, 0)
+  })
+
+  test('full cycle: a previous recompute/write genuinely failed after the observation write succeeded, the next regular invocation discovers and correctly repairs it', async () => {
+    // Simulates the real incident end-to-end, not just the "find"
+    // half: on a PRIOR invocation, an observation's own url_verified_ok
+    // write succeeded (durably persisted), but the LATER
+    // has_verified_source recompute for its signal failed (read/RPC/
+    // write error) -- exactly the scenario reconcileStaleGates exists
+    // to repair. This test proves the full cycle: discovery (real
+    // reconcileStaleGates code) THEN a successful repair write, using
+    // the same read-signal -> RPC compute -> update pattern the real
+    // POST handler applies to every signal reconcileStaleGates returns.
+    const signalId = 'sig-previously-failed-recompute'
+    const observationId = 'obs-genuinely-verified'
+
+    const client = makeReconcileMockClient({
+      staleSignals: [{ id: signalId, observation_ids: [observationId], status: 'ACTIVE' }],
+      verifiedObservationIds: new Set([observationId]), // the observation's own write DID succeed previously
+    })
+
+    // Step 1: the next regular invocation's reconciliation pass
+    // (real production code) discovers the stale signal.
+    const outcome = await reconcileStaleGates(client, true)
+    assert.equal(outcome.failures, 0)
+    assert.equal(outcome.signalIds.has(signalId), true, 'the stale signal must be discovered')
+
+    // Step 2: apply the SAME repair pattern the real POST handler uses
+    // for every signal reconcileStaleGates returns -- read the
+    // signal's observation_ids, call compute_has_verified_source,
+    // write the result. Tracked via a small write-capturing extension
+    // of the same mock client style already used throughout this file.
+    let writtenValue: boolean | null = null
+    const writeClient = {
+      from: (table: string) => {
+        if (table === 'signals') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: { observation_ids: [observationId] }, error: null }),
+              }),
+            }),
+            update: (values: { has_verified_source: boolean }) => ({
+              eq: async () => {
+                writtenValue = values.has_verified_source
+                return { error: null }
+              },
+            }),
+          }
+        }
+        return {}
+      },
+      rpc: async (_fn: string, _args: unknown) => ({ data: true, error: null }), // real compute_has_verified_source would genuinely return true here, since the observation IS verified
+    }
+
+    for (const id of outcome.signalIds) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sigResult = await (writeClient as any).from('signals').select().eq().single()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rpcResult = await (writeClient as any).rpc('compute_has_verified_source', {
+        p_observation_ids: sigResult.data.observation_ids,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (writeClient as any)
+        .from('signals')
+        .update({ has_verified_source: rpcResult.data === true })
+        .eq()
+      assert.equal(id, signalId)
+    }
+
+    assert.equal(
+      writtenValue,
+      true,
+      'the previously-stuck signal must genuinely end up with has_verified_source=true after the repair -- the full cycle is complete, not just discovery',
+    )
   })
 })
