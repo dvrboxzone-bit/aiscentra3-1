@@ -105,3 +105,56 @@ describe('/api/cron/verify-urls route — independent-review fixes (source-level
     )
   })
 })
+
+describe('/api/cron/verify-urls route — production incident fixes (FUNCTION_INVOCATION_TIMEOUT during priority backfill)', () => {
+  test('priorityOnly gets its own, materially tighter internal time budget (45s), distinct from the general path', () => {
+    const s = src()
+    assert.match(
+      s,
+      /PRIORITY_ONLY_BUDGET_MS\s*=\s*45_000/,
+      'a real, tighter internal budget must exist specifically for priorityOnly mode',
+    )
+    assert.match(
+      s,
+      /priorityOnlyMode\s*\?\s*startedAt \+ PRIORITY_ONLY_BUDGET_MS/,
+      'the deadline calculation must actually use the tighter budget when priorityOnlyMode is true',
+    )
+  })
+
+  test('priorityOnly gets a smaller, fixed page size ("небольшую фиксированную порцию работы за вызов")', () => {
+    const s = src()
+    assert.match(s, /PRIORITY_ONLY_PAGE_SIZE\s*=\s*10/)
+    assert.match(
+      s,
+      /priorityOnlyMode\s*\?\s*PRIORITY_ONLY_PAGE_SIZE\s*:\s*PAGE_SIZE/,
+      'the actual page size used must depend on priorityOnlyMode, not always the general PAGE_SIZE',
+    )
+  })
+
+  test('reconciliation does not start if the remaining budget is already spent', () => {
+    const s = src()
+    assert.match(
+      s,
+      /if \(Date\.now\(\) < deadlineAt\) \{\s*\n\s*const reconciliation = await reconcileStaleGates/,
+      'reconcileStaleGates must be gated by a real deadline check, not called unconditionally',
+    )
+  })
+
+  test('the gate-recompute loop checks the deadline before EACH signal, so the handler can voluntarily stop before the real Vercel cutoff', () => {
+    const s = src()
+    assert.match(
+      s,
+      /for \(const signalId of allAffectedSignalIds\) \{\s*\n\s*if \(Date\.now\(\) >= deadlineAt\)/,
+      'the per-signal recompute loop must check the deadline on every iteration, not run unconditionally to completion',
+    )
+  })
+
+  test('priorityQueueExhausted=true requires BOTH reconciliation and the full recompute loop to have genuinely completed -- never merely pass-1 exhaustion', () => {
+    const s = src()
+    assert.match(
+      s,
+      /priorityQueueExhausted\s*=\s*priorityQueueExhausted\s*&&\s*reconciliationCompleted\s*&&\s*allSignalsRecomputed/,
+      'a false priorityQueueExhausted=true must be impossible if reconciliation or the recompute loop had to stop early due to the deadline',
+    )
+  })
+})

@@ -199,6 +199,45 @@ describe('drainOnePage — cursor-based pagination', () => {
     const second = await drainOnePage(client, false, 'obs-2')
     assert.equal(second.rowsFetched, 1, 'a cursor of obs-2 must only return rows with id > obs-2')
   })
+
+  test('a custom (smaller) pageSize correctly drives exhaustion detection -- real regression guard: comparing rows.length to the fixed PAGE_SIZE constant instead of the actual pageSize parameter would falsely report exhaustion after the first page', async () => {
+    // REAL BUG FOUND AND FIXED while implementing the priorityOnly
+    // 45s-budget/smaller-page-size fix (production incident,
+    // FUNCTION_INVOCATION_TIMEOUT): nextCursor was computed by
+    // comparing `rows.length === PAGE_SIZE` (the fixed module-level
+    // constant, 50) -- with a smaller custom pageSize (e.g. 10 for
+    // priorityOnly), a genuinely full page of 10 rows would never
+    // equal 50, so nextCursor would always be null, making the caller
+    // believe the pass was exhausted after just ONE page even with
+    // many more rows still pending. Fixed to compare against the
+    // actual `pageSize` parameter.
+    const nineteenObservations = Array.from({ length: 19 }, (_, i) => ({
+      id: `obs-${String(i).padStart(3, '0')}`,
+      url: `https://example.com/${i}`,
+      signal_id: null,
+    }))
+    const { client } = makeMockClient({ observations: nineteenObservations })
+
+    const firstPage = await drainOnePage(client, false, null, 10) // custom smaller pageSize
+    assert.equal(
+      firstPage.rowsFetched,
+      10,
+      'a full custom-size page must fetch exactly pageSize rows',
+    )
+    assert.notEqual(
+      firstPage.nextCursor,
+      null,
+      'a page exactly as large as the custom pageSize must be treated as potentially non-exhausted (nextCursor set), not falsely exhausted',
+    )
+
+    const secondPage = await drainOnePage(client, false, firstPage.nextCursor, 10)
+    assert.equal(secondPage.rowsFetched, 9, 'the remaining 9 rows must be found on the second page')
+    assert.equal(
+      secondPage.nextCursor,
+      null,
+      'a page SMALLER than the custom pageSize (9 < 10) is genuinely the last page -- correctly exhausted',
+    )
+  })
 })
 
 describe('drainOnePage — database read errors are NEVER masked as an empty/idle queue (independent review fix)', () => {

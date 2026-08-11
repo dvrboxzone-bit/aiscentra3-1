@@ -142,6 +142,27 @@ const PAGE_SIZE = 50
  * the function's own response. */
 const DEADLINE_BUFFER_MS = 10_000
 
+/**
+ * REAL FIX (production incident: FUNCTION_INVOCATION_TIMEOUT during a
+ * priority-backfill run, observed real elapsed ~71.7s against a
+ * maxDuration=60 function). The release-time priorityOnly path is
+ * called synchronously and awaited by production-release.yml's own
+ * bounded retry loop -- it must return well within Vercel's real
+ * platform cutoff, with a real safety margin, not merely within the
+ * function's OWN nominal maxDuration (which the observed incident
+ * proved is not itself a hard guarantee against platform-level
+ * timeout under real load). A materially tighter internal budget
+ * (45s, vs. maxDuration=60 - 10s buffer = 50s for the general path)
+ * and a smaller, fixed page size specifically for priorityOnly mode
+ * -- "небольшую фиксированную порцию работы за вызов" -- keep each
+ * individual call's real wall-clock time well bounded, relying on the
+ * workflow's own retry loop (not a single oversized call) to
+ * eventually drain the full priority queue across multiple, safely-
+ * bounded invocations.
+ */
+const PRIORITY_ONLY_BUDGET_MS = 45_000
+const PRIORITY_ONLY_PAGE_SIZE = 10
+
 const VERIFY_URLS_LOCK = 'verify_urls_cycle'
 
 interface PageResult {
@@ -353,6 +374,7 @@ export async function drainOnePage(
   supabase: any,
   priorityOnly: boolean,
   cursor: string | null,
+  pageSize: number = PAGE_SIZE,
 ): Promise<DrainPageOutcome> {
   let query = supabase.from('observations').select('id, url, signal_id').is('url_verified_ok', null)
 
@@ -394,7 +416,7 @@ export async function drainOnePage(
   // about whether a query-builder chain is sensitive to call order
   // (PostgREST itself is not, but building the chain filters-first
   // keeps this genuinely unambiguous to read).
-  query = query.order('id', { ascending: true }).limit(PAGE_SIZE) // REAL deterministic pagination -- was previously unordered
+  query = query.order('id', { ascending: true }).limit(pageSize) // REAL deterministic pagination -- was previously unordered
 
   const { data: pending, error } = await query
   if (error) {
@@ -447,7 +469,7 @@ export async function drainOnePage(
   const lastRow = rows[rows.length - 1]
   return {
     result: pageResult,
-    nextCursor: rows.length === PAGE_SIZE && lastRow ? lastRow.id : null, // null means this pass is exhausted
+    nextCursor: rows.length === pageSize && lastRow ? lastRow.id : null, // null means this pass is exhausted
     rowsFetched: rows.length,
     dbError: null,
   }
@@ -463,7 +485,6 @@ export async function POST(request: Request): Promise<NextResponse> {
   // module-level computation was a real, serious bug on warm Vercel
   // instances.
   const startedAt = Date.now()
-  const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
 
   // Real requirement (independent review, point 3): an optional
   // request-body flag lets a caller (specifically
@@ -482,6 +503,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     // No body, or invalid JSON -- both treated as "no options given,"
     // matching this endpoint's original no-body contract exactly.
   }
+
+  // REAL FIX (production incident): priorityOnly gets its own,
+  // materially tighter internal budget and a smaller fixed page size
+  // -- see PRIORITY_ONLY_BUDGET_MS/PRIORITY_ONLY_PAGE_SIZE's own
+  // docstring above for the full rationale.
+  const deadlineAt = priorityOnlyMode
+    ? startedAt + PRIORITY_ONLY_BUDGET_MS
+    : startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
+  const pageSize = priorityOnlyMode ? PRIORITY_ONLY_PAGE_SIZE : PAGE_SIZE
 
   const supabase = createAdminClient()
   const lockHolder = `verify-urls:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`
@@ -529,7 +559,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         stoppedReason = 'time_budget'
         break
       }
-      const page = await drainOnePage(lockClient, true, cursor)
+      const page = await drainOnePage(lockClient, true, cursor, pageSize)
       pagesRun++
       totalProcessed += page.result.processed
       totalOk += page.result.ok
@@ -572,7 +602,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           stoppedReason = 'time_budget'
           break
         }
-        const page = await drainOnePage(lockClient, false, cursor)
+        const page = await drainOnePage(lockClient, false, cursor, pageSize)
         pagesRun++
         totalProcessed += page.result.processed
         totalOk += page.result.ok
@@ -636,9 +666,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     // silently swallowed), and scoped to ACTIVE-linked signals only
     // when priorityOnlyMode is requested (matching the same priority
     // semantics as pass 1 itself).
-    const reconciliation = await reconcileStaleGates(lockClient, priorityOnlyMode)
-    for (const id of reconciliation.signalIds) allAffectedSignalIds.add(id)
-    const reconciliationFailures = reconciliation.failures
+    // REAL FIX (production incident, point 3): reconciliation must not
+    // start if the remaining budget is already spent -- previously ran
+    // unconditionally regardless of how much time was left, risking
+    // pushing the whole invocation past the real platform cutoff.
+    let reconciliationFailures = 0
+    let reconciliationCompleted = false
+    if (Date.now() < deadlineAt) {
+      const reconciliation = await reconcileStaleGates(lockClient, priorityOnlyMode)
+      for (const id of reconciliation.signalIds) allAffectedSignalIds.add(id)
+      reconciliationFailures = reconciliation.failures
+      reconciliationCompleted = true
+    } else {
+      stoppedReason = 'time_budget'
+    }
 
     // Recompute the publication gate for every affected signal (both
     // newly-verified-this-invocation AND reconciled leftovers from a
@@ -646,10 +687,40 @@ export async function POST(request: Request): Promise<NextResponse> {
     // testable recomputeSignalGate helper (independent review,
     // iteration 5) -- same behavior as the prior inline loop, just no
     // longer duplicated inline logic.
+    //
+    // REAL FIX (production incident, point 5): this loop now checks
+    // the deadline before EACH signal, so the handler voluntarily
+    // stops -- returning a real, honest, retryable response -- rather
+    // than risk running past Vercel's actual cutoff mid-loop. Any
+    // signal not reached here simply stays exactly as it is; the next
+    // regular invocation's reconciliation pass will find it again if
+    // it is still genuinely stale (reconcileStaleGates re-derives this
+    // from durable columns every time, so nothing is lost by stopping
+    // early here).
     let gateWriteFailures = 0
+    let allSignalsRecomputed = true
     for (const signalId of allAffectedSignalIds) {
+      if (Date.now() >= deadlineAt) {
+        allSignalsRecomputed = false
+        stoppedReason = 'time_budget'
+        break
+      }
       const { ok } = await recomputeSignalGate(lockClient, signalId)
       if (!ok) gateWriteFailures++
+    }
+
+    // REAL FIX (production incident, point 4): priorityQueueExhausted
+    // is now honest about the FULL cycle, not just pass 1's own drain
+    // loop -- "priorityQueueExhausted=true разрешён только после
+    // подтверждённого завершения ACTIVE-очереди и reconciliation."
+    // A pass-1-exhausted result that then had to stop early during
+    // reconciliation or the recompute loop (deadline spent) must not
+    // be reported as a genuine, complete success -- the caller
+    // (production-release.yml's retry loop) needs an honest, retryable
+    // signal to try again, not a false "done."
+    if (priorityOnlyMode) {
+      priorityQueueExhausted =
+        priorityQueueExhausted && reconciliationCompleted && allSignalsRecomputed
     }
 
     return NextResponse.json({
