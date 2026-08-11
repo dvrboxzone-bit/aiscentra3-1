@@ -790,6 +790,26 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      # Real requirement: the signal-count smoke check below invokes
+      # the ONE shared implementation (scripts/release/check-signal-
+      # count.ts -> checkActiveSignalCountAttribute in domain-cutover.ts)
+      # rather than a hand-copied regex -- needs the repo checked out
+      # to run it.
+      - name: Checkout (for scripts/release/check-signal-count.ts only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install exact dependencies (npm ci)
+        run: npm ci
+
       - name: Root path smoke (HTTP 200, recognizable AIscentra HTML)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -867,19 +887,31 @@ jobs:
           echo "Health path smoke: HTTP $STATUS, status=ok, database=ok."
           rm -f /tmp/health.json /tmp/health-status.txt /tmp/health-curl-stderr.txt
 
-      - name: Signal feed smoke (HTTP 200, no schema-error page, genuinely NON-EMPTY feed)
-        # REAL INCIDENT THIS CLOSES: /api/health can return HTTP 200
-        # while the /signals page itself is empty or erroring due to a
-        # schema mismatch (has_verified_source missing, or every
-        # signal's has_verified_source still false pre-backfill) --
-        # health checks the DATABASE CONNECTION, not the actual signal-
-        # listing QUERY this page depends on. A bare HTTP 200 here is
-        # not sufficient either: the exact failure mode that triggered
-        # the emergency rollback was a 200 response with an EMPTY feed.
-        # /signals renders a real, checkable marker
-        # ("N active signal(s) detected") on success, and a distinct
-        # empty-state string ("No signals detected") when the feed is
-        # empty -- both are asserted explicitly below.
+      - name: Signal feed smoke (HTTP 200, genuinely non-empty feed via the stable data-active-signal-count contract)
+        # REAL INCIDENT THIS CLOSES (first pass): /api/health can
+        # return HTTP 200 while the /signals page itself is empty or
+        # erroring due to a schema mismatch -- health checks the
+        # DATABASE CONNECTION, not the actual signal-listing QUERY
+        # this page depends on.
+        #
+        # REAL INCIDENT THIS CLOSES (second pass -- the check itself):
+        # an earlier version of this step grepped the raw SSR HTML for
+        # a continuous text substring ("N active signal(s) detected").
+        # React's server-side rendering inserts HTML comments between
+        # adjacent JSX expression children for hydration bookkeeping,
+        # so the raw markup is genuinely "128<!-- --> active
+        # signal<!-- --><!-- --> detected", not a continuous string --
+        # a real false negative against a genuinely healthy system (128
+        # ACTIVE signals, correctly gated open) during an actual
+        # production release. Fixed properly, not patched around the
+        # comment pattern: the page emits a stable
+        # data-active-signal-count="<N>" HTML ATTRIBUTE instead, which
+        # is never split by hydration bookkeeping. Checked here via the
+        # ONE shared implementation
+        # (scripts/release/check-signal-count.ts ->
+        # checkActiveSignalCountAttribute), the SAME script the TOCTOU
+        # re-check job below also calls -- not two independently
+        # hand-copied checks.
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           DEPLOYMENT_URL: ${{ needs.staged-deploy.outputs.deployment_url }}
@@ -905,19 +937,19 @@ jobs:
             exit 1
           fi
 
-          if grep -q "No signals detected" /tmp/signals.html; then
-            echo "::error::/signals returned HTTP 200 but the feed is EMPTY (\"No signals detected\" marker present). STOP -- do not promote. This is exactly the PR #45 incident's own failure mode: a technically-successful response with zero visible signals, typically caused by pending migrations or an incomplete has_verified_source backfill. See docs/runbooks/pr45-migration-and-backfill.md."
+          set +e
+          CHECK_OUTPUT="$(node --import tsx scripts/release/check-signal-count.ts /tmp/signals.html)"
+          CHECK_EXIT=$?
+          set -e
+
+          if [ "$CHECK_EXIT" -ne 0 ]; then
+            echo "::error::/signals returned HTTP 200 but the data-active-signal-count contract check failed: $CHECK_OUTPUT. STOP -- do not promote. See docs/runbooks/pr45-migration-and-backfill.md."
             rm -f /tmp/signals.html /tmp/signals-status.txt /tmp/signals-curl-stderr.txt
             exit 1
           fi
 
-          if ! grep -qE '[1-9][0-9]* active signals? detected' /tmp/signals.html; then
-            echo "::error::/signals returned HTTP 200 but the expected \"N active signal(s) detected\" marker was not found (page structure may have changed, or the count is genuinely zero without the expected empty-state text). STOP -- do not promote."
-            exit 1
-          fi
-
-          SIGNAL_COUNT="$(grep -oE '[1-9][0-9]* active signals? detected' /tmp/signals.html | grep -oE '^[0-9]+')"
-          echo "Signal feed smoke: HTTP $STATUS, feed genuinely non-empty ($SIGNAL_COUNT active signals detected)."
+          SIGNAL_COUNT="$(echo "$CHECK_OUTPUT" | awk '{print $2}')"
+          echo "Signal feed smoke: HTTP $STATUS, feed genuinely non-empty ($SIGNAL_COUNT active signals, verified via data-active-signal-count)."
           rm -f /tmp/signals.html /tmp/signals-status.txt /tmp/signals-curl-stderr.txt
 
       - name: Open Graph image smoke (HTTP 200, image/png, PNG signature)
@@ -985,6 +1017,14 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
+
+      - name: Set up Node.js (for scripts/release/check-signal-count.ts only)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install exact dependencies (npm ci)
+        run: npm ci
 
       - name: Re-confirm origin/main HEAD still equals release commit_sha
         env:
@@ -1142,7 +1182,11 @@ jobs:
           # Re-checked here, immediately before promotion, not just in
           # the earlier staged-smoke job -- the whole point of this
           # re-check job is to catch drift between that earlier check
-          # and the moment of actual promotion.
+          # and the moment of actual promotion. Uses the SAME shared
+          # implementation (scripts/release/check-signal-count.ts ->
+          # checkActiveSignalCountAttribute) as staged-smoke's own
+          # signal-feed check -- one real check, not two independently
+          # hand-copied ones that could drift apart.
           set +e
           npx --yes vercel@${VERCEL_CLI_VERSION} curl /signals \
             --deployment "$DEPLOYMENT_URL" \
@@ -1152,12 +1196,16 @@ jobs:
           [ "$SIGNALS_CURL_EXIT" -eq 0 ] || { echo "::error::Re-check /signals vercel curl failed (exit $SIGNALS_CURL_EXIT). STOP -- do not promote."; sed "s/${VERCEL_TOKEN}/[REDACTED]/g" /tmp/recheck-signals-stderr.txt 2>/dev/null; exit 1; }
           SIGNALS_STATUS="$(cat /tmp/recheck-signals-status.txt)"
           [ "$SIGNALS_STATUS" = "200" ] || { echo "::error::Re-check /signals returned HTTP $SIGNALS_STATUS. STOP -- do not promote."; exit 1; }
-          if grep -q "No signals detected" /tmp/recheck-signals.html; then
-            echo "::error::Re-check /signals returned HTTP 200 but the feed is EMPTY. STOP -- do not promote. See docs/runbooks/pr45-migration-and-backfill.md."
+          set +e
+          RECHECK_OUTPUT="$(node --import tsx scripts/release/check-signal-count.ts /tmp/recheck-signals.html)"
+          RECHECK_EXIT=$?
+          set -e
+          if [ "$RECHECK_EXIT" -ne 0 ]; then
+            echo "::error::Re-check /signals: data-active-signal-count contract check failed: $RECHECK_OUTPUT. STOP -- do not promote. See docs/runbooks/pr45-migration-and-backfill.md."
             exit 1
           fi
-          grep -qE '[1-9][0-9]* active signals? detected' /tmp/recheck-signals.html || { echo "::error::Re-check /signals: expected non-empty-feed marker not found. STOP -- do not promote."; exit 1; }
-          echo "Re-check signal feed smoke: HTTP $SIGNALS_STATUS, feed genuinely non-empty."
+          RECHECK_COUNT="$(echo "$RECHECK_OUTPUT" | awk '{print $2}')"
+          echo "Re-check signal feed smoke: HTTP $SIGNALS_STATUS, feed genuinely non-empty ($RECHECK_COUNT active signals, verified via data-active-signal-count)."
           rm -f /tmp/recheck-signals.html /tmp/recheck-signals-status.txt /tmp/recheck-signals-stderr.txt
 
           set +e

@@ -537,33 +537,79 @@ export function checkHealthJson(json: unknown): { ok: boolean; detail?: string }
 }
 
 /**
- * REAL INCIDENT THIS CLOSES: /api/health verifies DATABASE
- * CONNECTIVITY, not the actual signal-listing QUERY /signals depends
- * on. A schema gap (has_verified_source missing) or an incomplete
- * has_verified_source backfill produces HTTP 200 with an EMPTY feed --
- * exactly the failure mode that triggered the emergency rollback this
- * release-hardening pass responds to. checkHealthJson alone would not
- * have caught it; this check runs on the LIVE domain's /signals page
- * HTML, after cutover, in the same verifyDomain pass as the other
- * checks -- if it fails, the SAME rollback path already wired for
- * every other check in this function triggers automatically.
+ * REAL INCIDENT THIS CLOSES (first pass): /api/health verifies
+ * DATABASE CONNECTIVITY, not the actual signal-listing QUERY /signals
+ * depends on. A schema gap or an incomplete has_verified_source
+ * backfill produces HTTP 200 with an EMPTY feed -- exactly the
+ * failure mode that triggered the emergency rollback this release-
+ * hardening pass responds to.
  *
- * The page renders a real, checkable marker ("N active signal(s)
- * detected") on success, and a distinct empty-state string ("No
- * signals detected") when the feed is empty -- both are asserted
- * explicitly, matching the same technique already used in
- * production-release.yml's own staged-smoke/pre-promotion-recheck
- * jobs (this function is the SAME check, applied to the real live
- * domain rather than the pre-cutover staged deployment URL).
+ * REAL INCIDENT THIS CLOSES (second pass -- the fragile-text-check
+ * itself): the FIRST fix checked for a continuous text substring like
+ * "128 active signals detected" in the raw SSR HTML. But React's
+ * server-side rendering inserts HTML comments (<!-- -->) between
+ * adjacent JSX expression children for hydration bookkeeping -- the
+ * raw markup for `{signals.length} active signal{s} detected` is
+ * genuinely `128<!-- --> active signal<!-- --><!-- --> detected`, not
+ * a continuous string. This produced a REAL false negative (release
+ * blocked) on a genuinely healthy system (128 ACTIVE signals correctly
+ * gated open) during an actual production release attempt.
+ *
+ * Fixed properly, not patched around the specific comment pattern
+ * (which is itself an unstable implementation detail of React's
+ * hydration strategy, liable to change again): the page now emits a
+ * real, stable, machine-readable contract --
+ * `data-active-signal-count="<N>"` -- as an HTML ATTRIBUTE value.
+ * Unlike adjacent JSX text children, an attribute value is ALWAYS a
+ * single, uninterrupted string in the emitted markup regardless of
+ * hydration bookkeeping; this check is not coupled to React's
+ * rendering internals at all.
+ *
+ * Fail-closed by construction: the attribute must appear EXACTLY
+ * ONCE (a duplicate is itself untrustworthy -- which one is real?),
+ * its value must parse as a non-negative integer, and that integer
+ * must be strictly greater than zero. Missing, duplicated, non-
+ * numeric, or zero all fail -- none are treated as "probably fine."
+ *
+ * This is the ONE shared implementation used by BOTH
+ * production-release.yml's staged-smoke and pre-promotion-recheck
+ * jobs (via scripts/release/check-signal-count.ts, a thin CLI
+ * wrapper) AND this function's own caller in run-domain-cutover.ts's
+ * verifyDomain (the real post-cutover, live-domain check) -- one
+ * real implementation, three call sites, not three independently
+ * hand-copied regexes that could drift out of sync with each other.
  */
-export function checkSignalFeedNonEmpty(html: string): { ok: boolean; detail?: string } {
-  if (/No signals detected/.test(html)) {
-    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'signals-feed-empty') }
+export function checkActiveSignalCountAttribute(html: string): {
+  ok: boolean
+  detail?: string
+  count?: number
+} {
+  const matches = [...html.matchAll(/data-active-signal-count="(-?\d+)"/g)]
+
+  if (matches.length === 0) {
+    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'signal-count-attribute-missing') }
   }
-  if (!/[1-9][0-9]* active signals? detected/.test(html)) {
-    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'signals-feed-marker-missing') }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      detail: safeDetail('CONTENT_MISMATCH', 'signal-count-attribute-duplicated'),
+    }
   }
-  return { ok: true }
+
+  const rawValue = matches[0]?.[1]
+  if (rawValue === undefined) {
+    return { ok: false, detail: safeDetail('CONTENT_MISMATCH', 'signal-count-attribute-missing') }
+  }
+
+  const count = Number(rawValue)
+  if (!Number.isInteger(count) || count <= 0) {
+    return {
+      ok: false,
+      detail: safeDetail('CONTENT_MISMATCH', 'signal-count-attribute-not-positive-integer'),
+    }
+  }
+
+  return { ok: true, count }
 }
 
 export function checkCommitSha(
