@@ -40,7 +40,28 @@ export default async function SignalsPage({
   })
 
   return (
-    <div className="mx-auto max-w-7xl">
+    <div className="mx-auto max-w-7xl" data-active-signal-count={signals.length}>
+      {/*
+        Real fix (production incident, third architectural review):
+        release smoke checks previously grepped the RAW SSR HTML for a
+        continuous text substring like "128 active signals detected" --
+        but React's server-side rendering inserts HTML comments
+        (<!-- -->) between adjacent JSX expression children for
+        hydration bookkeeping, so the raw markup for
+        `{signals.length} active signal{s} detected` is genuinely
+        `128<!-- --> active signal<!-- --><!-- --> detected`, not a
+        continuous string -- a real, structural false negative for any
+        naive text-substring check, unrelated to whether the feed is
+        actually healthy. An HTML *attribute* value, unlike adjacent
+        JSX text children, is always a single, uninterrupted string in
+        the emitted markup regardless of hydration bookkeeping --
+        data-active-signal-count is the stable, machine-readable
+        contract release smoke/TOCTOU checks against instead. This is
+        the SAME `signals.length` already gated by
+        getSignals()'s own has_verified_source filter, so it directly
+        reflects the real publication-gate state, not a separate,
+        possibly-out-of-sync count.
+      */}
       <div className="border-b border-observatory-border px-6 py-8">
         <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">SIGNAL DISCOVERY</p>
         <h1 className="text-2xl font-light text-text-primary">Signal Feed</h1>

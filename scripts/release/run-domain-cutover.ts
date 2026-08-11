@@ -46,7 +46,7 @@ import {
   safeDetail,
   checkRootContent,
   checkHealthJson,
-  checkSignalFeedNonEmpty,
+  checkActiveSignalCountAttribute,
   checkCommitSha,
   checkOpenGraphTagPresent,
   extractOpenGraphImageUrl,
@@ -276,11 +276,14 @@ async function main(): Promise<void> {
       // incident this closes: health above only proves DATABASE
       // CONNECTIVITY, not that the actual signal-listing query
       // succeeds and returns something non-empty -- see
-      // checkSignalFeedNonEmpty's own docstring for the full
-      // rationale. Runs on the LIVE domain, immediately after cutover,
-      // in the SAME verify-then-rollback pass as every other check
-      // here -- a failure here triggers the identical automatic
-      // rollback already wired for root/health/SHA/OG.
+      // checkActiveSignalCountAttribute's own docstring for the full
+      // rationale (including why a text-substring check was itself a
+      // real production false-negative, fixed by a stable
+      // data-active-signal-count HTML attribute instead). Runs on the
+      // LIVE domain, immediately after cutover, in the SAME verify-
+      // then-rollback pass as every other check here -- a failure
+      // here triggers the identical automatic rollback already wired
+      // for root/health/SHA/OG.
       const signalsResp = await fetch(`https://${domain}/signals`, {
         signal: AbortSignal.timeout(timeoutMs),
       })
@@ -288,7 +291,7 @@ async function main(): Promise<void> {
       const signalsBytes = await readCapped(signalsResp.body, MAX_HTML_BYTES)
       if (signalsBytes === null) return fail('BODY_TOO_LARGE', 'signals')
       const signalsText = new TextDecoder().decode(signalsBytes)
-      const signalFeedCheck = checkSignalFeedNonEmpty(signalsText)
+      const signalFeedCheck = checkActiveSignalCountAttribute(signalsText)
       if (!signalFeedCheck.ok) return { ok: false, detail: signalFeedCheck.detail }
 
       // 3. Exact commit SHA. Read by STAGED DEPLOYMENT ID, not by domain

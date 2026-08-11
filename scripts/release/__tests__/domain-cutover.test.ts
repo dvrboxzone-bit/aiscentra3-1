@@ -27,7 +27,7 @@ import {
   reconcileHolder,
   checkRootContent,
   checkHealthJson,
-  checkSignalFeedNonEmpty,
+  checkActiveSignalCountAttribute,
   checkCommitSha,
   checkOpenGraphTagPresent,
   extractOpenGraphImageUrl,
@@ -640,41 +640,78 @@ describe('pure content checks', () => {
     assert.equal(checkHealthJson({}).ok, false)
   })
 
-  test('signal feed non-empty -- real incident-driven check (health alone would have missed this)', () => {
-    // A real page fragment matching /signals's own rendering pattern.
+  test('active signal count attribute -- real incident-driven check, immune to React SSR hydration comments (health alone would have missed the empty-feed case; a text-substring check itself produced a real production false negative)', () => {
+    // REAL PRODUCTION INCIDENT this specific test reproduces exactly:
+    // React's SSR inserts <!-- --> comments between adjacent JSX
+    // expression children -- the raw markup for
+    // `{signals.length} active signal{s} detected` is genuinely
+    // `128<!-- --> active signal<!-- --><!-- --> detected`, not a
+    // continuous string. A text-substring check against this exact
+    // fragment correctly FAILED in production even though the system
+    // was healthy (128 real ACTIVE signals, correctly gated open).
+    // data-active-signal-count is immune to this because an HTML
+    // attribute value is never split by adjacent-children hydration
+    // comments -- it is always one continuous string.
+    const realSsrFragmentWithComments =
+      '<div data-active-signal-count="128"><p class="mt-2 text-sm">128<!-- --> active signal<!-- --><!-- --> detected</p></div>'
+    const result = checkActiveSignalCountAttribute(realSsrFragmentWithComments)
     assert.equal(
-      checkSignalFeedNonEmpty('<html><p>42 active signals detected</p></html>').ok,
+      result.ok,
       true,
-      'a genuine positive count must pass',
+      'the attribute-based check must pass on the EXACT real SSR fragment that broke the old text check',
     )
+    assert.equal(result.count, 128)
+  })
+
+  test('a genuine positive count passes, count value is returned', () => {
+    const result = checkActiveSignalCountAttribute('<div data-active-signal-count="42">...</div>')
+    assert.equal(result.ok, true)
+    assert.equal(result.count, 42)
+  })
+
+  test('a count of exactly 1 (singular, no special-casing needed for an attribute value) passes', () => {
     assert.equal(
-      checkSignalFeedNonEmpty('<html><p>1 active signal detected</p></html>').ok,
+      checkActiveSignalCountAttribute('<div data-active-signal-count="1">...</div>').ok,
       true,
-      'singular form (1 signal, no trailing s) must also pass',
     )
   })
 
-  test('signal feed EMPTY (the exact PR #45 incident failure mode) is correctly rejected', () => {
+  test('count=0 fails closed -- an empty feed must never be treated as acceptable', () => {
+    const result = checkActiveSignalCountAttribute('<div data-active-signal-count="0">...</div>')
+    assert.equal(result.ok, false, 'zero is not a genuine non-empty feed')
+  })
+
+  test('a negative count fails closed (malformed/impossible value)', () => {
     assert.equal(
-      checkSignalFeedNonEmpty('<html><p>No signals detected in this category yet.</p></html>').ok,
+      checkActiveSignalCountAttribute('<div data-active-signal-count="-5">...</div>').ok,
       false,
-      'the real empty-state marker must fail this check -- this IS the incident PR #45 caused',
     )
   })
 
-  test('a page with neither marker (structure changed, or genuinely zero with no empty-state text) fails closed', () => {
+  test('a non-integer count fails closed', () => {
     assert.equal(
-      checkSignalFeedNonEmpty('<html><p>Something else entirely</p></html>').ok,
+      checkActiveSignalCountAttribute('<div data-active-signal-count="12.5">...</div>').ok,
       false,
-      'absence of the expected positive-count marker must fail closed, not pass by default',
     )
   })
 
-  test('a zero count (if ever rendered as "0 active signals detected") does NOT pass -- only a real positive count does', () => {
+  test('the attribute entirely MISSING fails closed -- never assumed to be fine by default', () => {
     assert.equal(
-      checkSignalFeedNonEmpty('<html><p>0 active signals detected</p></html>').ok,
+      checkActiveSignalCountAttribute(
+        '<html><p>Something else entirely, no attribute at all</p></html>',
+      ).ok,
       false,
-      'zero is not a genuine non-empty feed, even if rendered without the "No signals detected" empty-state text',
+    )
+  })
+
+  test('the attribute appearing TWICE (duplicated) fails closed -- ambiguous, which one is real?', () => {
+    const html =
+      '<div data-active-signal-count="42">...</div><div data-active-signal-count="7">stale cached fragment</div>'
+    const result = checkActiveSignalCountAttribute(html)
+    assert.equal(
+      result.ok,
+      false,
+      'a duplicated attribute must never be silently resolved by picking one value',
     )
   })
 
