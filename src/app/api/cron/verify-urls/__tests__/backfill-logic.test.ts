@@ -14,7 +14,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { drainOnePage, reconcileStaleGates } from '../route'
+import { drainOnePage, reconcileStaleGates, recomputeSignalGate } from '../route'
 
 // Real fetch/DNS are not exercised here -- verifyUrlReachable itself
 // is unit-tested exhaustively in source-links.test.ts. This mock
@@ -463,10 +463,11 @@ describe('reconcileStaleGates — real production code (independent review, iter
     // write succeeded (durably persisted), but the LATER
     // has_verified_source recompute for its signal failed (read/RPC/
     // write error) -- exactly the scenario reconcileStaleGates exists
-    // to repair. This test proves the full cycle: discovery (real
-    // reconcileStaleGates code) THEN a successful repair write, using
-    // the same read-signal -> RPC compute -> update pattern the real
-    // POST handler applies to every signal reconcileStaleGates returns.
+    // to repair. This test proves the full cycle using ONLY real,
+    // exported production code for BOTH halves: reconcileStaleGates
+    // (discovery) THEN recomputeSignalGate (independent review,
+    // iteration 5 -- the same helper the real POST handler now calls,
+    // not a hand-duplicated copy of its logic).
     const signalId = 'sig-previously-failed-recompute'
     const observationId = 'obs-genuinely-verified'
 
@@ -475,17 +476,15 @@ describe('reconcileStaleGates — real production code (independent review, iter
       verifiedObservationIds: new Set([observationId]), // the observation's own write DID succeed previously
     })
 
-    // Step 1: the next regular invocation's reconciliation pass
-    // (real production code) discovers the stale signal.
+    // Step 1: the next regular invocation's reconciliation pass (real
+    // production code) discovers the stale signal.
     const outcome = await reconcileStaleGates(client, true)
     assert.equal(outcome.failures, 0)
     assert.equal(outcome.signalIds.has(signalId), true, 'the stale signal must be discovered')
 
-    // Step 2: apply the SAME repair pattern the real POST handler uses
-    // for every signal reconcileStaleGates returns -- read the
-    // signal's observation_ids, call compute_has_verified_source,
-    // write the result. Tracked via a small write-capturing extension
-    // of the same mock client style already used throughout this file.
+    // Step 2: repair it via the REAL recomputeSignalGate helper --
+    // same function the POST handler itself calls for every signal
+    // reconcileStaleGates returns.
     let writtenValue: boolean | null = null
     const writeClient = {
       from: (table: string) => {
@@ -510,18 +509,9 @@ describe('reconcileStaleGates — real production code (independent review, iter
     }
 
     for (const id of outcome.signalIds) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sigResult = await (writeClient as any).from('signals').select().eq().single()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rpcResult = await (writeClient as any).rpc('compute_has_verified_source', {
-        p_observation_ids: sigResult.data.observation_ids,
-      })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (writeClient as any)
-        .from('signals')
-        .update({ has_verified_source: rpcResult.data === true })
-        .eq()
       assert.equal(id, signalId)
+      const repair = await recomputeSignalGate(writeClient, id)
+      assert.equal(repair.ok, true, 'the repair via the real production helper must succeed')
     }
 
     assert.equal(
@@ -529,5 +519,103 @@ describe('reconcileStaleGates — real production code (independent review, iter
       true,
       'the previously-stuck signal must genuinely end up with has_verified_source=true after the repair -- the full cycle is complete, not just discovery',
     )
+  })
+
+  test('recomputeSignalGate: a read/RPC/write failure at any stage is honestly reported as {ok: false}, never treated as success', async () => {
+    const failingReadClient = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ single: async () => ({ data: null, error: { message: 'read failed' } }) }),
+        }),
+      }),
+      rpc: async () => ({ data: null, error: null }),
+    }
+    assert.equal((await recomputeSignalGate(failingReadClient, 'sig-1')).ok, false)
+
+    const failingRpcClient = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ single: async () => ({ data: { observation_ids: [] }, error: null }) }),
+        }),
+      }),
+      rpc: async () => ({ data: null, error: { message: 'rpc failed' } }),
+    }
+    assert.equal((await recomputeSignalGate(failingRpcClient, 'sig-1')).ok, false)
+
+    const failingWriteClient = {
+      from: (table: string) => {
+        if (table !== 'signals') return {}
+        return {
+          select: () => ({
+            eq: () => ({ single: async () => ({ data: { observation_ids: [] }, error: null }) }),
+          }),
+          update: () => ({ eq: async () => ({ error: { message: 'write failed' } }) }),
+        }
+      },
+      rpc: async () => ({ data: true, error: null }),
+    }
+    assert.equal((await recomputeSignalGate(failingWriteClient, 'sig-1')).ok, false)
+  })
+
+  test('recomputeSignalGate: a signal that no longer exists is {ok: true}, not a failure -- matches the original inline behavior exactly', async () => {
+    const client = {
+      from: () => ({
+        select: () => ({ eq: () => ({ single: async () => ({ data: null, error: null }) }) }),
+      }),
+      rpc: async () => ({ data: null, error: null }),
+    }
+    assert.equal((await recomputeSignalGate(client, 'sig-gone')).ok, true)
+  })
+
+  test('a subsequent regular invocation correctly fixes a signal after a genuine earlier failure -- write once fails, retry via reconcileStaleGates + recomputeSignalGate succeeds', async () => {
+    // Two-invocation simulation: invocation 1's write fails (the real
+    // incident scenario); invocation 2 (a later regular call)
+    // rediscovers the same stale signal via reconcileStaleGates and
+    // repairs it via recomputeSignalGate -- both real production
+    // functions, proving retry genuinely works end-to-end, not just
+    // that each function individually behaves correctly in isolation.
+    const signalId = 'sig-retry-target'
+    const observationId = 'obs-retry-verified'
+    let invocationCount = 0
+
+    const flakyThenWorkingClient = {
+      from: (table: string) => {
+        if (table !== 'signals') return {}
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({ data: { observation_ids: [observationId] }, error: null }),
+            }),
+          }),
+          update: () => ({
+            eq: async () => {
+              invocationCount++
+              if (invocationCount === 1) {
+                return { error: { message: 'transient write failure' } } // invocation 1: genuine failure
+              }
+              return { error: null } // invocation 2: genuinely succeeds
+            },
+          }),
+        }
+      },
+      rpc: async () => ({ data: true, error: null }),
+    }
+
+    const attempt1 = await recomputeSignalGate(flakyThenWorkingClient, signalId)
+    assert.equal(attempt1.ok, false, 'the first attempt must honestly report failure')
+
+    const reconcileClient = makeReconcileMockClient({
+      staleSignals: [{ id: signalId, observation_ids: [observationId], status: 'ACTIVE' }],
+      verifiedObservationIds: new Set([observationId]),
+    })
+    const reconciled = await reconcileStaleGates(reconcileClient, true)
+    assert.equal(
+      reconciled.signalIds.has(signalId),
+      true,
+      'the next regular invocation must rediscover the same stale signal',
+    )
+
+    const attempt2 = await recomputeSignalGate(flakyThenWorkingClient, signalId)
+    assert.equal(attempt2.ok, true, 'the retried attempt (a genuinely separate call) must succeed')
   })
 })

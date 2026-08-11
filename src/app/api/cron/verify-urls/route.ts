@@ -284,6 +284,70 @@ export async function reconcileStaleGates(
   return { signalIds: result, failures: 0 }
 }
 
+/**
+ * Recomputes and writes the has_verified_source publication gate for
+ * ONE signal. Extracted from the POST handler's own inline loop
+ * (independent review, iteration 5) into a small, exported,
+ * independently-testable production helper -- no behavior change:
+ * exactly the same read-signal -> RPC compute_has_verified_source ->
+ * write sequence, with the same error handling (each failure mode
+ * logged and counted, never silently swallowed).
+ *
+ * REAL REQUIREMENT (unchanged): this never sets has_verified_source
+ * = true without a genuinely-verified safe URL --
+ * compute_has_verified_source (PostgreSQL function) only returns true
+ * when at least one linked observation has url_verified_ok = true,
+ * which is only ever set by a real, completed verifyUrlReachable()
+ * call. Nothing here weakens or bypasses that.
+ */
+export async function recomputeSignalGate(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  signalId: string,
+): Promise<{ ok: boolean }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: sig, error: sigReadError } = await (supabase as any)
+    .from('signals')
+    .select('observation_ids')
+    .eq('id', signalId)
+    .single()
+  if (sigReadError) {
+    console.error(
+      `[cron/verify-urls] failed to read signal ${signalId} for gate recompute: ${sigReadError.message}`,
+    )
+    return { ok: false }
+  }
+  if (!sig) return { ok: true } // signal no longer exists -- nothing to do, not a failure
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: gateResult, error: rpcError } = await (supabase as any).rpc(
+    'compute_has_verified_source',
+    {
+      p_observation_ids: sig.observation_ids,
+    },
+  )
+  if (rpcError) {
+    console.error(
+      `[cron/verify-urls] compute_has_verified_source RPC failed for signal ${signalId}: ${rpcError.message}`,
+    )
+    return { ok: false }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: gateWriteError } = await (supabase as any)
+    .from('signals')
+    .update({ has_verified_source: gateResult === true })
+    .eq('id', signalId)
+  if (gateWriteError) {
+    console.error(
+      `[cron/verify-urls] failed to write has_verified_source for signal ${signalId}: ${gateWriteError.message}`,
+    )
+    return { ok: false }
+  }
+
+  return { ok: true }
+}
+
 export async function drainOnePage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
@@ -578,57 +642,14 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     // Recompute the publication gate for every affected signal (both
     // newly-verified-this-invocation AND reconciled leftovers from a
-    // prior invocation's failure). Each signal's own observation_ids
-    // array is the source of truth for compute_has_verified_source, so
-    // this is correct regardless of how many observations link to it.
-    // REAL REQUIREMENT: this never sets has_verified_source=true
-    // without a genuinely-verified safe URL --
-    // compute_has_verified_source (PostgreSQL function) only returns
-    // true when at least one linked observation has
-    // url_verified_ok=true, which is only ever set by a real,
-    // completed verifyUrlReachable() call above. Nothing in this loop
-    // weakens or bypasses that.
+    // prior invocation's failure), via the extracted, independently-
+    // testable recomputeSignalGate helper (independent review,
+    // iteration 5) -- same behavior as the prior inline loop, just no
+    // longer duplicated inline logic.
     let gateWriteFailures = 0
     for (const signalId of allAffectedSignalIds) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: sig, error: sigReadError } = await (lockClient as any)
-        .from('signals')
-        .select('observation_ids')
-        .eq('id', signalId)
-        .single()
-      if (sigReadError) {
-        gateWriteFailures++
-        console.error(
-          `[cron/verify-urls] failed to read signal ${signalId} for gate recompute: ${sigReadError.message}`,
-        )
-        continue
-      }
-      if (!sig) continue
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: gateResult, error: rpcError } = await (lockClient as any).rpc(
-        'compute_has_verified_source',
-        { p_observation_ids: sig.observation_ids },
-      )
-      if (rpcError) {
-        gateWriteFailures++
-        console.error(
-          `[cron/verify-urls] compute_has_verified_source RPC failed for signal ${signalId}: ${rpcError.message}`,
-        )
-        continue
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: gateWriteError } = await (lockClient as any)
-        .from('signals')
-        .update({ has_verified_source: gateResult === true })
-        .eq('id', signalId)
-      if (gateWriteError) {
-        gateWriteFailures++
-        console.error(
-          `[cron/verify-urls] failed to write has_verified_source for signal ${signalId}: ${gateWriteError.message}`,
-        )
-      }
+      const { ok } = await recomputeSignalGate(lockClient, signalId)
+      if (!ok) gateWriteFailures++
     }
 
     return NextResponse.json({
