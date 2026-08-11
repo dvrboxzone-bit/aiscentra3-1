@@ -84,7 +84,7 @@ describe('processBatchOfObservations', () => {
     assert.deepEqual(processedIds, ['obs-1'], 'obs-2 must never have been attempted')
     assert.equal(stats.stopped_reason, 'deadline_exceeded')
     assert.equal(stats.retried, 1)
-    assert.equal(stats.processed, 0)
+    assert.equal(stats.attempted, 0)
     assert.deepEqual(calls.markForRetry, ['obs-1'])
   })
 
@@ -106,7 +106,7 @@ describe('processBatchOfObservations', () => {
 
     assert.equal(stats.stopped_reason, 'rate_limited')
     assert.equal(stats.retried, 1)
-    assert.equal(stats.processed, 0)
+    assert.equal(stats.attempted, 0)
     assert.deepEqual(calls.markForRetry, ['obs-1'])
     // obs-2's processObservation must never have been called -- confirmed
     // via markProcessed never being invoked for it (processObservation
@@ -161,8 +161,8 @@ describe('processBatchOfObservations', () => {
     const stats = await processBatchOfObservations([obs1, obs2], deadlineAt, deps)
 
     assert.equal(stats.stopped_reason, 'queue_empty')
-    assert.equal(stats.processed, 2)
-    assert.equal(stats.signal_created, 2)
+    assert.equal(stats.attempted, 2)
+    assert.equal(stats.succeeded, 2)
     assert.deepEqual(calls.processObservation, ['obs-1', 'obs-2'])
   })
 
@@ -202,7 +202,7 @@ describe('processBatchOfObservations', () => {
     assert.equal(stats.stopped_reason, 'budget_exhausted')
     assert.equal(stats.retried, 1, 'obs-1 must be requeued, not permanently failed')
     assert.equal(
-      stats.processed,
+      stats.attempted,
       0,
       'obs-1 must NOT count as processed -- it was refused, not completed',
     )

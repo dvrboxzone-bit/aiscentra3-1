@@ -31,6 +31,20 @@ export interface CycleMetrics {
   completedAt: number // Date.now() at cycle end
   itemsAttempted: number
   itemsSucceeded: number
+  /** REAL BUG FIXED (production incident): a legitimate, intentional
+   * rejection/archival decision (e.g. archived_prefilter,
+   * rejected_duplicate) is a correct Signal Engine outcome, not a
+   * processing failure -- tracked as its own category so
+   * itemsFailed genuinely means "something went wrong," matching the
+   * decision log's own real distinction between a REJECTED decision
+   * and an ERROR outcome. Optional -- collection cycles have no
+   * comparable "rejected" concept and may omit it (defaults to 0). */
+  itemsRejected?: number
+  /** Requeued for a later attempt (rate limit / deadline / budget) --
+   * not yet resolved this cycle, tracked separately from the final
+   * succeeded/rejected/failed split. Optional for the same reason as
+   * itemsRejected. */
+  itemsRetried?: number
   itemsFailed: number
   failureBreakdown: Record<string, number>
   stoppedReason?: string
@@ -75,6 +89,8 @@ export async function recordCycleMetrics(
       duration_ms: metrics.completedAt - metrics.startedAt,
       items_attempted: metrics.itemsAttempted,
       items_succeeded: metrics.itemsSucceeded,
+      items_rejected: metrics.itemsRejected ?? 0,
+      items_retried: metrics.itemsRetried ?? 0,
       items_failed: metrics.itemsFailed,
       failure_breakdown: metrics.failureBreakdown,
       stopped_reason: metrics.stoppedReason ?? null,

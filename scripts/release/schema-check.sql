@@ -30,7 +30,9 @@ WITH required_columns(table_name, column_name) AS (
     ('pipeline_metrics', 'latency_p50_ms'),
     ('pipeline_metrics', 'latency_p95_ms'),
     ('pipeline_metrics', 'queue_depth'),
-    ('pipeline_metrics', 'oldest_pending_age_seconds')
+    ('pipeline_metrics', 'oldest_pending_age_seconds'),
+    ('pipeline_metrics', 'items_rejected'),
+    ('pipeline_metrics', 'items_retried')
 ),
 missing_columns AS (
   SELECT 'MISSING COLUMN: ' || rc.table_name || '.' || rc.column_name AS problem

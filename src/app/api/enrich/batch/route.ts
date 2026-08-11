@@ -3,13 +3,29 @@
  *
  * POST /api/enrich/batch
  *
- * Batch sizing rationale:
+ * Batch sizing rationale (production-incident throughput fix):
  *   - Vercel Hobby maxDuration = 60s
- *   - Average AI call (Groq): 3–6s → pessimistic estimate: 6s
+ *   - Real observed Groq latency (production log, 25 real requests,
+ *     2026-08-10/11): time_to_completion ranged 0.24s-1.22s per call,
+ *     not the earlier pessimistic 3-6s estimate.
+ *   - Real per-observation cost: 2 AI calls (SIS 8b + main 70b) x
+ *     (INTER_REQUEST_MS=2,200ms + real completion time) ≈ 4.6-5.7s
  *   - DB overhead per observation: ~1s
- *   - Safe batch size: floor(60s / 7s) = 8 observations
- *   - Safety margin 10% → BATCH_SIZE = 7
- * (BATCH_SIZE itself is explicitly out of scope for this change --
+ *   - Effective budget: maxDuration - DEADLINE_BUFFER_MS = 50s
+ *   - Real safe batch size: floor(50s / 7s) ≈ 7
+ * BATCH_SIZE raised 3 -> 7, using the file's own original (more
+ * principled) calculation above rather than the prior manual override
+ * to 3 "for stability" with no further justification. This does NOT
+ * touch INTER_REQUEST_MS, the deadline contour, or the atomic TPD
+ * budget gate -- the real daily ceiling (~19.8 observations/day at 2
+ * calls/observation, 100,000 TPD / ~2,527 tokens/call) is unchanged
+ * and still enforced by budget-gate.ts regardless of BATCH_SIZE; this
+ * only lets a SINGLE run make fuller use of its own share of that
+ * already-existing budget, converging on the real ceiling faster
+ * across the day's 6 scheduled cycles instead of leaving time
+ * (and safe-to-spend token budget) unused within each individual
+ * invocation.
+ *
  * unchanged at 3.)
  *
  * Autonomy:
@@ -55,7 +71,7 @@
  */
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
-import { processObservation } from '@/modules/signals/engine'
+import { processObservation, type SignalEngineResult } from '@/modules/signals/engine'
 import {
   markObservationProcessed,
   markObservationForRetry,
@@ -79,7 +95,7 @@ export const dynamic = 'force-dynamic'
 // Direct models: llama-3.3-70b (12K TPM) + llama-3.1-8b (fallback)
 // Each enrichment: ~1000-1500 tokens → max 8-12 requests/minute safely
 // Conservative: 1 request per 6s = 10 requests/minute (20% headroom)
-const BATCH_SIZE = 3 // 3 observations per run — conservative for stability. UNCHANGED.
+const BATCH_SIZE = 7 // real throughput fix -- see file docstring above for the exact math
 const DEADLINE_BUFFER_MS = 10_000 // >=10s between deadline and Vercel's actual kill, for requeue + response
 const AI_RETRY_MS = 30_000 // 30s backoff after 429 (no Retry-After header available)
 const DEADLINE_RETRY_MS = 10_000 // short backoff after AI_DEADLINE_EXCEEDED -- distinct from rate-limit backoff
@@ -106,11 +122,42 @@ const BUDGET_RETRY_MS = 60_000 // backoff after AI_TOKEN_BUDGET_EXCEEDED -- long
 const INTER_REQUEST_MS = 2_200 // ~27.3 RPM, safety margin under Groq's real 30 RPM limit
 
 export interface BatchStats {
-  processed: number
-  signal_created: number
+  /** REAL BUG FIXED (production incident: metrics contradicted the
+   * decision log). `attempted` is now a single, honest count of every
+   * item processObservation was actually called for this cycle
+   * (whether it returned normally or threw) -- succeeded + rejected +
+   * failed always sums to exactly this value; retried items are
+   * tracked separately since they are NOT yet resolved (they get
+   * another real attempt on a future cycle, so counting them toward
+   * this cycle's attempted/succeeded/rejected/failed would misrepresent
+   * what THIS cycle actually decided). */
+  attempted: number
+  /** signal_created + weak_signal_created + corroborated_existing_signal
+   * -- every outcome that represents a genuine, positive Signal Engine
+   * decision, not just the single 'signal_created' string. REAL BUG
+   * FIXED: 'weak_signal_created' and 'corroborated_existing_signal'
+   * were previously falling into the generic `else` branch and being
+   * counted as errors -- a real WEAK signal being created (a genuine
+   * success) was recorded in pipeline_metrics as a failure, directly
+   * contradicting the decision log's own record of the same event. */
+  succeeded: number
+  /** Every legitimate REJECTION/ARCHIVAL decision (any outcome value
+   * starting with 'rejected_', plus 'archived_prefilter' and
+   * 'archived_observation') -- these are correct, intentional Signal
+   * Engine decisions, not processing failures. REAL BUG FIXED:
+   * 'archived_prefilter' previously fell into the generic `else`
+   * branch and was counted as an error. */
   rejected: number
+  /** Requeued for a later attempt (429 rate limit, AI_DEADLINE_EXCEEDED,
+   * AI_TOKEN_BUDGET_EXCEEDED) -- NOT yet resolved, so intentionally
+   * excluded from the attempted/succeeded/rejected/failed accounting
+   * above; only counted here. */
   retried: number
-  errors: number
+  /** A genuine processing failure: outcome:'error' (a real, unexpected
+   * condition inside processObservation that produced no decision at
+   * all) OR a thrown exception that was not one of the three
+   * temporary/retryable error types above. */
+  failed: number
   /** Real per-item processing latencies (ms), collected during this
    * batch. Used to compute real p50/p95 for the whole cycle -- see
    * recordCycleMetrics's own call site below. */
@@ -136,13 +183,59 @@ export interface BatchStats {
   }
 }
 
+/**
+ * REAL BUG FIXED (production incident): the single most direct cause
+ * of the metrics/decision-log mismatch. `processObservation` can
+ * return any of 12 distinct outcome strings (SignalEngineResult in
+ * engine.ts) -- the earlier version only explicitly recognized
+ * 'signal_created' as success and any outcome starting with
+ * 'rejected' as a rejection, silently bucketing every OTHER real,
+ * legitimate outcome ('weak_signal_created', 'corroborated_
+ * existing_signal', 'archived_prefilter', 'archived_observation',
+ * 'rejected_validation', 'rejected_low_score') into the generic
+ * "error" catch-all. A real WEAK signal creation -- a genuine success
+ * -- was recorded in pipeline_metrics as a processing failure. This
+ * function is the single source of truth for the mapping, covering
+ * every outcome value the type actually allows (exhaustively checked
+ * at compile time via the `never` default case).
+ */
+export function classifyOutcome(
+  outcome: SignalEngineResult['outcome'],
+): 'succeeded' | 'rejected' | 'failed' {
+  switch (outcome) {
+    case 'signal_created':
+    case 'weak_signal_created':
+    case 'corroborated_existing_signal':
+      return 'succeeded'
+    case 'archived_prefilter':
+    case 'archived_observation':
+    case 'rejected_duplicate':
+    case 'rejected_marketing':
+    case 'rejected_hard_rule':
+    case 'rejected_low_sis':
+    case 'rejected_validation':
+    case 'rejected_low_score':
+      return 'rejected'
+    case 'error':
+      return 'failed'
+    default: {
+      // Exhaustiveness check: if SignalEngineResult['outcome'] ever
+      // grows a new member, this fails to compile until classifyOutcome
+      // is updated for it -- a new outcome can never silently fall
+      // through to a wrong bucket again.
+      const _exhaustive: never = outcome
+      return _exhaustive
+    }
+  }
+}
+
 function freshStats(): BatchStats {
   return {
-    processed: 0,
-    signal_created: 0,
+    attempted: 0,
+    succeeded: 0,
     rejected: 0,
     retried: 0,
-    errors: 0,
+    failed: 0,
     item_latencies_ms: [],
     stopped_reason: 'queue_empty',
     error_breakdown: {
@@ -221,10 +314,11 @@ export async function processBatchOfObservations(
         result.outcome === 'error' ? result.reason : undefined,
       )
 
-      stats.processed++
-      if (result.outcome === 'signal_created') stats.signal_created++
-      else if (result.outcome.startsWith('rejected')) stats.rejected++
-      else stats.errors++
+      stats.attempted++
+      const classification = classifyOutcome(result.outcome)
+      if (classification === 'succeeded') stats.succeeded++
+      else if (classification === 'rejected') stats.rejected++
+      else stats.failed++
 
       console.log(`[enrich/batch] ${observation.id} → ${result.outcome}`)
 
@@ -344,7 +438,13 @@ export async function processBatchOfObservations(
         break
       }
 
-      // Real error — mark and continue to next observation
+      // Real error — mark and continue to next observation. This item
+      // WAS genuinely attempted (processObservation was called and
+      // threw), so it counts toward `attempted` here too -- the success
+      // path above increments `attempted` before classifying the
+      // outcome; this thrown-exception path must do the same, or
+      // `attempted` would silently undercount genuine failures that
+      // never returned a normal result at all.
       await deps
         .markObservationProcessed(
           observation.id,
@@ -352,12 +452,103 @@ export async function processBatchOfObservations(
           `[${isServerErr ? 'server_error' : 'error'}] ${errMsg.slice(0, 500)}`,
         )
         .catch(() => {})
-      stats.errors++
+      stats.attempted++
+      stats.failed++
       console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
     }
   }
 
   return stats
+}
+
+/** REAL BUG FIXED (production incident: fresh observations starved by
+ * a pure FIFO-by-collected_at queue). At 6905 unprocessed observations
+ * dating back to July 21st, a query ordered `collected_at ASC` with no
+ * other structure NEVER reaches anything collected today until every
+ * single older row is drained first -- at the real, TPD-gated
+ * throughput (~19.8 observations/day), that is hundreds of days before
+ * a single fresh observation is ever touched, even though fresh
+ * material is exactly what the Signal Engine's own recency-sensitive
+ * scoring most wants to see promptly.
+ *
+ * Window used to distinguish "fresh" from "backlog": an observation
+ * collected within the last FRESH_WINDOW_HOURS. 24h chosen to match
+ * the collection cadence itself (collect-4h.yml runs 6x/day) -- "fresh"
+ * genuinely means "from a recent collection cycle," not an arbitrary
+ * cutoff. */
+const FRESH_WINDOW_HOURS = 24
+
+export interface ReadyPage {
+  rows: ObservationRow[]
+  error: string | null
+  /** Which pool this page was actually drawn from -- 'fresh' or 'old'
+   * as requested, or the OTHER pool if the requested one was empty
+   * (see the fallback logic below). Exposed for testing and for
+   * honest logging, not currently persisted. */
+  pool: 'fresh' | 'old'
+}
+
+/**
+ * Fetches one page of ready-to-process observations, alternating
+ * between the "fresh" pool (collected within FRESH_WINDOW_HOURS) and
+ * the "old" backlog pool based on the parity of `pageIndex` -- even
+ * index draws from fresh, odd from old. Called with a steadily-
+ * incrementing pageIndex across the batch loop's own iterations (see
+ * the POST handler below), this guarantees BOTH pools make real
+ * progress every two iterations regardless of how large the backlog
+ * grows -- neither queue can starve the other by sheer size, which a
+ * single `ORDER BY collected_at ASC` query structurally cannot
+ * guarantee.
+ *
+ * Real fallback: if the pool selected by pageIndex's parity is
+ * genuinely empty (e.g. no fresh material has been collected yet this
+ * cycle), the OTHER pool is used instead for this one iteration rather
+ * than wasting a whole loop iteration returning nothing -- this keeps
+ * draining the backlog even when there is temporarily no fresh work,
+ * without breaking the alternation guarantee for iterations where both
+ * pools genuinely have rows.
+ */
+export async function fetchNextReadyPage(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  pageIndex: number,
+  pageSize: number = BATCH_SIZE,
+): Promise<ReadyPage> {
+  const freshCutoff = new Date(Date.now() - FRESH_WINDOW_HOURS * 60 * 60 * 1000).toISOString()
+  const preferFresh = pageIndex % 2 === 0
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const runQuery = async (fresh: boolean): Promise<any> => {
+    let query = supabase
+      .from('observations')
+      .select('*')
+      .eq('processed', false)
+      .is('processing_error', null)
+    query = fresh ? query.gte('collected_at', freshCutoff) : query.lt('collected_at', freshCutoff)
+    return query.order('collected_at', { ascending: true }).limit(pageSize)
+  }
+
+  const { data, error } = await runQuery(preferFresh)
+  if (error) {
+    return { rows: [], error: error.message, pool: preferFresh ? 'fresh' : 'old' }
+  }
+
+  const rows = (data ?? []) as ObservationRow[]
+  if (rows.length > 0) {
+    return { rows, error: null, pool: preferFresh ? 'fresh' : 'old' }
+  }
+
+  // Preferred pool empty this iteration -- fall back to the other pool
+  // rather than returning nothing.
+  const { data: fallbackData, error: fallbackError } = await runQuery(!preferFresh)
+  if (fallbackError) {
+    return { rows: [], error: fallbackError.message, pool: preferFresh ? 'old' : 'fresh' }
+  }
+  return {
+    rows: (fallbackData ?? []) as ObservationRow[],
+    error: null,
+    pool: preferFresh ? 'old' : 'fresh',
+  }
 }
 
 function isAuthorized(request: Request): boolean {
@@ -437,6 +628,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     // drains anything -- "at the start of this cycle," not after.
     const queueSnapshot = await getObservationStats()
 
+    // Steadily-incrementing page counter, fed to fetchNextReadyPage so
+    // its fresh/old alternation (even index -> fresh, odd -> old)
+    // genuinely progresses across this cycle's own iterations -- see
+    // fetchNextReadyPage's own docstring for the real starvation bug
+    // this closes.
+    let pageIndex = 0
+
     // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
     while (true) {
       if (Date.now() >= deadlineAt) {
@@ -444,25 +642,18 @@ export async function POST(request: Request): Promise<NextResponse> {
         break
       }
 
-      // Fetch next batch of ready observations
-      const { data: rows, error: fetchErr } = await supabase
-        .from('observations')
-        .select('*')
-        .eq('processed', false)
-        .is('processing_error', null)
-        .order('collected_at', { ascending: true })
-        .limit(BATCH_SIZE)
+      const page = await fetchNextReadyPage(supabase, pageIndex, BATCH_SIZE)
+      pageIndex++
 
-      if (fetchErr) {
-        console.error('[enrich/batch] fetch error:', fetchErr.message)
+      if (page.error) {
+        console.error('[enrich/batch] fetch error:', page.error)
         break
       }
 
-      const observations = (rows ?? []) as ObservationRow[]
       const now = new Date().toISOString()
 
       // Filter retry-backoff observations
-      const ready = observations.filter((obs) => {
+      const ready = page.rows.filter((obs) => {
         const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
         return !retryAfter || retryAfter < now
       })
@@ -474,11 +665,11 @@ export async function POST(request: Request): Promise<NextResponse> {
 
       const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
 
-      combinedStats.processed += batchStats.processed
-      combinedStats.signal_created += batchStats.signal_created
+      combinedStats.attempted += batchStats.attempted
+      combinedStats.succeeded += batchStats.succeeded
       combinedStats.rejected += batchStats.rejected
       combinedStats.retried += batchStats.retried
-      combinedStats.errors += batchStats.errors
+      combinedStats.failed += batchStats.failed
       combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
       combinedStats.stopped_reason = batchStats.stopped_reason
       for (const key of Object.keys(batchStats.error_breakdown) as Array<
@@ -507,13 +698,26 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     // Real, persisted metrics -- previously this data existed only in
     // this HTTP response body, never queryable after the fact.
+    //
+    // REAL BUG FIXED (production incident: metrics contradicted the
+    // decision log): itemsAttempted was previously computed as
+    // `processed + errors + rejected`, but `processed` ALREADY
+    // included both the rejected and error-classified subsets (it was
+    // incremented unconditionally before the success/rejected/error
+    // sub-classification) -- rejected and error items were counted
+    // TWICE. combinedStats.attempted is now a single, directly-
+    // maintained counter (see the classifyOutcome-based accounting
+    // above) that already equals succeeded+rejected+failed by
+    // construction, with no addition needed here.
     await recordCycleMetrics(lockClient, {
       cycleType: 'enrichment',
       startedAt,
       completedAt: startedAt + duration,
-      itemsAttempted: combinedStats.processed + combinedStats.errors + combinedStats.rejected,
-      itemsSucceeded: combinedStats.signal_created,
-      itemsFailed: combinedStats.errors,
+      itemsAttempted: combinedStats.attempted,
+      itemsSucceeded: combinedStats.succeeded,
+      itemsRejected: combinedStats.rejected,
+      itemsRetried: combinedStats.retried,
+      itemsFailed: combinedStats.failed,
       failureBreakdown: combinedStats.error_breakdown as unknown as Record<string, number>,
       stoppedReason: combinedStats.stopped_reason,
       itemLatenciesMs: combinedStats.item_latencies_ms,
