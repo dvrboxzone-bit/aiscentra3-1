@@ -312,6 +312,24 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      # REAL BUG FIXED (production incident during PR #46 rollout): this
+      # job previously had NO checkout step at all, so the repository
+      # was never cloned into the runner -- the relative path
+      # `scripts/release/schema-check.sql` referenced by the SQL-
+      # verification step below did not exist, and psql failed with
+      # "No such file or directory". This was masked in two prior
+      # attempts by an unrelated network-connectivity failure
+      # (SUPABASE_DB_URL pointing at an IPv6-only host unreachable from
+      # the runner), which failed BEFORE psql ever tried to open the
+      # file -- once that network issue was fixed, this genuine,
+      # separate defect surfaced on its own.
+      - name: Checkout (for scripts/release/schema-check.sql only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Verify every table/column/function this release's code depends on actually exists in production
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
