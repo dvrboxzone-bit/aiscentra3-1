@@ -43,13 +43,14 @@ function makeDeps(overrides: Partial<BatchProcessingDeps> = {}): {
   }
 
   const deps: BatchProcessingDeps = {
-    fetchSourceInfo: async () => ({ trustScore: 0.8, sourceName: 'Test Source' }),
+    fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
     processObservation: (async (obs: ObservationRow) => {
       calls.processObservation.push(obs.id)
       return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
     }) as BatchProcessingDeps['processObservation'],
     markObservationProcessed: (async (id: string) => {
       calls.markProcessed.push(id)
+      return { ok: true }
     }) as BatchProcessingDeps['markObservationProcessed'],
     markObservationForRetry: (async (id: string) => {
       calls.markForRetry.push(id)

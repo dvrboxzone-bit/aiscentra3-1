@@ -27,6 +27,29 @@ import {
   AIDeadlineExceededError,
 } from './deadline'
 
+/**
+ * Thrown when a request's estimated token cost EXCEEDS the target
+ * model's own entire safety-margined TPM budget -- not merely the
+ * currently-remaining slice of it. Distinct from AIDeadlineExceededError
+ * and AITokenBudgetExceededError (this project's other two dedicated,
+ * non-provider error types) so callers can tell "this specific model
+ * can never serve a request this large, no amount of waiting will
+ * help" apart from a genuine deadline or daily-budget refusal.
+ * REAL PRODUCTION INCIDENT this exists for: see fitsWithinModelTPM's
+ * own docstring below.
+ */
+export class AIRequestTooLargeError extends Error {
+  constructor(
+    message: string,
+    public readonly model: string,
+    public readonly estimatedTokens: number,
+    public readonly modelCeiling: number,
+  ) {
+    super(message)
+    this.name = 'AI_REQUEST_TOO_LARGE'
+  }
+}
+
 // ── TPM limits per model ──────────────────────────────────────────────────────
 
 const TPM_LIMITS: Record<string, number> = {
@@ -106,6 +129,48 @@ export function checkTPMBudget(model: string, estimatedTokens: number): BudgetCh
     remainingTokens: Math.round(remaining),
     waitMs,
   }
+}
+
+/**
+ * REAL PRODUCTION INCIDENT this closes: three genuine Groq 429s on the
+ * model-chain fallback to llama-3.1-8b-instant (TPM 6,000), each with
+ * a "Requested" size (5,137-5,144 tokens) that exceeds the model's
+ * ENTIRE safety-margined per-minute budget (6,000 * 0.85 = 5,100) --
+ * not merely the currently-remaining slice of it. checkTPMBudget's own
+ * `allowed` field only ever reflects "does this fit in what's left
+ * THIS minute" -- for a request this large, `allowed` would be false
+ * regardless of usedTokens, and waitForTPMBudget would loop,
+ * repeatedly waiting for the rolling window to clear, FOREVER
+ * reporting "not yet allowed," since no amount of waiting can make an
+ * intrinsically-too-large request fit inside a limit smaller than
+ * itself. Root cause traced to a model-chain fallback (see
+ * agentComplete in agent.ts) sending the SAME full-size prompt built
+ * for a higher-TPM primary model to a much lower-TPM fallback model,
+ * with no check that the fallback model's own ceiling could ever
+ * physically accommodate it.
+ *
+ * This function answers a genuinely different question from
+ * checkTPMBudget: not "is there room RIGHT NOW," but "could this
+ * request EVER fit, even in a completely empty window." Called BEFORE
+ * any TPM wait is attempted -- a caller that gets `false` here must
+ * refuse the call immediately (never attempt the provider, never
+ * enter a wait loop that can only time out or loop forever) and
+ * requeue the underlying work instead, exactly as an oversized-for-
+ * this-model request that would otherwise surface as a real Groq 429
+ * (or an infinite/very long TPM wait) should be handled.
+ */
+export interface ModelCeilingCheck {
+  fits: boolean
+  modelCeiling: number
+}
+
+export function fitsWithinModelTPM(model: string, estimatedTokens: number): ModelCeilingCheck {
+  const defaultLimit = TPM_LIMITS['default']
+  if (defaultLimit === undefined) {
+    throw new Error("Invariant violated: TPM_LIMITS is missing its required 'default' entry.")
+  }
+  const absoluteCeiling = (TPM_LIMITS[model] ?? defaultLimit) * SAFETY_MARGIN
+  return { fits: estimatedTokens <= absoluteCeiling, modelCeiling: Math.round(absoluteCeiling) }
 }
 
 // ── Wait for budget ───────────────────────────────────────────────────────────

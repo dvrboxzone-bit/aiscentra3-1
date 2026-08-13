@@ -60,10 +60,10 @@ export async function markObservationProcessed(
   id: string,
   signalId: string | null,
   error?: string,
-): Promise<void> {
+): Promise<{ ok: boolean; writeError?: string }> {
   const supabase = createAdminClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (supabase as any)
+  const { error: writeError } = await (supabase as any)
     .from('observations')
     .update({
       processed: true,
@@ -71,6 +71,19 @@ export async function markObservationProcessed(
       processing_error: error ?? null,
     })
     .eq('id', id)
+
+  // REAL PRODUCTION INCIDENT this closes: this write's own error was
+  // previously discarded entirely (never destructured, never checked).
+  // If the write genuinely failed, the observation could remain
+  // processed=false in the database while the CALLER (enrich/batch's
+  // main loop) had already counted it as a successfully processed item
+  // in pipeline_metrics -- a write that never actually landed reported
+  // as a real success.
+  if (writeError) {
+    console.error(`[markObservationProcessed] write failed for ${id}: ${writeError.message}`)
+    return { ok: false, writeError: writeError.message }
+  }
+  return { ok: true }
 }
 
 /**

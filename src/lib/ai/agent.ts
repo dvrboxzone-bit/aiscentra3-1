@@ -17,7 +17,7 @@ import {
   type AIOptions,
   type AIResult,
 } from './client'
-import { withModelQueue } from './tpm-manager'
+import { withModelQueue, AIRequestTooLargeError } from './tpm-manager'
 import { getModelChain, type AgentRole } from './models'
 import { ensureTimeLeft, sleepWithDeadline, AIDeadlineExceededError } from './deadline'
 import {
@@ -35,6 +35,15 @@ export type ErrorKind =
   | 'client_error'
   | 'json_parse'
   | 'validation'
+  /** REAL PRODUCTION INCIDENT this closes: distinguishes "this request
+   * is physically too large for this model's own TPM budget, no
+   * amount of waiting or retrying would ever help" from a generic
+   * 'unknown' error. Without this, chain exhaustion caused entirely
+   * by AIRequestTooLargeError on every model was indistinguishable
+   * from any other permanent failure, so callers could not tell
+   * "requeue this, a larger/different model might handle it later"
+   * apart from "this content is genuinely rejectable." */
+  | 'request_too_large'
   | 'unknown'
 
 // ── Retry config ──────────────────────────────────────────────────────────────
@@ -48,6 +57,7 @@ function backoffMs(attempt: number, retryAfterMs?: number): number {
 }
 
 function classifyError(err: unknown): ErrorKind {
+  if (err instanceof AIRequestTooLargeError) return 'request_too_large'
   if (err instanceof AIProviderError) {
     if (err.isRateLimit) return 'rate_limit'
     if (err.isServerError) return 'server_error'
@@ -189,6 +199,26 @@ export async function agentComplete(
     )
   }
 
+  // REAL PRODUCTION INCIDENT this closes: if EVERY model in the chain
+  // refused specifically because the request physically cannot fit
+  // that model's own TPM budget (see AIRequestTooLargeError's own
+  // docstring), the caller must be able to see THAT via
+  // `instanceof AIRequestTooLargeError` -- a bare Error here would be
+  // indistinguishable from a genuine content-level failure, and the
+  // caller (processObservation / enrich/batch) would have no honest
+  // way to choose "requeue this observation" over "treat it as a
+  // permanent rejection." This is the exact chain-exhaustion path a
+  // 70b response that fails JSON/Zod validation, followed by an
+  // 8b fallback attempt too large for 8b's own budget, produces.
+  if (kinds.length > 0 && kinds.every((k) => k === 'request_too_large')) {
+    throw new AIRequestTooLargeError(
+      `[agent:${role}] All models in the chain physically cannot fit this request:\n${errors.join('\n')}`,
+      chain[chain.length - 1]?.model ?? 'unknown',
+      0,
+      0,
+    )
+  }
+
   throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
 }
 
@@ -270,6 +300,21 @@ export async function agentCompleteJSON<T>(
       chain[0]?.provider ?? 'groq',
       429,
       maxRetryAfterMs,
+    )
+  }
+
+  // REAL PRODUCTION INCIDENT this closes -- see agentComplete's
+  // identical comment above. This is the ACTUAL code path the real
+  // incident went through: callProviderJSON (invoked here) is what
+  // throws AIProviderError on a JSON-parse/schema-validation failure
+  // of a genuinely-200 primary response, triggering the fallback to a
+  // lower-TPM model with the same full prompt.
+  if (kinds.length > 0 && kinds.every((k) => k === 'request_too_large')) {
+    throw new AIRequestTooLargeError(
+      `[agent:${role}] All models in the chain physically cannot fit this request (JSON):\n${errors.join('\n')}`,
+      chain[chain.length - 1]?.model ?? 'unknown',
+      0,
+      0,
     )
   }
 

@@ -20,6 +20,7 @@ import { agentCompleteJSON } from '@/lib/ai/agent'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
+import { AIRequestTooLargeError } from '@/lib/ai/tpm-manager'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EnrichmentOutputSchema,
@@ -506,6 +507,18 @@ export async function processObservation(
     // classifier had simply been skipped. The batch handler must see
     // this to requeue the observation and stop the cycle instead.
     if (err instanceof AITokenBudgetExceededError) throw err
+    // REAL PRODUCTION INCIDENT FIX: re-throw when the request is
+    // physically too large for every model in the SIS classifier's own
+    // chain (e.g. an oversized observation, or a fallback attempt whose
+    // full prompt doesn't fit the fallback model's smaller TPM budget)
+    // -- identical rationale to the deadline/budget cases above. This
+    // is NOT a genuine SIS unavailability that's safe to silently skip:
+    // "proceed without SIS" here would let a signal be created via the
+    // looser V1 scoring path for an observation whose SIS classification
+    // never actually completed, for reasons that may well resolve on a
+    // later attempt (a different batch composition, a config change) --
+    // the batch handler must requeue this observation instead.
+    if (err instanceof AIRequestTooLargeError) throw err
     // SIS failure → proceed without SIS (V1 fallback)
     console.warn('[engine] SIS evaluation failed, proceeding without:', err)
   }
@@ -592,6 +605,19 @@ export async function processObservation(
     // message and the observation would never be retried, even though
     // the refusal is temporary and resolves once budget frees up.
     if (err instanceof AITokenBudgetExceededError) throw err
+    // REAL PRODUCTION INCIDENT FIX: re-throw for the exact same reason
+    // as the deadline/budget cases above. This is the exact chain-
+    // exhaustion path a genuine 200 response from the primary model
+    // that fails JSON/Zod validation, followed by a fallback attempt
+    // whose full (unreduced) prompt doesn't fit the fallback model's
+    // own smaller TPM budget, produces -- three real Groq 429s (limit
+    // 6,000, requested ~5,140) were the direct, observed symptom of
+    // this NOT being re-thrown here. Falling through to the generic
+    // `outcome: 'error'` below would permanently mark this observation
+    // failed via markObservationProcessed; the batch handler must
+    // requeue it instead, since a physically-too-large-for-current-
+    // models condition is not necessarily permanent.
+    if (err instanceof AIRequestTooLargeError) throw err
     const message = err instanceof Error ? err.message : 'Enrichment failed'
     return { observationId: observation.id, outcome: 'error', reason: message }
   }
