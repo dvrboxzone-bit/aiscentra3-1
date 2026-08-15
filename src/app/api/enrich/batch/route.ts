@@ -607,20 +607,29 @@ export async function runEnrichmentCycle(
       combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
     }
 
-    // If we hit rate limit, the deadline, a budget exhaustion, or a
-    // requeue write failure, stop the loop entirely -- next run (rate
-    // limit) or the requeue's own backoff (deadline) will pick this
-    // back up. A requeue failure is stopped for safety even though we
-    // don't know the observation's exact resulting state -- continuing
-    // to process further observations while one is in an uncertain
-    // state is not worth the risk.
-    if (
-      combinedStats.stopped_reason === 'rate_limited' ||
-      combinedStats.stopped_reason === 'deadline_exceeded' ||
-      combinedStats.stopped_reason === 'budget_exhausted' ||
-      combinedStats.stopped_reason === 'requeue_failed'
-    )
-      break
+    // REAL BUG FIXED (independent review): processBatchOfObservations
+    // can return any of 8 distinct terminal stopped_reason values
+    // (time_budget, rate_limited, deadline_exceeded, budget_exhausted,
+    // requeue_failed, request_too_large, source_read_failed,
+    // write_failed), but this check previously only recognized 4 of
+    // them (rate_limited, deadline_exceeded, budget_exhausted,
+    // requeue_failed) as reasons to stop -- request_too_large,
+    // source_read_failed, write_failed, and time_budget all silently
+    // fell through, letting the outer loop fetch ANOTHER page. If that
+    // next page happened to be empty (or the very observation just
+    // requeued got filtered out by its own fresh retry-backoff),
+    // combinedStats.stopped_reason was overwritten to 'queue_empty',
+    // masking the real terminal reason entirely.
+    //
+    // Fixed fail-closed as an ALLOWLIST, not a denylist: the outer
+    // loop may continue ONLY when the batch genuinely reports
+    // 'queue_empty' (a real, positive signal that this page's
+    // observations were all processed and the queue was still open for
+    // more). Every other value -- including any future terminal reason
+    // this list does not yet know about -- stops the cycle immediately,
+    // preserving the real, original stopped_reason rather than risking
+    // it being silently overwritten by a later, unrelated page fetch.
+    if (combinedStats.stopped_reason !== 'queue_empty') break
   }
 
   return combinedStats

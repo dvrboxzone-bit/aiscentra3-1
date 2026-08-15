@@ -491,3 +491,150 @@ describe('merge-blocker regression: a real AIRequestTooLargeError thrown by proc
     void calls
   })
 })
+
+describe('merge-blocker regression: runEnrichmentCycle is fail-closed -- the outer loop stops immediately on ANY terminal reason, never overwrites it by fetching another page', () => {
+  // REAL BUG this closes: the outer loop's own stop condition
+  // previously recognized only 4 of the 8 real terminal
+  // stopped_reason values (rate_limited, deadline_exceeded,
+  // budget_exhausted, requeue_failed) -- request_too_large,
+  // source_read_failed, write_failed, and time_budget all silently
+  // fell through, letting the loop fetch ANOTHER page. If that page
+  // happened to be empty, the real terminal reason was overwritten to
+  // 'queue_empty'. Each test below drives runEnrichmentCycle itself
+  // (not processBatchOfObservations in isolation) through the REAL
+  // outer loop, proving fetchObservationsPage is called exactly ONCE
+  // and the honest terminal reason survives.
+
+  function makeFetchObservationsPageOnce(obs: ObservationRow): {
+    fetchObservationsPage: BatchProcessingDeps['fetchObservationsPage']
+    callCount: () => number
+  } {
+    let calls = 0
+    const fetchObservationsPage: BatchProcessingDeps['fetchObservationsPage'] = async () => {
+      calls++
+      // Second (or later) call returns an empty page -- exactly the
+      // real production scenario that previously let 'queue_empty'
+      // silently overwrite the real terminal reason. If the fix works,
+      // this function must never be called a second time at all.
+      if (calls > 1) return { rows: [], error: null }
+      return { rows: [obs], error: null }
+    }
+    return { fetchObservationsPage, callCount: () => calls }
+  }
+
+  test('request_too_large: stopped_reason survives, fetchObservationsPage called exactly once, no second page/observation processed', async () => {
+    const obs1 = makeObservation('obs-1')
+    const { fetchObservationsPage, callCount } = makeFetchObservationsPageOnce(obs1)
+    const { deps, calls } = makeDeps({
+      fetchObservationsPage,
+      processObservation: (async (obs: ObservationRow) => {
+        calls.processObservation.push(obs.id)
+        throw new AIRequestTooLargeError('too large', 'llama-3.1-8b-instant', 5140, 5100)
+      }) as BatchProcessingDeps['processObservation'],
+    })
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(
+      stats.stopped_reason,
+      'request_too_large',
+      'the real terminal reason must survive, never overwritten to queue_empty',
+    )
+    assert.notEqual(stats.stopped_reason, 'queue_empty')
+    assert.equal(
+      callCount(),
+      1,
+      'fetchObservationsPage must be called exactly once -- the outer loop must stop immediately, never fetch a second page',
+    )
+    assert.deepEqual(
+      calls.processObservation,
+      ['obs-1'],
+      'only the one observation from the first page was ever attempted',
+    )
+  })
+
+  test('source_read_failed: stopped_reason survives, fetchObservationsPage called exactly once, no second page/observation processed', async () => {
+    const obs1 = makeObservation('obs-1')
+    const { fetchObservationsPage, callCount } = makeFetchObservationsPageOnce(obs1)
+    const { deps, calls } = makeDeps({
+      fetchObservationsPage,
+      fetchSourceInfo: async () => ({
+        ok: false,
+        trustScore: 0,
+        sourceName: '',
+        error: 'connection reset',
+      }),
+    })
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(stats.stopped_reason, 'source_read_failed')
+    assert.notEqual(stats.stopped_reason, 'queue_empty')
+    assert.equal(callCount(), 1, 'fetchObservationsPage must be called exactly once')
+    assert.deepEqual(
+      calls.processObservation,
+      [],
+      'processObservation must never run when the source read itself fails',
+    )
+  })
+
+  test('write_failed: stopped_reason survives, fetchObservationsPage called exactly once, no second page/observation processed', async () => {
+    const obs1 = makeObservation('obs-1')
+    const { fetchObservationsPage, callCount } = makeFetchObservationsPageOnce(obs1)
+    const { deps, calls } = makeDeps({
+      fetchObservationsPage,
+      markObservationProcessed: (async () => ({
+        ok: false,
+        writeError: 'connection reset',
+      })) as BatchProcessingDeps['markObservationProcessed'],
+    })
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(stats.stopped_reason, 'write_failed')
+    assert.notEqual(stats.stopped_reason, 'queue_empty')
+    assert.equal(callCount(), 1, 'fetchObservationsPage must be called exactly once')
+    assert.deepEqual(
+      calls.processObservation,
+      ['obs-1'],
+      'the one observation was genuinely processed -- only the RESULT write failed',
+    )
+  })
+
+  test('time_budget: stopped_reason survives, fetchObservationsPage called exactly once, no second page/observation processed', async () => {
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+    let calls = 0
+    const fetchObservationsPage: BatchProcessingDeps['fetchObservationsPage'] = async () => {
+      calls++
+      if (calls > 1) return { rows: [], error: null }
+      return { rows: [obs1, obs2], error: null }
+    }
+    const processedIds: string[] = []
+    const { deps } = makeDeps({
+      fetchObservationsPage,
+      processObservation: (async (obs: ObservationRow) => {
+        processedIds.push(obs.id)
+        return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
+      }) as BatchProcessingDeps['processObservation'],
+    })
+
+    // A deadline just barely under processBatchOfObservations' own
+    // 8-second per-item safety margin (msUntilDeadline(deadlineAt) <
+    // 8_000) -- genuinely triggers a real time_budget stop on the
+    // FIRST observation, exactly matching real production timing
+    // logic, not a synthetic override of the stop condition itself.
+    const deadlineAt = Date.now() + 5_000
+
+    const stats = await runEnrichmentCycle(deadlineAt, deps)
+
+    assert.equal(stats.stopped_reason, 'time_budget')
+    assert.notEqual(stats.stopped_reason, 'queue_empty')
+    assert.equal(calls, 1, 'fetchObservationsPage must be called exactly once')
+    assert.deepEqual(
+      processedIds,
+      [],
+      'neither observation should be processed -- the deadline check runs before the first item',
+    )
+  })
+})
