@@ -64,6 +64,7 @@ import {
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
+import { AIRequestTooLargeError } from '@/lib/ai/tpm-manager'
 import { recordCycleMetrics } from '@/lib/metrics'
 import {
   acquireEnrichmentLock,
@@ -87,6 +88,25 @@ const BUDGET_RETRY_MS = 60_000 // backoff after AI_TOKEN_BUDGET_EXCEEDED -- long
 // since a daily/rolling-window budget refusal will not resolve in seconds. The real backstop
 // is the next scheduled enrichment cycle (~4h away, see enrich-batch-hourly.yml), which will
 // re-fetch this observation regardless of the exact value once its retry_after has passed.
+// REAL PRODUCTION INCIDENT this closes: AI_REQUEST_TOO_LARGE (see
+// AIRequestTooLargeError's own docstring in tpm-manager.ts) previously
+// fell through to a real Groq 429 (three confirmed instances: limit
+// 6,000, used 1,154-1,532, requested 5,137-5,144) instead of being
+// caught here. Backoff set equal to BUDGET_RETRY_MS -- a request this
+// large for the current model chain is unlikely to resolve on the
+// very next attempt, but content/config CAN change between cycles
+// (e.g. a shorter observation body after re-collection, or a model-
+// chain config change), so this is a genuine requeue, not a permanent
+// rejection.
+const REQUEST_TOO_LARGE_RETRY_MS = 60_000
+// REAL PRODUCTION INCIDENT this closes: a genuine Source-table read
+// failure (network error, RLS issue, connection reset) must be
+// requeued honestly, not silently substituted with a fabricated
+// trustScore/sourceName -- see FetchSourceInfoResult's own docstring.
+// Same backoff duration as a budget/deadline requeue: a transient DB
+// read failure is unlikely to resolve within seconds, but the next
+// scheduled cycle will retry it regardless.
+const SOURCE_READ_RETRY_MS = 60_000
 // THROUGHPUT FIX: was 6_000ms (10 RPM effective). Confirmed against
 // Groq's own published Free-plan limits for llama-3.3-70b-versatile:
 // 30 RPM, 100,000 TPD. 6s pacing was calibrated BEFORE the atomic TPD
@@ -122,6 +142,10 @@ export interface BatchStats {
     | 'deadline_exceeded'
     | 'budget_exhausted'
     | 'requeue_failed'
+    | 'request_too_large'
+    | 'source_read_failed'
+    | 'queue_read_failed'
+    | 'write_failed'
   error_breakdown: {
     rate_limit: number
     server_error: number
@@ -132,6 +156,13 @@ export interface BatchStats {
     json_parse: number
     validation: number
     database: number
+    /** REAL PRODUCTION INCIDENT this closes: a request physically too
+     * large for its target model's own TPM budget (see
+     * AIRequestTooLargeError's own docstring in tpm-manager.ts) --
+     * distinct from a generic provider error, and handled by a
+     * controlled requeue rather than ever reaching Groq as a doomed
+     * call that would return a real 429. */
+    request_too_large: number
     unknown: number
   }
 }
@@ -155,6 +186,7 @@ function freshStats(): BatchStats {
       json_parse: 0,
       validation: 0,
       database: 0,
+      request_too_large: 0,
       unknown: 0,
     },
   }
@@ -168,8 +200,33 @@ function freshStats(): BatchStats {
  * (deadline exceeded, rate limit, requeue failure) without mocking
  * Supabase's full query-builder chain for every call it makes.
  */
+export interface FetchSourceInfoResult {
+  ok: boolean
+  trustScore: number
+  sourceName: string
+  /** REAL PRODUCTION INCIDENT this closes: distinguishes "the source
+   * genuinely has no name/trust_score set" (ok: true, defaults are
+   * legitimate) from "the read itself failed" (ok: false, error set --
+   * defaults must NEVER be used here, since scoring/processing an
+   * observation against a fabricated trustScore or a fake 'Unknown
+   * Source' name when the real source lookup simply failed produces a
+   * genuinely wrong result, not a degraded-but-honest one). */
+  error?: string
+}
+
 export interface BatchProcessingDeps {
-  fetchSourceInfo: (sourceId: string) => Promise<{ trustScore: number; sourceName: string }>
+  fetchSourceInfo: (sourceId: string) => Promise<FetchSourceInfoResult>
+  /** Fetches the next page of ready-to-process observations (real
+   * SQL/query semantics unchanged -- this is the SAME
+   * .eq('processed',false).is('processing_error',null).order(...).limit(...)
+   * query the POST handler always ran, just made an injectable
+   * dependency so a genuine read failure can be simulated in a real
+   * behavioral test, matching the same seam already used for
+   * fetchSourceInfo/processObservation/markObservationProcessed/
+   * markObservationForRetry above). */
+  fetchObservationsPage: (
+    limit: number,
+  ) => Promise<{ rows: ObservationRow[] | null; error: { message: string } | null }>
   processObservation: typeof processObservation
   markObservationProcessed: typeof markObservationProcessed
   markObservationForRetry: typeof markObservationForRetry
@@ -203,7 +260,35 @@ export async function processBatchOfObservations(
     }
 
     try {
-      const { trustScore, sourceName } = await deps.fetchSourceInfo(observation.source_id)
+      const sourceInfo = await deps.fetchSourceInfo(observation.source_id)
+
+      // REAL PRODUCTION INCIDENT this closes: a genuine Source read
+      // failure (network error, RLS issue, connection reset) was
+      // previously indistinguishable from "this source legitimately
+      // has no name/trust_score" -- both silently fell back to
+      // trustScore=0.5 and sourceName='Unknown Source', letting the
+      // observation be scored and processed against fabricated values
+      // instead of the real source's own real trust level. A genuine
+      // read failure must be requeued, never silently substituted.
+      if (!sourceInfo.ok) {
+        stats.error_breakdown.database++
+        try {
+          await deps.markObservationForRetry(observation.id, SOURCE_READ_RETRY_MS)
+          stats.retried++
+          stats.stopped_reason = 'source_read_failed'
+          console.warn(
+            `[enrich/batch] source read failed for ${observation.id} (source ${observation.source_id}): ${sourceInfo.error ?? 'unknown error'} — requeued, not scored against fabricated defaults`,
+          )
+        } catch (requeueErr) {
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after source-read-failure for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        break
+      }
+      const { trustScore, sourceName } = sourceInfo
 
       const itemStartedAt = Date.now()
       const result = await deps.processObservation(
@@ -215,11 +300,39 @@ export async function processBatchOfObservations(
       )
       stats.item_latencies_ms.push(Date.now() - itemStartedAt)
 
-      await deps.markObservationProcessed(
+      const writeResult = await deps.markObservationProcessed(
         observation.id,
         result.signalId ?? null,
         result.outcome === 'error' ? result.reason : undefined,
       )
+
+      // REAL PRODUCTION INCIDENT this closes: this write's own success
+      // was previously never checked -- stats.processed++ (and the
+      // outcome classification below it) ran UNCONDITIONALLY, so a
+      // genuine write failure (the observation's processing_error/
+      // processed/signal_id fields never actually landed in the
+      // database) was still counted as a successfully processed item in
+      // pipeline_metrics. Requeue instead of silently reporting success
+      // for a write that did not happen -- the next cycle will
+      // re-attempt both the AI processing and this write.
+      if (!writeResult.ok) {
+        stats.error_breakdown.database++
+        try {
+          await deps.markObservationForRetry(observation.id, SOURCE_READ_RETRY_MS)
+          stats.retried++
+          stats.stopped_reason = 'write_failed'
+          console.warn(
+            `[enrich/batch] markObservationProcessed write failed for ${observation.id}: ${writeResult.writeError} — requeued, not counted as processed`,
+          )
+        } catch (requeueErr) {
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after markObservationProcessed write failure for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        break
+      }
 
       stats.processed++
       if (result.outcome === 'signal_created') stats.signal_created++
@@ -233,6 +346,45 @@ export async function processBatchOfObservations(
         await sleep(INTER_REQUEST_MS)
       }
     } catch (err) {
+      // AI_REQUEST_TOO_LARGE: the request is physically too large for
+      // every model in the chain's own TPM budget (see
+      // AIRequestTooLargeError's own docstring in tpm-manager.ts).
+      // REAL PRODUCTION INCIDENT this closes: previously not caught
+      // here at all, so it fell through to the generic error path
+      // below -- but by the time it reached here, the underlying cause
+      // had ALREADY been a real Groq 429 (three confirmed instances:
+      // limit 6,000, used 1,154-1,532, requested 5,137-5,144), because
+      // nothing upstream refused the call before it reached the
+      // provider. With the upstream fix (tpm-manager.ts's
+      // fitsWithinModelTPM, checked in client.ts before ever calling
+      // the provider), this branch is now reached WITHOUT a real 429
+      // ever happening -- a controlled requeue, not a provider-side
+      // rate-limit failure. Checked BEFORE AITokenBudgetExceededError
+      // and AIDeadlineExceededError since it is a sibling type to both
+      // (not a subclass of either) and must never fall through to the
+      // generic "mark as permanent processing_error" path below.
+      if (err instanceof AIRequestTooLargeError) {
+        stats.error_breakdown.request_too_large++
+        try {
+          await deps.markObservationForRetry(observation.id, REQUEST_TOO_LARGE_RETRY_MS)
+          stats.retried++
+          stats.stopped_reason = 'request_too_large'
+          console.warn(
+            `[enrich/batch] request_too_large — ${observation.id} queued for retry in ${REQUEST_TOO_LARGE_RETRY_MS}ms (${err.model}, estimated ${err.estimatedTokens} vs ceiling ${err.modelCeiling})`,
+          )
+        } catch (requeueErr) {
+          // See the identical comment on the deadline_exceeded branch
+          // below: never report retried++ for a requeue write that did
+          // not actually succeed.
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after request_too_large for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        break
+      }
+
       // AI_TOKEN_BUDGET_EXCEEDED: temporary, exactly like AI_DEADLINE_EXCEEDED
       // below -- requeue with a distinct backoff and stop the whole batch
       // immediately. Checked BEFORE AIDeadlineExceededError and
@@ -344,14 +496,28 @@ export async function processBatchOfObservations(
         break
       }
 
-      // Real error — mark and continue to next observation
-      await deps
+      // Real error — mark and continue to next observation. If this
+      // write itself also fails, the observation naturally stays
+      // processed=false in the database (nothing here sets it to
+      // true), so it remains in the queue and will be re-attempted on
+      // a later cycle without any special handling -- but the write
+      // failure is now logged rather than silently discarded, so it is
+      // at least visible for diagnosis instead of vanishing entirely.
+      const errorWriteResult = await deps
         .markObservationProcessed(
           observation.id,
           null,
           `[${isServerErr ? 'server_error' : 'error'}] ${errMsg.slice(0, 500)}`,
         )
-        .catch(() => {})
+        .catch((writeErr: unknown) => ({
+          ok: false,
+          writeError: writeErr instanceof Error ? writeErr.message : String(writeErr),
+        }))
+      if (!errorWriteResult.ok) {
+        console.error(
+          `[enrich/batch] failed to persist error record for ${observation.id}: ${errorWriteResult.writeError}`,
+        )
+      }
       stats.errors++
       console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
     }
@@ -365,6 +531,108 @@ function isAuthorized(request: Request): boolean {
   if (!secret) return false
   const header = request.headers.get('x-cron-secret') ?? request.headers.get('authorization')
   return header === secret || header === `Bearer ${secret}`
+}
+
+/**
+ * Runs the full autonomous enrichment cycle: fetches successive pages
+ * of ready observations via deps.fetchObservationsPage (real SQL/query
+ * semantics unchanged -- see fetchObservationsPage's own docstring on
+ * BatchProcessingDeps), processes each page via
+ * processBatchOfObservations, and accumulates combined stats until the
+ * queue is empty, the deadline is hit, or a stop condition from
+ * processBatchOfObservations itself (rate limit, deadline, budget
+ * exhaustion, requeue failure) ends the cycle early.
+ *
+ * Extracted from the POST handler's own inline loop (independent
+ * review) specifically so a genuine observations-page read failure can
+ * be exercised by a real behavioral test -- fetchObservationsPage is
+ * now an injectable dependency, not a hardcoded Supabase call, and this
+ * function is exported for direct testing rather than only reachable
+ * through the full HTTP handler.
+ */
+export async function runEnrichmentCycle(
+  deadlineAt: number,
+  deps: BatchProcessingDeps,
+): Promise<BatchStats> {
+  const combinedStats = freshStats()
+
+  while (true) {
+    if (Date.now() >= deadlineAt) {
+      combinedStats.stopped_reason = 'time_budget'
+      break
+    }
+
+    const { rows, error: fetchErr } = await deps.fetchObservationsPage(BATCH_SIZE)
+
+    if (fetchErr) {
+      // REAL PRODUCTION INCIDENT this closes: combinedStats.stopped_reason
+      // starts at its default value ('queue_empty', set in freshStats())
+      // and was previously left UNCHANGED on this path -- a genuine DB
+      // read failure fetching the next page of observations was
+      // silently indistinguishable from "the queue is genuinely empty,
+      // nothing to do." A caller (or dashboard) reading the final
+      // response could not tell a real outage apart from harmless
+      // idle time.
+      combinedStats.stopped_reason = 'queue_read_failed'
+      console.error('[enrich/batch] fetch error:', fetchErr.message)
+      break
+    }
+
+    const observations = (rows ?? []) as ObservationRow[]
+    const now = new Date().toISOString()
+
+    // Filter retry-backoff observations
+    const ready = observations.filter((obs) => {
+      const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
+      return !retryAfter || retryAfter < now
+    })
+
+    if (ready.length === 0) {
+      combinedStats.stopped_reason = 'queue_empty'
+      break
+    }
+
+    const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
+
+    combinedStats.processed += batchStats.processed
+    combinedStats.signal_created += batchStats.signal_created
+    combinedStats.rejected += batchStats.rejected
+    combinedStats.retried += batchStats.retried
+    combinedStats.errors += batchStats.errors
+    combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
+    combinedStats.stopped_reason = batchStats.stopped_reason
+    for (const key of Object.keys(batchStats.error_breakdown) as Array<
+      keyof BatchStats['error_breakdown']
+    >) {
+      combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
+    }
+
+    // REAL BUG FIXED (independent review): processBatchOfObservations
+    // can return any of 8 distinct terminal stopped_reason values
+    // (time_budget, rate_limited, deadline_exceeded, budget_exhausted,
+    // requeue_failed, request_too_large, source_read_failed,
+    // write_failed), but this check previously only recognized 4 of
+    // them (rate_limited, deadline_exceeded, budget_exhausted,
+    // requeue_failed) as reasons to stop -- request_too_large,
+    // source_read_failed, write_failed, and time_budget all silently
+    // fell through, letting the outer loop fetch ANOTHER page. If that
+    // next page happened to be empty (or the very observation just
+    // requeued got filtered out by its own fresh retry-backoff),
+    // combinedStats.stopped_reason was overwritten to 'queue_empty',
+    // masking the real terminal reason entirely.
+    //
+    // Fixed fail-closed as an ALLOWLIST, not a denylist: the outer
+    // loop may continue ONLY when the batch genuinely reports
+    // 'queue_empty' (a real, positive signal that this page's
+    // observations were all processed and the queue was still open for
+    // more). Every other value -- including any future terminal reason
+    // this list does not yet know about -- stops the cycle immediately,
+    // preserving the real, original stopped_reason rather than risking
+    // it being silently overwritten by a later, unrelated page fetch.
+    if (combinedStats.stopped_reason !== 'queue_empty') break
+  }
+
+  return combinedStats
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -413,95 +681,52 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const deps: BatchProcessingDeps = {
-      fetchSourceInfo: async (sourceId: string) => {
-        const { data: source } = (await supabase
+      fetchSourceInfo: async (sourceId: string): Promise<FetchSourceInfoResult> => {
+        const { data: source, error: sourceReadError } = (await supabase
           .from('sources')
           .select('trust_score, name, type')
           .eq('id', sourceId)
           .single()) as {
           data: { trust_score: number | null; name: string | null; type: string | null } | null
+          error: { message: string } | null
+        }
+        // REAL BUG FIXED: the `error` field was previously destructured
+        // out entirely and discarded -- a genuine read failure (network
+        // error, RLS issue, connection reset) was indistinguishable from
+        // "this source legitimately has no name/trust_score," and both
+        // silently fell back to trustScore=0.5/sourceName='Unknown
+        // Source'. A real read failure must be surfaced honestly so the
+        // caller can requeue instead of scoring against fabricated
+        // values.
+        if (sourceReadError) {
+          return { ok: false, trustScore: 0, sourceName: '', error: sourceReadError.message }
         }
         return {
+          ok: true,
           trustScore: source?.trust_score ?? 0.5,
           sourceName: source?.name ?? 'Unknown Source',
         }
+      },
+      fetchObservationsPage: async (limit: number) => {
+        const { data, error } = await supabase
+          .from('observations')
+          .select('*')
+          .eq('processed', false)
+          .is('processing_error', null)
+          .order('collected_at', { ascending: true })
+          .limit(limit)
+        return { rows: (data ?? null) as ObservationRow[] | null, error }
       },
       processObservation,
       markObservationProcessed,
       markObservationForRetry,
     }
 
-    const combinedStats = freshStats()
-
     // Real queue-depth/oldest-pending snapshot taken BEFORE this cycle
     // drains anything -- "at the start of this cycle," not after.
     const queueSnapshot = await getObservationStats()
 
-    // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
-    while (true) {
-      if (Date.now() >= deadlineAt) {
-        combinedStats.stopped_reason = 'time_budget'
-        break
-      }
-
-      // Fetch next batch of ready observations
-      const { data: rows, error: fetchErr } = await supabase
-        .from('observations')
-        .select('*')
-        .eq('processed', false)
-        .is('processing_error', null)
-        .order('collected_at', { ascending: true })
-        .limit(BATCH_SIZE)
-
-      if (fetchErr) {
-        console.error('[enrich/batch] fetch error:', fetchErr.message)
-        break
-      }
-
-      const observations = (rows ?? []) as ObservationRow[]
-      const now = new Date().toISOString()
-
-      // Filter retry-backoff observations
-      const ready = observations.filter((obs) => {
-        const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
-        return !retryAfter || retryAfter < now
-      })
-
-      if (ready.length === 0) {
-        combinedStats.stopped_reason = 'queue_empty'
-        break
-      }
-
-      const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
-
-      combinedStats.processed += batchStats.processed
-      combinedStats.signal_created += batchStats.signal_created
-      combinedStats.rejected += batchStats.rejected
-      combinedStats.retried += batchStats.retried
-      combinedStats.errors += batchStats.errors
-      combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
-      combinedStats.stopped_reason = batchStats.stopped_reason
-      for (const key of Object.keys(batchStats.error_breakdown) as Array<
-        keyof BatchStats['error_breakdown']
-      >) {
-        combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
-      }
-
-      // If we hit rate limit, the deadline, or a requeue write failure,
-      // stop the loop entirely -- next run (rate limit) or the requeue's
-      // own backoff (deadline) will pick this back up. A requeue failure
-      // is stopped for safety even though we don't know the observation's
-      // exact resulting state -- continuing to process further
-      // observations while one is in an uncertain state is not worth the
-      // risk.
-      if (
-        combinedStats.stopped_reason === 'rate_limited' ||
-        combinedStats.stopped_reason === 'deadline_exceeded' ||
-        combinedStats.stopped_reason === 'budget_exhausted' ||
-        combinedStats.stopped_reason === 'requeue_failed'
-      )
-        break
-    }
+    const combinedStats = await runEnrichmentCycle(deadlineAt, deps)
 
     const duration = Date.now() - startedAt
 
