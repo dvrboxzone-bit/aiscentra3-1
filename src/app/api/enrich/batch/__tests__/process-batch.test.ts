@@ -9,6 +9,7 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { processBatchOfObservations, type BatchProcessingDeps } from '../route'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
@@ -259,5 +260,134 @@ describe('processBatchOfObservations', () => {
       'obs-2 must never have been attempted after the requeue failure',
     )
     void calls
+  })
+})
+
+describe('merge-blocker regression: source-read failure requeues without fabricated defaults', () => {
+  test('a genuine Source read failure (ok:false) requeues the observation, never scores it against a fabricated trustScore/sourceName', async () => {
+    const processedObs: Array<{ id: string; trustScore: number; sourceName: string }> = []
+    const { deps, calls } = makeDeps({
+      fetchSourceInfo: async () => ({
+        ok: false,
+        trustScore: 0,
+        sourceName: '',
+        error: 'connection reset',
+      }),
+      processObservation: (async (obs: ObservationRow, trustScore: number, sourceName: string) => {
+        processedObs.push({ id: obs.id, trustScore, sourceName })
+        return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
+      }) as BatchProcessingDeps['processObservation'],
+    })
+
+    const obs1 = makeObservation('obs-1')
+    const deadlineAt = Date.now() + 30_000
+    const stats = await processBatchOfObservations([obs1], deadlineAt, deps)
+
+    assert.equal(
+      processedObs.length,
+      0,
+      'processObservation must never be called with a fabricated trustScore/sourceName after a real source-read failure',
+    )
+    assert.deepEqual(
+      calls.markForRetry,
+      ['obs-1'],
+      'the observation must be requeued, not silently processed',
+    )
+    assert.equal(stats.retried, 1)
+    assert.equal(stats.stopped_reason, 'source_read_failed')
+    assert.equal(stats.error_breakdown.database, 1)
+  })
+
+  test('a genuine Source read failure that ALSO fails to requeue is honestly reported as requeue_failed, not retried', async () => {
+    const { deps, calls } = makeDeps({
+      fetchSourceInfo: async () => ({
+        ok: false,
+        trustScore: 0,
+        sourceName: '',
+        error: 'connection reset',
+      }),
+      markObservationForRetry: (async () => {
+        throw new Error('requeue write also failed')
+      }) as BatchProcessingDeps['markObservationForRetry'],
+    })
+
+    const obs1 = makeObservation('obs-1')
+    const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
+
+    assert.equal(
+      stats.retried,
+      0,
+      'retried must not be incremented when the requeue write itself failed',
+    )
+    assert.equal(stats.stopped_reason, 'requeue_failed')
+    assert.equal(stats.error_breakdown.requeue_failed, 1)
+    void calls
+  })
+})
+
+describe('merge-blocker regression: markObservationProcessed write failure is never counted as a successful processed item', () => {
+  test('a genuine write failure requeues the observation instead of incrementing stats.processed', async () => {
+    const { deps, calls } = makeDeps({
+      markObservationProcessed: (async () => ({
+        ok: false,
+        writeError: 'connection reset',
+      })) as BatchProcessingDeps['markObservationProcessed'],
+    })
+
+    const obs1 = makeObservation('obs-1')
+    const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
+
+    assert.equal(
+      stats.processed,
+      0,
+      'a write that never actually landed in the database must NEVER be counted as a successfully processed item',
+    )
+    assert.equal(stats.signal_created, 0)
+    assert.deepEqual(
+      calls.markForRetry,
+      ['obs-1'],
+      'the observation must be requeued so the next cycle re-attempts both processing and the write',
+    )
+    assert.equal(stats.retried, 1)
+    assert.equal(stats.stopped_reason, 'write_failed')
+    assert.equal(stats.error_breakdown.database, 1)
+  })
+
+  test('a write failure that ALSO fails to requeue is honestly reported, never silently treated as success', async () => {
+    const { deps } = makeDeps({
+      markObservationProcessed: (async () => ({
+        ok: false,
+        writeError: 'connection reset',
+      })) as BatchProcessingDeps['markObservationProcessed'],
+      markObservationForRetry: (async () => {
+        throw new Error('requeue write also failed')
+      }) as BatchProcessingDeps['markObservationForRetry'],
+    })
+
+    const obs1 = makeObservation('obs-1')
+    const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
+
+    assert.equal(stats.processed, 0)
+    assert.equal(stats.retried, 0)
+    assert.equal(stats.stopped_reason, 'requeue_failed')
+    assert.equal(stats.error_breakdown.requeue_failed, 1)
+  })
+})
+
+describe('merge-blocker regression: a genuine queue-read failure is honestly reported as queue_read_failed, never masked as queue_empty', () => {
+  test('the main loop sets stopped_reason to queue_read_failed on the observations page-fetch error path, not the default queue_empty', () => {
+    // The page-fetch loop lives inside the POST handler itself (a real
+    // Supabase call, not injected via BatchProcessingDeps like
+    // processBatchOfObservations is) -- not independently unit-
+    // testable without mocking the full Supabase query-builder chain.
+    // Source-level assertion, matching the established pattern used
+    // elsewhere in this codebase (e.g. route-security.test.ts) for
+    // logic in this same category.
+    const src = readFileSync('src/app/api/enrich/batch/route.ts', 'utf8')
+    assert.match(
+      src,
+      /if \(fetchErr\) \{[\s\S]{0,800}combinedStats\.stopped_reason = 'queue_read_failed'/,
+      'a genuine observations-page fetch error must set stopped_reason to queue_read_failed, not leave it at the default queue_empty',
+    )
   })
 })

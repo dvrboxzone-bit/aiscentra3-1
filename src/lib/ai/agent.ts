@@ -123,6 +123,16 @@ export async function agentComplete(
   const chain = getModelChain(role)
   const errors: string[] = []
   const kinds: ErrorKind[] = []
+  // REAL BUG FIXED (merge-blocking review): the real thrown error
+  // OBJECT for each attempt was previously discarded entirely -- only
+  // its classified `kind` string and a truncated message survived.
+  // This made it impossible to re-throw the ORIGINAL
+  // AIRequestTooLargeError (with its real model/estimatedTokens/
+  // modelCeiling fields intact) when chain exhaustion ends on that
+  // error specifically; a synthesized replacement with fabricated
+  // zero values was thrown instead. `lastError` preserves the real
+  // object from the most recent attempt.
+  let lastError: unknown
   let maxRetryAfterMs: number | undefined
 
   for (const ref of chain) {
@@ -171,6 +181,7 @@ export async function agentComplete(
 
       const kind = classifyError(err)
       kinds.push(kind)
+      lastError = err
       if (err instanceof AIProviderError && err.retryAfterMs) {
         maxRetryAfterMs = Math.max(maxRetryAfterMs ?? 0, err.retryAfterMs)
       }
@@ -199,24 +210,33 @@ export async function agentComplete(
     )
   }
 
-  // REAL PRODUCTION INCIDENT this closes: if EVERY model in the chain
-  // refused specifically because the request physically cannot fit
-  // that model's own TPM budget (see AIRequestTooLargeError's own
-  // docstring), the caller must be able to see THAT via
-  // `instanceof AIRequestTooLargeError` -- a bare Error here would be
-  // indistinguishable from a genuine content-level failure, and the
-  // caller (processObservation / enrich/batch) would have no honest
-  // way to choose "requeue this observation" over "treat it as a
-  // permanent rejection." This is the exact chain-exhaustion path a
-  // 70b response that fails JSON/Zod validation, followed by an
-  // 8b fallback attempt too large for 8b's own budget, produces.
-  if (kinds.length > 0 && kinds.every((k) => k === 'request_too_large')) {
-    throw new AIRequestTooLargeError(
-      `[agent:${role}] All models in the chain physically cannot fit this request:\n${errors.join('\n')}`,
-      chain[chain.length - 1]?.model ?? 'unknown',
-      0,
-      0,
-    )
+  // REAL BUG FIXED (merge-blocking review): the previous `kinds.every
+  // ((k) => k === 'request_too_large')` check required EVERY model in
+  // the chain to have failed the SAME way -- but the real diagnosed
+  // incident chain is MIXED: 70b fails with 'client_error' (a genuine
+  // HTTP 200 whose body fails JSON/Zod validation), THEN 8b fails with
+  // 'request_too_large' (refused before any network call, since the
+  // full 70b-sized prompt cannot fit 8b's own TPM budget). kinds here
+  // would be ['client_error', 'request_too_large'] -- `every` is false,
+  // so this branch was never reached, and the real
+  // AIRequestTooLargeError silently fell through to the generic "All
+  // models failed" bare Error below, defeating the whole point of a
+  // distinguishable, requeue-able error type.
+  //
+  // Fixed: check only the LAST attempt in the chain (there is no
+  // further fallback after it regardless of what happened earlier) and,
+  // if it was request_too_large, re-throw the REAL, original
+  // AIRequestTooLargeError object (lastError) rather than synthesizing
+  // a new one with fabricated model/estimatedTokens/modelCeiling
+  // values. Deliberately NOT `kinds.some(...)` -- that would also match
+  // e.g. a chain where an EARLIER model hit request_too_large but the
+  // LAST one failed for an unrelated reason (a real content/validation
+  // problem with the smaller model itself), misclassifying a genuine
+  // permanent failure as a requeue-able "physically too large"
+  // condition.
+  const lastKind = kinds[kinds.length - 1]
+  if (lastKind === 'request_too_large' && lastError instanceof AIRequestTooLargeError) {
+    throw lastError
   }
 
   throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)
@@ -232,6 +252,9 @@ export async function agentCompleteJSON<T>(
   const chain = getModelChain(role)
   const errors: string[] = []
   const kinds: ErrorKind[] = []
+  // See agentComplete's identical comment above -- preserves the real
+  // thrown error object for the most recent attempt.
+  let lastError: unknown
   let maxRetryAfterMs: number | undefined
 
   for (const ref of chain) {
@@ -279,6 +302,7 @@ export async function agentCompleteJSON<T>(
 
       const kind = classifyError(err)
       kinds.push(kind)
+      lastError = err
       if (err instanceof AIProviderError && err.retryAfterMs) {
         maxRetryAfterMs = Math.max(maxRetryAfterMs ?? 0, err.retryAfterMs)
       }
@@ -303,19 +327,19 @@ export async function agentCompleteJSON<T>(
     )
   }
 
-  // REAL PRODUCTION INCIDENT this closes -- see agentComplete's
+  // REAL BUG FIXED (merge-blocking review) -- see agentComplete's
   // identical comment above. This is the ACTUAL code path the real
   // incident went through: callProviderJSON (invoked here) is what
   // throws AIProviderError on a JSON-parse/schema-validation failure
   // of a genuinely-200 primary response, triggering the fallback to a
-  // lower-TPM model with the same full prompt.
-  if (kinds.length > 0 && kinds.every((k) => k === 'request_too_large')) {
-    throw new AIRequestTooLargeError(
-      `[agent:${role}] All models in the chain physically cannot fit this request (JSON):\n${errors.join('\n')}`,
-      chain[chain.length - 1]?.model ?? 'unknown',
-      0,
-      0,
-    )
+  // lower-TPM model with the same full prompt -- kinds here is
+  // ['client_error', 'request_too_large'], MIXED, so the old
+  // `kinds.every(...)` check never matched. Fixed the same way: check
+  // only the LAST attempt, re-throw the real original
+  // AIRequestTooLargeError object.
+  const lastKind = kinds[kinds.length - 1]
+  if (lastKind === 'request_too_large' && lastError instanceof AIRequestTooLargeError) {
+    throw lastError
   }
 
   throw new Error(`[agent:${role}] All models failed:\n${errors.join('\n')}`)

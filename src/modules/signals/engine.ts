@@ -519,8 +519,27 @@ export async function processObservation(
     // later attempt (a different batch composition, a config change) --
     // the batch handler must requeue this observation instead.
     if (err instanceof AIRequestTooLargeError) throw err
-    // SIS failure → proceed without SIS (V1 fallback)
-    console.warn('[engine] SIS evaluation failed, proceeding without:', err)
+    // REAL BUG FIXED (merge-blocking review): every OTHER SIS failure
+    // -- a genuine JSON-parse/Zod-validation error on all chain
+    // models, or any other non-retryable classifier failure -- was
+    // previously treated as safe to silently skip ("proceed without
+    // SIS"), letting the observation fall through to the looser V1
+    // scoring path (signal_score, via `sisResult?.sis.final ??
+    // signal_score` and `isWeakSignalDecision(sisResult?.decision,
+    // signal_score)` further down this function) for content whose
+    // SIS classification never actually completed. Only the four
+    // explicitly-retryable types above (rate limit, deadline, budget,
+    // request-too-large) are re-thrown for the batch handler to
+    // requeue; every other SIS failure now ends this observation with
+    // an honest error outcome instead of a silent, unscored pass-
+    // through -- scoring thresholds and the successful-SIS code path
+    // below are completely unchanged.
+    const message = err instanceof Error ? err.message : 'SIS evaluation failed'
+    console.error(
+      '[engine] SIS evaluation failed (non-retryable) — ending observation with an honest error, not V1 fallback:',
+      message,
+    )
+    return { observationId: observation.id, outcome: 'error', reason: `SIS: ${message}` }
   }
 
   // Apply SIS decision if available
