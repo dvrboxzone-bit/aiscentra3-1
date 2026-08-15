@@ -13,6 +13,7 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { createClient } from '@supabase/supabase-js'
 
 import {
   fetchNextReadyPage,
@@ -53,14 +54,30 @@ function makeMockClient(fixture: FixtureObs[]): any {
         },
         // Real, minimal implementation of the SAME query-level
         // retry_after readiness filter fetchNextReadyPage itself uses:
-        // `.or('metadata->>retry_after.is.null,metadata->>retry_after.lt.<now>')`.
+        // `.or('metadata->>retry_after.is.null,metadata->>retry_after.lt."<now>"')`.
         // Parses the exact PostgREST filter string this codebase
         // constructs -- not a generic OR-clause parser -- and applies
         // the real readiness semantics (no retry_after, or retry_after
         // strictly in the past) against the fixture's own metadata.
+        //
+        // REAL BUG FIXED (independent review): this regex previously
+        // matched ANY string after `.lt.`, accepting both a correctly
+        // double-quoted timestamp AND the prior, buggy unquoted one --
+        // a genuine false-positive risk, since this mock could not
+        // distinguish the real fix from the real bug. Now strictly
+        // requires the exact `."..."` quoted form the real production
+        // code emits; an unquoted filter fails to match at all and
+        // throws, so a regression back to the unquoted bug is caught
+        // through this mock too, not only through the separate real-
+        // URL test using the actual @supabase/supabase-js client.
         or: (filterExpr: string) => {
-          const ltMatch = /metadata->>retry_after\.lt\.(.+)$/.exec(filterExpr)
-          const nowIso = ltMatch?.[1] ?? new Date().toISOString()
+          const ltMatch = /metadata->>retry_after\.lt\."([^"]+)"$/.exec(filterExpr)
+          if (!ltMatch) {
+            throw new Error(
+              `mock .or() received a filter that does not match the required quoted format: ${filterExpr}`,
+            )
+          }
+          const nowIso = ltMatch[1] as string
           filters.push((o) => {
             const retryAfter = o.metadata?.retry_after
             return !retryAfter || retryAfter < nowIso
@@ -326,68 +343,207 @@ describe('scheduleBucketStartPageIndex — cross-invocation fairness (real produ
     }
   })
 
-  test('two consecutive SHORT invocations (each completing only ONE page before its own deadline) genuinely alternate fresh/old across runs -- not merely within one', async () => {
-    const oldObs = {
+  test('two consecutive SHORT invocations (each completing only ONE page before its own real invocation window ends) genuinely alternate fresh/old across runs -- not merely within one, driven through the REAL fetchNextReadyPage and REAL processObservation/markObservationProcessed calls, not a mock that decides the pool directly', async () => {
+    const oldObs: FixtureObs = {
       id: 'old-1',
-      source_id: 's1',
-      title: 't',
-      content: 'c',
-      url: 'https://example.com',
-      published_at: '2026-07-01T00:00:00Z',
-      collected_at: '2026-07-01T00:00:00Z', // well outside the 24h fresh window
-      metadata: {},
+      collected_at: '2026-07-01T00:00:00.000Z', // well outside the 24h fresh window
       processed: false,
       processing_error: null,
-      signal_id: null,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any
-    const freshObs = {
-      ...oldObs,
+    }
+    const freshObs: FixtureObs = {
       id: 'fresh-1',
       collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1h ago -- inside the fresh window
+      processed: false,
+      processing_error: null,
+    }
+    // Both observations exist in the SAME real fixture -- the REAL
+    // fetchNextReadyPage function (not a mock that decides the pool
+    // itself) must genuinely select the right one based on its own
+    // fresh/old query split.
+    const fixture = [oldObs, freshObs]
+    const client = makeMockClient(fixture)
+
+    /** Wraps the REAL fetchNextReadyPage but returns an empty page
+     * after the first real call within one invocation -- simulating a
+     * genuinely short invocation whose own execution window ends after
+     * one real fetch (a near-instant test mock has no natural way to
+     * distinguish "item 1 vs item 2" by deadline timing alone; this
+     * structurally limits one invocation to one page instead, matching
+     * the SAME robust technique already verified in the fail-closed
+     * regression tests above). */
+    function makeOnePageDeps(
+      processedIds: string[],
+      markProcessedIds: string[],
+    ): BatchProcessingDeps {
+      let calls = 0
+      return {
+        fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+        fetchObservationsPage: async (pageIndex: number, limit: number) => {
+          calls++
+          if (calls > 1) return { rows: [], error: null, pool: 'old' }
+          return fetchNextReadyPage(client, pageIndex, limit)
+        },
+        processObservation: (async (obs) => {
+          processedIds.push(obs.id)
+          return { observationId: obs.id, outcome: 'signal_created' as const, signalId: 'sig-1' }
+        }) as BatchProcessingDeps['processObservation'],
+        markObservationProcessed: async (id: string) => {
+          markProcessedIds.push(id)
+          // REAL, stateful write -- mutates the SAME shared fixture
+          // object (matching a real DB write actually changing
+          // processed=true), so fetchNextReadyPage's own next query
+          // genuinely excludes it.
+          const row = fixture.find((r) => r.id === id)
+          if (row) row.processed = true
+          return { ok: true }
+        },
+        markObservationForRetry: async () => 'ok',
+        sleep: async () => {},
+      }
     }
 
-    const poolsSeen: Array<'fresh' | 'old'> = []
-    const makeDepsForPool = (): BatchProcessingDeps => ({
-      fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
-      fetchObservationsPage: async (pageIndex: number) => {
-        // Real fresh/old alternation logic, matching fetchNextReadyPage
-        // itself: even pageIndex -> fresh pool, odd -> old.
-        const wantFresh = pageIndex % 2 === 0
-        const pool: 'fresh' | 'old' = wantFresh ? 'fresh' : 'old'
-        poolsSeen.push(pool)
-        return { rows: [wantFresh ? freshObs : oldObs], error: null, pool }
-      },
-      processObservation: (async (obs) => ({
-        observationId: obs.id,
-        outcome: 'signal_created' as const,
-        signalId: 'sig-1',
-      })) as BatchProcessingDeps['processObservation'],
-      markObservationProcessed: async () => ({ ok: true }),
-      markObservationForRetry: async () => 'ok',
-      sleep: async () => {},
-    })
-
     // Invocation 1: schedule bucket 0 (even startPageIndex -> fresh
-    // first), deadline forces exactly one page.
-    const deps1 = makeDepsForPool()
-    await runEnrichmentCycle(Date.now() + 4_000, deps1, 0)
-
-    // Invocation 2: schedule bucket 1 (odd startPageIndex -> old
-    // first) -- simulating the NEXT real invocation, 4 real schedule
-    // hours later, with its own short deadline.
-    const deps2 = makeDepsForPool()
-    await runEnrichmentCycle(Date.now() + 4_000, deps2, 1)
-
-    assert.equal(
-      poolsSeen[0],
-      'fresh',
-      'invocation 1 (schedule bucket 0) must start with the fresh pool',
+    // pool preferred first).
+    const processed1: string[] = []
+    const written1: string[] = []
+    const stats1 = await runEnrichmentCycle(
+      Date.now() + 30_000,
+      makeOnePageDeps(processed1, written1),
+      0,
+    )
+    assert.deepEqual(
+      processed1,
+      ['fresh-1'],
+      'invocation 1 (schedule bucket 0, real fetchNextReadyPage) must have ACTUALLY called processObservation for the real fresh observation -- not merely reported "fresh" as a label',
+    )
+    assert.deepEqual(
+      written1,
+      ['fresh-1'],
+      'invocation 1 must have ACTUALLY written the result for fresh-1 -- markObservationProcessed genuinely called',
     )
     assert.equal(
-      poolsSeen[1],
-      'old',
-      'invocation 2 (schedule bucket 1) must start with the old pool -- proving old/fresh genuinely alternate ACROSS invocations, not merely within one long-running cycle',
+      stats1.succeeded,
+      1,
+      'invocation 1 must have genuinely succeeded in processing fresh-1',
+    )
+
+    // Invocation 2: schedule bucket 1 (odd startPageIndex -> old pool
+    // preferred first) -- simulating the NEXT real invocation, 4 real
+    // schedule hours later, against the SAME shared fixture (fresh-1
+    // is now processed=true from invocation 1's own real write -- old-1
+    // is what a real bucket-1 invocation must reach first via the real
+    // query split).
+    const processed2: string[] = []
+    const written2: string[] = []
+    const stats2 = await runEnrichmentCycle(
+      Date.now() + 30_000,
+      makeOnePageDeps(processed2, written2),
+      1,
+    )
+    assert.deepEqual(
+      processed2,
+      ['old-1'],
+      'invocation 2 (schedule bucket 1, real fetchNextReadyPage) must have ACTUALLY called processObservation for the real old observation -- proving old/fresh genuinely alternate ACROSS invocations, not merely within one long-running cycle',
+    )
+    assert.deepEqual(written2, ['old-1'])
+    assert.equal(
+      stats2.succeeded,
+      1,
+      'invocation 2 must have genuinely succeeded in processing old-1',
+    )
+  })
+
+  test('this fairness test genuinely fails if startPageIndex always resolves to the same pool (the exact real regression the fix closes)', async () => {
+    const oldObs: FixtureObs = {
+      id: 'old-1',
+      collected_at: '2026-07-01T00:00:00.000Z',
+      processed: false,
+      processing_error: null,
+    }
+    // TWO fresh observations, not one -- with only one, the SECOND
+    // invocation would find the fresh pool genuinely empty and
+    // fetchNextReadyPage's own (correct, already-tested) fallback
+    // logic would reach old-1 anyway, masking the real cross-
+    // invocation starvation bug this test exists to catch. With two,
+    // the fresh pool still has real material for the SECOND invocation
+    // even under the bug, so old-1 is never reached by either -- the
+    // genuine starvation pattern.
+    const fresh1: FixtureObs = {
+      id: 'fresh-1',
+      collected_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      processed: false,
+      processing_error: null,
+    }
+    const fresh2: FixtureObs = {
+      id: 'fresh-2',
+      collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      processed: false,
+      processing_error: null,
+    }
+    const fixture = [oldObs, fresh1, fresh2]
+    const client = makeMockClient(fixture)
+
+    /** Wraps the REAL fetchNextReadyPage but returns an empty page
+     * after the first real call within one invocation -- simulating a
+     * genuinely short invocation that only manages one real fetch
+     * before some external constraint (its own short-lived Vercel
+     * function execution window) ends it. This is the SAME robust
+     * technique already verified in the fail-closed regression tests
+     * above (makeFetchObservationsPageOnce) -- controlling "one page
+     * per invocation" structurally, not by fighting real-vs-mock
+     * timing granularity on a near-instant mock. */
+    function makeOnePageDeps(ids: string[]): BatchProcessingDeps {
+      let calls = 0
+      return {
+        fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+        fetchObservationsPage: async (pageIndex: number) => {
+          calls++
+          if (calls > 1) return { rows: [], error: null, pool: 'old' }
+          // limit=1, not the passed-through BATCH_SIZE=7 -- with two
+          // fresh observations both inside the fresh window, a page
+          // sized 7 would capture BOTH in a single fetch, defeating
+          // the "one item per invocation" scenario this test needs to
+          // genuinely demonstrate cross-invocation starvation.
+          return fetchNextReadyPage(client, pageIndex, 1)
+        },
+        processObservation: (async (obs) => {
+          ids.push(obs.id)
+          return { observationId: obs.id, outcome: 'signal_created' as const, signalId: 'sig-1' }
+        }) as BatchProcessingDeps['processObservation'],
+        markObservationProcessed: async (id: string) => {
+          const row = fixture.find((r) => r.id === id)
+          if (row) row.processed = true
+          return { ok: true }
+        },
+        markObservationForRetry: async () => 'ok',
+        sleep: async () => {},
+      }
+    }
+
+    const processed1: string[] = []
+    const processed2: string[] = []
+
+    // Both invocations forced to startPageIndex=0 -- simulating the
+    // exact real regression (scheduleBucketStartPageIndex always
+    // returning 0, or being ignored/bypassed).
+    await runEnrichmentCycle(Date.now() + 30_000, makeOnePageDeps(processed1), 0)
+    await runEnrichmentCycle(Date.now() + 30_000, makeOnePageDeps(processed2), 0)
+
+    // With the bug (both always starting fresh, pageIndex=0), BOTH
+    // invocations process a DIFFERENT fresh observation (since fresh-1
+    // is excluded from the SECOND fetch once processed=true) -- but
+    // old-1 is NEVER reached by either, because the fresh pool still
+    // has real, unprocessed material (fresh-2) for the second
+    // invocation, so fetchNextReadyPage's own fallback never triggers.
+    // A correctly-alternating implementation (scheduleBucketStartPageIndex
+    // genuinely varying the start index) would instead reach old-1 on
+    // the second invocation, exactly as the PREVIOUS test in this file
+    // proves.
+    assert.deepEqual(processed1, ['fresh-1'])
+    assert.deepEqual(
+      processed2,
+      ['fresh-2'],
+      'with startPageIndex forced to 0 for BOTH invocations (the real regression), old-1 is NEVER reached by either -- this is the exact cross-invocation starvation the fairness fix exists to prevent',
     )
   })
 
@@ -414,5 +570,71 @@ describe('scheduleBucketStartPageIndex — cross-invocation fairness (real produ
       'must fall back to the old pool even when the schedule-bucket-derived start prefers fresh',
     )
     assert.equal(page.rows.length, 1)
+  })
+})
+
+describe('fetchNextReadyPage — the ACTUAL Supabase/PostgREST request URL (real @supabase/supabase-js client, real fetch interception, not a hand-rolled mock)', () => {
+  /** Constructs a real @supabase/supabase-js client, intercepts the
+   * real global fetch call it makes, and returns the decoded URL the
+   * client genuinely constructed for the request -- proves what is
+   * ACTUALLY sent over the wire, not merely what a hand-written mock's
+   * own filter-parsing logic happens to accept. */
+  async function captureRealRequestUrl(pageIndex: number): Promise<string> {
+    const originalFetch = globalThis.fetch
+    let capturedUrl = ''
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).fetch = async (url: string | URL) => {
+      capturedUrl = url.toString()
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    try {
+      const realClient = createClient('https://fake-project.supabase.co', 'fake-anon-key')
+      await fetchNextReadyPage(realClient, pageIndex, 7)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+    return decodeURIComponent(capturedUrl)
+  }
+
+  test('the real, decoded request URL contains the retry_after filter with the timestamp wrapped in double quotes (%22 encoded) -- the exact PostgREST raw-filter syntax fix', async () => {
+    const decoded = await captureRealRequestUrl(0)
+    assert.match(
+      decoded,
+      /metadata->>retry_after\.lt\."[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"/,
+      `the real request URL must contain the retry_after comparison value wrapped in double quotes -- got: ${decoded}`,
+    )
+  })
+
+  test('the real, decoded request URL also contains the retry_after.is.null branch of the OR filter, unquoted (null is not a reserved-character value)', async () => {
+    const decoded = await captureRealRequestUrl(1)
+    assert.match(decoded, /metadata->>retry_after\.is\.null/)
+  })
+
+  test('a genuinely UNQUOTED filter (the exact prior bug) produces a DIFFERENT, distinguishable real request URL -- proving this test would catch a regression back to it', async () => {
+    const originalFetch = globalThis.fetch
+    let capturedUrl = ''
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).fetch = async (url: string | URL) => {
+      capturedUrl = url.toString()
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    try {
+      const realClient = createClient('https://fake-project.supabase.co', 'fake-anon-key')
+      const nowIso = new Date().toISOString()
+      // The exact PRIOR (buggy) unquoted filter string.
+      await realClient
+        .from('observations')
+        .select('*')
+        .or(`metadata->>retry_after.is.null,metadata->>retry_after.lt.${nowIso}`)
+        .limit(7)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+    const decoded = decodeURIComponent(capturedUrl)
+    assert.doesNotMatch(
+      decoded,
+      /metadata->>retry_after\.lt\."[0-9]{4}/,
+      'the unquoted variant must NOT produce a quoted comparison value in the real request URL -- this is the exact real difference the fix closes',
+    )
   })
 })

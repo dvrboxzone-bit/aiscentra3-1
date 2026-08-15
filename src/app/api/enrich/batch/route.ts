@@ -26,8 +26,6 @@
  * (and safe-to-spend token budget) unused within each individual
  * invocation.
  *
- * unchanged at 3.)
- *
  * Autonomy:
  *   Processes observations in a loop until queue is empty OR the shared
  *   deadline is reached. No manual re-triggers needed mid-queue.
@@ -636,13 +634,20 @@ export async function processBatchOfObservations(
       // path above increments `attempted` before classifying the
       // outcome; this thrown-exception path must do the same, or
       // `attempted` would silently undercount genuine failures that
-      // never returned a normal result at all. If this error-record
-      // write ALSO fails, the observation naturally stays
-      // processed=false in the database (nothing here sets it to
-      // true), so it remains in the queue and will be re-attempted on
-      // a later cycle without any special handling -- but the write
-      // failure is now logged rather than silently discarded, so it is
-      // at least visible for diagnosis instead of vanishing entirely.
+      // never returned a normal result at all.
+      //
+      // REAL BUG FIXED (independent review): if this error-record
+      // write ALSO fails, the observation previously stayed
+      // processed=false in the database with NO retry_after set --
+      // the NEXT fetchNextReadyPage call (which selects
+      // processed=false AND (retry_after IS NULL OR retry_after < now))
+      // would IMMEDIATELY re-select this SAME observation again, with
+      // no backoff at all -- a genuine tight retry loop, not the
+      // controlled, backed-off requeue every other failure path in
+      // this function already uses. Fixed fail-closed: a genuine
+      // write failure here now attempts a real, backed-off requeue via
+      // markObservationForRetry, exactly like every other failure
+      // branch in this function.
       const errorWriteResult = await deps
         .markObservationProcessed(
           observation.id,
@@ -653,11 +658,39 @@ export async function processBatchOfObservations(
           ok: false,
           writeError: writeErr instanceof Error ? writeErr.message : String(writeErr),
         }))
+
       if (!errorWriteResult.ok) {
         console.error(
           `[enrich/batch] failed to persist error record for ${observation.id}: ${errorWriteResult.writeError}`,
         )
+        stats.attempted++
+        try {
+          await deps.markObservationForRetry(observation.id, SOURCE_READ_RETRY_MS)
+          // HONEST METRICS CONTRACT: the error-record write itself
+          // failed, but the requeue succeeded -- this observation is
+          // not yet resolved this cycle (it will be re-attempted
+          // later), so it counts toward retried, NOT failed.
+          stats.retried++
+          stats.stopped_reason = 'write_failed'
+          console.warn(
+            `[enrich/batch] error-record write failed for ${observation.id} — requeued via markObservationForRetry instead of being left with no retry_after`,
+          )
+        } catch (requeueErr) {
+          // Both the error-record write AND the requeue failed -- a
+          // genuine, unresolved permanent failure this cycle. Counts
+          // toward failed, never retried (the requeue did not
+          // actually happen).
+          stats.failed++
+          stats.error_breakdown.requeue_failed++
+          stats.stopped_reason = 'requeue_failed'
+          console.error(
+            `[enrich/batch] requeue_failed after error-record write failure for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+          )
+        }
+        console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
+        break
       }
+
       stats.attempted++
       stats.failed++
       console.error(`[enrich/batch] error on ${observation.id}: ${errMsg.slice(0, 200)}`)
@@ -748,7 +781,20 @@ export async function fetchNextReadyPage(
       // genuinely, provably exhausted of ready work -- no client-side
       // re-filtering, no risk of a deferred-only page masking real
       // readiness beyond it.
-      .or(`metadata->>retry_after.is.null,metadata->>retry_after.lt.${nowIso}`)
+      // REAL BUG FIXED (independent review): PostgREST's own raw
+      // filter-string grammar uses `.` to separate column/operator/
+      // value and `,` to separate OR conditions -- a bare ISO
+      // timestamp like "2026-08-13T12:00:00.000Z" contains BOTH `:`
+      // and `.` characters that are themselves syntactically
+      // significant in that grammar. Without wrapping the value in
+      // double quotes, PostgREST can misparse the embedded `.` inside
+      // the timestamp (e.g. the `.000Z` fraction) as if it were part
+      // of the filter's own column/operator structure, producing a
+      // parse error or a comparison against the wrong, truncated
+      // value rather than the real timestamp. Quoted per PostgREST's
+      // own documented raw-filter syntax for values containing
+      // reserved characters.
+      .or(`metadata->>retry_after.is.null,metadata->>retry_after.lt."${nowIso}"`)
     query = fresh ? query.gte('collected_at', freshCutoff) : query.lt('collected_at', freshCutoff)
     return query.order('collected_at', { ascending: true }).limit(pageSize)
   }
