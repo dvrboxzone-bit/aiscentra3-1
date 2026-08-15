@@ -220,16 +220,46 @@ describe('Blocker 2 -- a generic (non-retryable) SIS failure ends the observatio
     else process.env['GROQ_API_KEY'] = originalApiKey
   })
 
-  test('SIS call site: every model in the chain returns genuinely invalid JSON -- processObservation resolves with outcome "error", not a created signal', async () => {
+  test('SIS call site: every model in the chain returns genuinely invalid JSON -- processObservation resolves with outcome "error", not a created signal, with zero Signal-table writes and zero enrichment/parser calls', async () => {
+    // Real runtime side-effect tracking, not source-text inspection:
+    // every fetch call is classified by its ACTUAL destination/shape,
+    // so the assertions below prove what genuinely happened at
+    // runtime, not merely what the function's return value claims.
+    let groqCallCount = 0
+    let signalsTableCallCount = 0
+    let enrichmentShapedCallCount = 0
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).fetch = async (url: string | URL) => {
+    ;(globalThis as any).fetch = async (url: string | URL, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
       if (urlStr.includes('supabase.co') || urlStr.includes('placeholder.supabase')) {
+        // Real Supabase REST call -- Supabase-js always targets
+        // <url>/rest/v1/<table>, so a genuine INSERT/UPDATE against
+        // the signals table is directly observable in the URL path,
+        // not merely inferable from the function's own return value.
+        // Real write-vs-read distinction: Supabase-js sends GET for
+        // .select(), POST for .insert(), PATCH for .update() -- a
+        // legitimate SELECT against signals (e.g. the pre-SIS
+        // corroboration check) is not a Signal being created, only a
+        // genuine POST/PATCH is.
+        const method = (init?.method ?? 'GET').toUpperCase()
+        if (urlStr.includes('/signals') && (method === 'POST' || method === 'PATCH')) {
+          signalsTableCallCount++
+        }
         return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
       }
-      // Every SIS-chain model (8b primary, 70b fallback for
-      // 'classifier') returns genuinely unparseable content -- a
-      // real, non-retryable, permanent classifier failure.
+      // A real Groq call -- every SIS-chain model (8b primary, 70b
+      // fallback for 'classifier') returns genuinely unparseable
+      // content, a real non-retryable, permanent classifier failure.
+      groqCallCount++
+      const body = JSON.parse((init?.body as string) ?? '{}') as {
+        messages?: Array<{ content: string }>
+      }
+      const isEnrichmentShaped = (body.messages ?? []).some(
+        (m) =>
+          m.content?.includes('candidateCategory') ||
+          m.content?.toLowerCase().includes('enrichment'),
+      )
+      if (isEnrichmentShaped) enrichmentShapedCallCount++
       return new Response(
         JSON.stringify({
           choices: [{ message: { content: 'not valid json{{{' } }],
@@ -255,6 +285,24 @@ describe('Blocker 2 -- a generic (non-retryable) SIS failure ends the observatio
       result.signalId,
       undefined,
       'no signal must ever be created via V1 scoring when SIS classification never actually completed',
+    )
+    assert.equal(
+      signalsTableCallCount,
+      0,
+      'no Supabase call must ever target the signals table (no INSERT/UPDATE) after a genuine SIS failure',
+    )
+    assert.equal(
+      enrichmentShapedCallCount,
+      0,
+      'the enrichment/parser stage must never be reached after SIS fails -- processObservation must return before attempting it',
+    )
+    // SIS's own chain has exactly 2 models (8b primary, 70b fallback
+    // for 'classifier') -- if execution had genuinely proceeded to the
+    // enrichment stage, a THIRD real Groq call would have been made.
+    assert.equal(
+      groqCallCount,
+      2,
+      `expected exactly 2 real Groq calls (SIS's own 2-model chain exhausting), got ${groqCallCount} -- more would mean enrichment was reached, fewer would mean the SIS chain itself did not run as expected`,
     )
   })
 })

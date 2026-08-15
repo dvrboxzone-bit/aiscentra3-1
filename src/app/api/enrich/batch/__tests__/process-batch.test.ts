@@ -9,12 +9,12 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 
-import { processBatchOfObservations, type BatchProcessingDeps } from '../route'
+import { processBatchOfObservations, runEnrichmentCycle, type BatchProcessingDeps } from '../route'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
 import { AIProviderError } from '@/lib/ai/client'
+import { AIRequestTooLargeError } from '@/lib/ai/tpm-manager'
 import type { ObservationRow } from '@/modules/observations/queries'
 
 function makeObservation(id: string): ObservationRow {
@@ -45,6 +45,7 @@ function makeDeps(overrides: Partial<BatchProcessingDeps> = {}): {
 
   const deps: BatchProcessingDeps = {
     fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+    fetchObservationsPage: async () => ({ rows: [], error: null }),
     processObservation: (async (obs: ObservationRow) => {
       calls.processObservation.push(obs.id)
       return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
@@ -375,19 +376,118 @@ describe('merge-blocker regression: markObservationProcessed write failure is ne
 })
 
 describe('merge-blocker regression: a genuine queue-read failure is honestly reported as queue_read_failed, never masked as queue_empty', () => {
-  test('the main loop sets stopped_reason to queue_read_failed on the observations page-fetch error path, not the default queue_empty', () => {
-    // The page-fetch loop lives inside the POST handler itself (a real
-    // Supabase call, not injected via BatchProcessingDeps like
-    // processBatchOfObservations is) -- not independently unit-
-    // testable without mocking the full Supabase query-builder chain.
-    // Source-level assertion, matching the established pattern used
-    // elsewhere in this codebase (e.g. route-security.test.ts) for
-    // logic in this same category.
-    const src = readFileSync('src/app/api/enrich/batch/route.ts', 'utf8')
-    assert.match(
-      src,
-      /if \(fetchErr\) \{[\s\S]{0,800}combinedStats\.stopped_reason = 'queue_read_failed'/,
+  test('runEnrichmentCycle: a real fetchObservationsPage error stops the cycle with stopped_reason "queue_read_failed", never processes an observation, and never calls markObservationProcessed/markObservationForRetry for anything', async () => {
+    const { deps, calls } = makeDeps({
+      fetchObservationsPage: async () => ({ rows: null, error: { message: 'connection reset' } }),
+    })
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(
+      stats.stopped_reason,
+      'queue_read_failed',
       'a genuine observations-page fetch error must set stopped_reason to queue_read_failed, not leave it at the default queue_empty',
     )
+    assert.notEqual(
+      stats.stopped_reason,
+      'queue_empty',
+      'the error must not be masked as an empty queue',
+    )
+    assert.deepEqual(
+      calls.processObservation,
+      [],
+      'no observation was even fetched -- processObservation must never run',
+    )
+    assert.deepEqual(
+      calls.markProcessed,
+      [],
+      'markObservationProcessed must never be called -- nothing was fetched to process',
+    )
+    assert.deepEqual(
+      calls.markForRetry,
+      [],
+      'markObservationForRetry must never be called for an observation that was never even fetched',
+    )
+    assert.equal(
+      stats.processed,
+      0,
+      'a failed queue-read cycle must never be counted as successful processing',
+    )
+    assert.equal(stats.retried, 0)
+  })
+
+  test('runEnrichmentCycle: a genuinely empty queue (no error) still correctly reports queue_empty, distinguishing it from a real read failure', async () => {
+    const { deps } = makeDeps({
+      fetchObservationsPage: async () => ({ rows: [], error: null }),
+    })
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(stats.stopped_reason, 'queue_empty')
+  })
+})
+
+describe('merge-blocker regression: a real AIRequestTooLargeError thrown by processObservation reaches the batch handler and triggers a controlled requeue', () => {
+  test('processBatchOfObservations: markObservationForRetry called exactly once for the observation, markObservationProcessed never called, honest stats, second observation never attempted', async () => {
+    const { deps, calls } = makeDeps({
+      processObservation: (async (obs: ObservationRow) => {
+        calls.processObservation.push(obs.id)
+        throw new AIRequestTooLargeError(
+          "estimated request exceeds this model's entire TPM budget",
+          'llama-3.1-8b-instant',
+          5140,
+          5100,
+        )
+      }) as BatchProcessingDeps['processObservation'],
+    })
+
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+    const stats = await processBatchOfObservations([obs1, obs2], Date.now() + 30_000, deps)
+
+    assert.deepEqual(
+      calls.markForRetry,
+      ['obs-1'],
+      'markObservationForRetry must be called exactly once, for obs-1',
+    )
+    assert.deepEqual(
+      calls.markProcessed,
+      [],
+      'markObservationProcessed must never be called for a physically-too-large request',
+    )
+    assert.equal(stats.retried, 1)
+    assert.equal(stats.processed, 0)
+    assert.equal(stats.stopped_reason, 'request_too_large')
+    assert.equal(stats.error_breakdown.request_too_large, 1)
+    assert.deepEqual(
+      calls.processObservation,
+      ['obs-1'],
+      'obs-2 must never be attempted after the batch stops',
+    )
+  })
+
+  test('processBatchOfObservations: AIRequestTooLargeError whose requeue write ALSO fails is honestly reported as requeue_failed, never counted as retried', async () => {
+    const { deps, calls } = makeDeps({
+      processObservation: (async (obs: ObservationRow) => {
+        calls.processObservation.push(obs.id)
+        throw new AIRequestTooLargeError('too large', 'llama-3.1-8b-instant', 5140, 5100)
+      }) as BatchProcessingDeps['processObservation'],
+      markObservationForRetry: (async () => {
+        throw new Error('requeue write also failed')
+      }) as BatchProcessingDeps['markObservationForRetry'],
+    })
+
+    const obs1 = makeObservation('obs-1')
+    const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
+
+    assert.equal(
+      stats.retried,
+      0,
+      'retried must not be incremented when the requeue write itself failed',
+    )
+    assert.equal(stats.processed, 0)
+    assert.equal(stats.stopped_reason, 'requeue_failed')
+    assert.equal(stats.error_breakdown.requeue_failed, 1)
+    void calls
   })
 })

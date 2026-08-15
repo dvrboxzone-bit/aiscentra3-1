@@ -216,6 +216,17 @@ export interface FetchSourceInfoResult {
 
 export interface BatchProcessingDeps {
   fetchSourceInfo: (sourceId: string) => Promise<FetchSourceInfoResult>
+  /** Fetches the next page of ready-to-process observations (real
+   * SQL/query semantics unchanged -- this is the SAME
+   * .eq('processed',false).is('processing_error',null).order(...).limit(...)
+   * query the POST handler always ran, just made an injectable
+   * dependency so a genuine read failure can be simulated in a real
+   * behavioral test, matching the same seam already used for
+   * fetchSourceInfo/processObservation/markObservationProcessed/
+   * markObservationForRetry above). */
+  fetchObservationsPage: (
+    limit: number,
+  ) => Promise<{ rows: ObservationRow[] | null; error: { message: string } | null }>
   processObservation: typeof processObservation
   markObservationProcessed: typeof markObservationProcessed
   markObservationForRetry: typeof markObservationForRetry
@@ -522,6 +533,99 @@ function isAuthorized(request: Request): boolean {
   return header === secret || header === `Bearer ${secret}`
 }
 
+/**
+ * Runs the full autonomous enrichment cycle: fetches successive pages
+ * of ready observations via deps.fetchObservationsPage (real SQL/query
+ * semantics unchanged -- see fetchObservationsPage's own docstring on
+ * BatchProcessingDeps), processes each page via
+ * processBatchOfObservations, and accumulates combined stats until the
+ * queue is empty, the deadline is hit, or a stop condition from
+ * processBatchOfObservations itself (rate limit, deadline, budget
+ * exhaustion, requeue failure) ends the cycle early.
+ *
+ * Extracted from the POST handler's own inline loop (independent
+ * review) specifically so a genuine observations-page read failure can
+ * be exercised by a real behavioral test -- fetchObservationsPage is
+ * now an injectable dependency, not a hardcoded Supabase call, and this
+ * function is exported for direct testing rather than only reachable
+ * through the full HTTP handler.
+ */
+export async function runEnrichmentCycle(
+  deadlineAt: number,
+  deps: BatchProcessingDeps,
+): Promise<BatchStats> {
+  const combinedStats = freshStats()
+
+  while (true) {
+    if (Date.now() >= deadlineAt) {
+      combinedStats.stopped_reason = 'time_budget'
+      break
+    }
+
+    const { rows, error: fetchErr } = await deps.fetchObservationsPage(BATCH_SIZE)
+
+    if (fetchErr) {
+      // REAL PRODUCTION INCIDENT this closes: combinedStats.stopped_reason
+      // starts at its default value ('queue_empty', set in freshStats())
+      // and was previously left UNCHANGED on this path -- a genuine DB
+      // read failure fetching the next page of observations was
+      // silently indistinguishable from "the queue is genuinely empty,
+      // nothing to do." A caller (or dashboard) reading the final
+      // response could not tell a real outage apart from harmless
+      // idle time.
+      combinedStats.stopped_reason = 'queue_read_failed'
+      console.error('[enrich/batch] fetch error:', fetchErr.message)
+      break
+    }
+
+    const observations = (rows ?? []) as ObservationRow[]
+    const now = new Date().toISOString()
+
+    // Filter retry-backoff observations
+    const ready = observations.filter((obs) => {
+      const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
+      return !retryAfter || retryAfter < now
+    })
+
+    if (ready.length === 0) {
+      combinedStats.stopped_reason = 'queue_empty'
+      break
+    }
+
+    const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
+
+    combinedStats.processed += batchStats.processed
+    combinedStats.signal_created += batchStats.signal_created
+    combinedStats.rejected += batchStats.rejected
+    combinedStats.retried += batchStats.retried
+    combinedStats.errors += batchStats.errors
+    combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
+    combinedStats.stopped_reason = batchStats.stopped_reason
+    for (const key of Object.keys(batchStats.error_breakdown) as Array<
+      keyof BatchStats['error_breakdown']
+    >) {
+      combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
+    }
+
+    // If we hit rate limit, the deadline, a budget exhaustion, or a
+    // requeue write failure, stop the loop entirely -- next run (rate
+    // limit) or the requeue's own backoff (deadline) will pick this
+    // back up. A requeue failure is stopped for safety even though we
+    // don't know the observation's exact resulting state -- continuing
+    // to process further observations while one is in an uncertain
+    // state is not worth the risk.
+    if (
+      combinedStats.stopped_reason === 'rate_limited' ||
+      combinedStats.stopped_reason === 'deadline_exceeded' ||
+      combinedStats.stopped_reason === 'budget_exhausted' ||
+      combinedStats.stopped_reason === 'requeue_failed'
+    )
+      break
+  }
+
+  return combinedStats
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -594,91 +698,26 @@ export async function POST(request: Request): Promise<NextResponse> {
           sourceName: source?.name ?? 'Unknown Source',
         }
       },
+      fetchObservationsPage: async (limit: number) => {
+        const { data, error } = await supabase
+          .from('observations')
+          .select('*')
+          .eq('processed', false)
+          .is('processing_error', null)
+          .order('collected_at', { ascending: true })
+          .limit(limit)
+        return { rows: (data ?? null) as ObservationRow[] | null, error }
+      },
       processObservation,
       markObservationProcessed,
       markObservationForRetry,
     }
 
-    const combinedStats = freshStats()
-
     // Real queue-depth/oldest-pending snapshot taken BEFORE this cycle
     // drains anything -- "at the start of this cycle," not after.
     const queueSnapshot = await getObservationStats()
 
-    // ── Autonomous loop — runs until queue empty or the shared deadline ─────────
-    while (true) {
-      if (Date.now() >= deadlineAt) {
-        combinedStats.stopped_reason = 'time_budget'
-        break
-      }
-
-      // Fetch next batch of ready observations
-      const { data: rows, error: fetchErr } = await supabase
-        .from('observations')
-        .select('*')
-        .eq('processed', false)
-        .is('processing_error', null)
-        .order('collected_at', { ascending: true })
-        .limit(BATCH_SIZE)
-
-      if (fetchErr) {
-        // REAL PRODUCTION INCIDENT this closes: combinedStats.stopped_reason
-        // starts at its default value ('queue_empty', set in freshStats())
-        // and was previously left UNCHANGED on this path -- a genuine DB
-        // read failure fetching the next page of observations was
-        // silently indistinguishable from "the queue is genuinely empty,
-        // nothing to do." A caller (or dashboard) reading the final
-        // response could not tell a real outage apart from harmless
-        // idle time.
-        combinedStats.stopped_reason = 'queue_read_failed'
-        console.error('[enrich/batch] fetch error:', fetchErr.message)
-        break
-      }
-
-      const observations = (rows ?? []) as ObservationRow[]
-      const now = new Date().toISOString()
-
-      // Filter retry-backoff observations
-      const ready = observations.filter((obs) => {
-        const retryAfter = (obs.metadata as { retry_after?: string })?.retry_after
-        return !retryAfter || retryAfter < now
-      })
-
-      if (ready.length === 0) {
-        combinedStats.stopped_reason = 'queue_empty'
-        break
-      }
-
-      const batchStats = await processBatchOfObservations(ready, deadlineAt, deps)
-
-      combinedStats.processed += batchStats.processed
-      combinedStats.signal_created += batchStats.signal_created
-      combinedStats.rejected += batchStats.rejected
-      combinedStats.retried += batchStats.retried
-      combinedStats.errors += batchStats.errors
-      combinedStats.item_latencies_ms.push(...batchStats.item_latencies_ms)
-      combinedStats.stopped_reason = batchStats.stopped_reason
-      for (const key of Object.keys(batchStats.error_breakdown) as Array<
-        keyof BatchStats['error_breakdown']
-      >) {
-        combinedStats.error_breakdown[key] += batchStats.error_breakdown[key]
-      }
-
-      // If we hit rate limit, the deadline, or a requeue write failure,
-      // stop the loop entirely -- next run (rate limit) or the requeue's
-      // own backoff (deadline) will pick this back up. A requeue failure
-      // is stopped for safety even though we don't know the observation's
-      // exact resulting state -- continuing to process further
-      // observations while one is in an uncertain state is not worth the
-      // risk.
-      if (
-        combinedStats.stopped_reason === 'rate_limited' ||
-        combinedStats.stopped_reason === 'deadline_exceeded' ||
-        combinedStats.stopped_reason === 'budget_exhausted' ||
-        combinedStats.stopped_reason === 'requeue_failed'
-      )
-        break
-    }
+    const combinedStats = await runEnrichmentCycle(deadlineAt, deps)
 
     const duration = Date.now() - startedAt
 

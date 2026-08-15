@@ -11,6 +11,27 @@
  * an observation refused only because the shared TPD budget was
  * temporarily exhausted.
  *
+ * REAL TEST BUG FIXED (independent review): the enrichment-stage test
+ * below previously used a SIS fixture with the WRONG field names
+ * (novelty/importance/urgency/confidence/human_relevance instead of
+ * the real schema's sis_novelty/sis_importance/sis_urgency/
+ * sis_confidence/anti_hype_score/engine_justification), and refused
+ * the budget reservation by raw call-count (`call === 2`). With the
+ * wrong fixture, SIS's own PRIMARY model (8b) attempt failed schema
+ * validation on the very first call, forcing SIS's own chain to fall
+ * back to its SECONDARY model (70b) -- consuming the "second"
+ * reservation call itself. The test still observed
+ * AITokenBudgetExceededError propagating (since SIS's own fallback
+ * attempt got refused), so it passed -- but for the wrong reason: it
+ * never actually exercised the enrichment/parser stage's own
+ * reservation at all. Fixed: a genuinely schema-valid SIS fixture
+ * (verified via SISOutputSchema.safeParse before trusting it), and the
+ * budget reserver mock now refuses based on the REAL `model` argument
+ * reserveBudgetForCall receives (llama-3.3-70b-versatile, the
+ * enrichment/parser stage's own primary model) rather than a raw call
+ * counter that can't distinguish which STAGE is actually being
+ * charged.
+ *
  * Uses the existing __setBudgetReserverForTests injection point (the
  * same seam already used by deadline-contour.test.ts) rather than
  * experimental module mocking, so a real processObservation() call
@@ -25,6 +46,7 @@ import {
   AITokenBudgetExceededError,
 } from '../../../lib/ai/budget-gate'
 import { processObservation } from '../engine'
+import { SISOutputSchema } from '../strategic-score'
 import type { ObservationRow } from '@/modules/observations/queries'
 
 function makeObservation(): ObservationRow {
@@ -53,14 +75,42 @@ function makeObservation(): ObservationRow {
   } as unknown as ObservationRow
 }
 
-function budgetRefusal(): AITokenBudgetExceededError {
+function budgetRefusal(model: string): AITokenBudgetExceededError {
   return new AITokenBudgetExceededError(
-    '[budget] signal_engine refused for llama-3.3-70b-versatile: reserve_exhausted',
-    'llama-3.3-70b-versatile',
+    `[budget] signal_engine refused for ${model}: reserve_exhausted`,
+    model,
     'signal_engine',
     { allowed: false, usedTokens: 100_000, ceilingTokens: 100_000, reason: 'reserve_exhausted' },
   )
 }
+
+// Genuinely schema-valid SIS payload -- verified via
+// SISOutputSchema.safeParse in a dedicated test below, not merely
+// assumed. Real field names (sis_ prefix), a genuine
+// engine_justification string (required, no default), and every other
+// field the schema actually requires.
+const VALID_SIS_PAYLOAD = {
+  sis_novelty: 5,
+  sis_importance: 5,
+  sis_urgency: 5,
+  sis_confidence: 8,
+  human_cto: true,
+  anti_hype_score: 5,
+  relevance_horizon: 'MONTHS',
+  event_type: 'DISCRETE_EVENT',
+  engine_justification: 'Genuine benchmark improvement with reproducible results across tasks.',
+}
+
+test('sanity: VALID_SIS_PAYLOAD is genuinely schema-valid against the real SISOutputSchema', () => {
+  const result = SISOutputSchema.safeParse(VALID_SIS_PAYLOAD)
+  assert.equal(
+    result.success,
+    true,
+    result.success
+      ? ''
+      : JSON.stringify((result as { success: false; error: { issues: unknown } }).error.issues),
+  )
+})
 
 describe('processObservation propagates AITokenBudgetExceededError (not swallowed)', () => {
   const originalFetch = globalThis.fetch
@@ -104,8 +154,8 @@ describe('processObservation propagates AITokenBudgetExceededError (not swallowe
   })
 
   test('SIS stage: budget refusal propagates out of processObservation, Groq is never called', async () => {
-    restoreBudget = __setBudgetReserverForTests(async () => {
-      throw budgetRefusal()
+    restoreBudget = __setBudgetReserverForTests(async (params) => {
+      throw budgetRefusal(params.model)
     })
 
     await assert.rejects(
@@ -116,21 +166,29 @@ describe('processObservation propagates AITokenBudgetExceededError (not swallowe
     assert.equal(fetchCalls, 0, 'Groq must never be contacted once the budget gate refuses')
   })
 
-  test('enrichment stage: budget refusal propagates when SIS succeeds but enrichment is refused', async () => {
-    let call = 0
-    restoreBudget = __setBudgetReserverForTests(async () => {
-      call++
-      // Let the SIS (classifier) reservation through; refuse on the
-      // enrichment (parser) stage's reservation. Since real fetch would
-      // also need to succeed for SIS in this scenario, this test uses a
-      // real fetch stub that returns a valid SIS payload, then confirms
-      // the SECOND stage's refusal still propagates rather than being
-      // caught by enrichment's own catch block.
-      if (call === 1) return
-      throw budgetRefusal()
+  test('enrichment stage: SIS genuinely succeeds (real schema-valid response, no SIS fallback), the ENRICHMENT/parser stage\'s own reservation is refused, and the error propagates out of processObservation rather than becoming outcome:"error"', async () => {
+    // Real, model-aware reservation tracking -- not a raw call
+    // counter. Every reservation call is recorded with its actual
+    // model/consumer arguments so the assertions below can prove
+    // EXACTLY which stage was reserved for, in which order, rather
+    // than assuming ordinal position.
+    const reservations: Array<{ model: string; consumer: string; estimatedTokens: number }> = []
+    restoreBudget = __setBudgetReserverForTests(async (params) => {
+      reservations.push({
+        model: params.model,
+        consumer: params.consumer,
+        estimatedTokens: params.estimatedTokens,
+      })
+      // Refuse specifically the ENRICHMENT/parser stage's own primary
+      // model (70b) -- SIS's own primary model (8b) must be let
+      // through so SIS genuinely completes first.
+      if (params.model === 'llama-3.3-70b-versatile') {
+        throw budgetRefusal(params.model)
+      }
     })
 
-    let sisAnswered = false
+    let sisCalls = 0
+    let enrichmentCalls = 0
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url
       if (urlStr.includes('supabase.co') || urlStr.includes('placeholder.supabase')) {
@@ -138,33 +196,26 @@ describe('processObservation propagates AITokenBudgetExceededError (not swallowe
       }
       fetchCalls++
       const body = JSON.parse((init?.body as string) ?? '{}') as {
+        model?: string
         messages?: Array<{ content: string }>
       }
       const isSisCall = (body.messages ?? []).some((m) =>
         m.content?.includes('AIscentra Intelligence Analyst'),
       )
-      if (isSisCall && !sisAnswered) {
-        sisAnswered = true
+      if (isSisCall) {
+        sisCalls++
         return new Response(
           JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: JSON.stringify({
-                    novelty: 5,
-                    importance: 5,
-                    urgency: 5,
-                    confidence: 80,
-                    human_relevance: true,
-                  }),
-                },
-              },
-            ],
+            choices: [{ message: { content: JSON.stringify(VALID_SIS_PAYLOAD) } }],
             usage: { total_tokens: 50 },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         )
       }
+      // Any real fetch to the enrichment stage's own model would only
+      // happen if the budget refusal above did NOT stop execution
+      // before reaching the provider -- must never happen.
+      enrichmentCalls++
       throw new Error(
         'enrichment fetch should never be reached -- the budget gate must refuse first',
       )
@@ -175,5 +226,37 @@ describe('processObservation propagates AITokenBudgetExceededError (not swallowe
       (err: unknown) => err instanceof AITokenBudgetExceededError,
       'the enrichment stage refusal must propagate out of processObservation, not become outcome:"error"',
     )
+
+    assert.equal(
+      sisCalls,
+      1,
+      'SIS must succeed on its own FIRST attempt -- no SIS-stage fallback to a second model',
+    )
+    assert.equal(
+      enrichmentCalls,
+      0,
+      "the enrichment stage's real Groq fetch must never happen once its reservation is refused",
+    )
+
+    // Prove the REAL reservation sequence: SIS's own model reserved
+    // and allowed first, THEN enrichment's own model reserved and
+    // refused -- using the actual recorded arguments, not an assumed
+    // call count.
+    assert.ok(
+      reservations.length >= 2,
+      `expected at least 2 reservation calls, got ${reservations.length}`,
+    )
+    assert.equal(
+      reservations[0]?.model,
+      'llama-3.1-8b-instant',
+      "the FIRST reservation must be for SIS's own primary model (8b)",
+    )
+    assert.equal(reservations[0]?.consumer, 'signal_engine')
+    const enrichmentReservation = reservations.find((r) => r.model === 'llama-3.3-70b-versatile')
+    assert.ok(
+      enrichmentReservation,
+      "a reservation for the enrichment stage's own model (70b) must have been attempted",
+    )
+    assert.equal(enrichmentReservation?.consumer, 'signal_engine')
   })
 })

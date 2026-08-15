@@ -92,10 +92,24 @@ export function isWeakSignalDecision(
   signalScore: number,
 ): boolean {
   if (sisDecision === undefined) {
-    // SIS was unavailable for this observation (see engine's own
-    // "SIS failure -> proceed without SIS" fallback) -- fall back to the
-    // V1 signal_score threshold, unchanged from the pre-existing
-    // behavior for this specific case.
+    // Defensive fallback for this pure function's own signature --
+    // NOT an endorsed runtime path. As of the independent-review fix
+    // to processObservation's own SIS catch block, a genuine SIS
+    // failure (any non-retryable error) now returns
+    // `{ outcome: 'error' }` immediately and never reaches this
+    // function at all; the only call site (processObservation, via
+    // `isWeakSignalDecision(sisResult?.decision, signal_score)`) can
+    // only pass `undefined` here if `sisResult` itself is null, which
+    // by construction cannot happen once SIS has genuinely succeeded
+    // (sisResult is set unconditionally on the try block's success
+    // path) or genuinely failed (the catch block now either re-throws
+    // a retryable error or returns early on a non-retryable one --
+    // execution never reaches this call with sisResult still null).
+    // This branch exists purely so the function stays total and
+    // backward-compatible for any OTHER caller that might genuinely
+    // have no SIS decision to pass -- it does not imply the Signal
+    // Engine permits creating a signal via V1 scoring when SIS itself
+    // failed.
     return signalScore < 55
   }
   return sisDecision === 'WEAK_SIGNAL' || sisDecision === 'ARCHIVE'
