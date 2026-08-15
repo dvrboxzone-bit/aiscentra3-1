@@ -14,20 +14,27 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { fetchNextReadyPage } from '../route'
+import {
+  fetchNextReadyPage,
+  scheduleBucketStartPageIndex,
+  runEnrichmentCycle,
+  type BatchProcessingDeps,
+} from '../route'
 
 interface FixtureObs {
   id: string
   collected_at: string
   processed: boolean
   processing_error: string | null
+  metadata?: { retry_after?: string }
 }
 
 /** Real, filtering mock client -- genuinely applies .eq/.is/.gte/.lt/
- * .order/.limit to the fixture array, matching the exact query shape
- * fetchNextReadyPage itself builds. Not a stub that ignores the real
- * predicates: a test using this mock would fail if the production
- * query changed in a way that broke the fresh/old split. */
+ * .or/.order/.limit to the fixture array, matching the exact query
+ * shape fetchNextReadyPage itself builds. Not a stub that ignores the
+ * real predicates: a test using this mock would fail if the production
+ * query changed in a way that broke the fresh/old split OR the
+ * query-level retry_after readiness filter. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeMockClient(fixture: FixtureObs[]): any {
   return {
@@ -42,6 +49,22 @@ function makeMockClient(fixture: FixtureObs[]): any {
         },
         is: (col: string, val: null) => {
           if (col === 'processing_error') filters.push((o) => o.processing_error === val)
+          return builder
+        },
+        // Real, minimal implementation of the SAME query-level
+        // retry_after readiness filter fetchNextReadyPage itself uses:
+        // `.or('metadata->>retry_after.is.null,metadata->>retry_after.lt.<now>')`.
+        // Parses the exact PostgREST filter string this codebase
+        // constructs -- not a generic OR-clause parser -- and applies
+        // the real readiness semantics (no retry_after, or retry_after
+        // strictly in the past) against the fixture's own metadata.
+        or: (filterExpr: string) => {
+          const ltMatch = /metadata->>retry_after\.lt\.(.+)$/.exec(filterExpr)
+          const nowIso = ltMatch?.[1] ?? new Date().toISOString()
+          filters.push((o) => {
+            const retryAfter = o.metadata?.retry_after
+            return !retryAfter || retryAfter < nowIso
+          })
           return builder
         },
         gte: (col: string, val: string) => {
@@ -167,14 +190,16 @@ describe('fetchNextReadyPage — fallback when the preferred pool is genuinely e
         select: () => ({
           eq: () => ({
             is: () => ({
-              gte: () => ({
-                order: () => ({
-                  limit: async () => ({ data: null, error: { message: 'connection reset' } }),
+              or: () => ({
+                gte: () => ({
+                  order: () => ({
+                    limit: async () => ({ data: null, error: { message: 'connection reset' } }),
+                  }),
                 }),
-              }),
-              lt: () => ({
-                order: () => ({
-                  limit: async () => ({ data: null, error: { message: 'connection reset' } }),
+                lt: () => ({
+                  order: () => ({
+                    limit: async () => ({ data: null, error: { message: 'connection reset' } }),
+                  }),
                 }),
               }),
             }),
@@ -185,5 +210,209 @@ describe('fetchNextReadyPage — fallback when the preferred pool is genuinely e
     const page = await fetchNextReadyPage(failingClient, 0, 10)
     assert.equal(page.error, 'connection reset')
     assert.equal(page.rows.length, 0)
+  })
+})
+
+describe('fetchNextReadyPage — retry_after does not mask a genuinely non-empty pool as queue_empty (real production incident this closes)', () => {
+  test('deferred rows (future retry_after) come first in collected_at order, a ready row is later -- the ready row is genuinely returned, the deferred rows are excluded, queue_empty is NOT falsely triggered', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1h in the future -- genuinely deferred
+    const deferred1: FixtureObs = {
+      id: 'deferred-1',
+      collected_at: '2026-08-01T00:00:00.000Z', // earliest -- would be first in a naive .order('collected_at').limit(N) without the readiness filter
+      processed: false,
+      processing_error: null,
+      metadata: { retry_after: future },
+    }
+    const deferred2: FixtureObs = {
+      id: 'deferred-2',
+      collected_at: '2026-08-01T01:00:00.000Z',
+      processed: false,
+      processing_error: null,
+      metadata: { retry_after: future },
+    }
+    const readyLater: FixtureObs = {
+      id: 'ready-later',
+      collected_at: '2026-08-01T02:00:00.000Z', // LATER in collected_at order than both deferred rows
+      processed: false,
+      processing_error: null,
+      metadata: {}, // no retry_after -- genuinely ready right now
+    }
+    const client = makeMockClient([deferred1, deferred2, readyLater])
+
+    // pageSize=2 -- without the query-level readiness filter, a naive
+    // `ORDER BY collected_at LIMIT 2` would return ONLY the two
+    // deferred rows, and client-side filtering them out would produce
+    // an empty `ready` array -- exactly the real incident: a page
+    // consisting entirely of deferred rows being misread as "the pool
+    // is empty," even though a real, ready observation exists right
+    // behind them in the same ordering.
+    const page = await fetchNextReadyPage(client, 0, 2)
+
+    assert.equal(page.error, null)
+    assert.deepEqual(
+      page.rows.map((r) => r.id),
+      ['ready-later'],
+      'the genuinely ready observation must be found, even though two earlier-collected deferred rows exist -- the query-level readiness filter excludes them entirely rather than letting them consume the page and produce a false queue_empty',
+    )
+    assert.notEqual(
+      page.rows.length,
+      0,
+      'must never report an empty page when a genuinely ready observation exists in the pool',
+    )
+  })
+
+  test('a pool consisting ENTIRELY of deferred rows (no ready observation at all) correctly returns an empty page -- a real, provable exhaustion, not a false negative in the other direction', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    const allDeferred: FixtureObs[] = [
+      {
+        id: 'd1',
+        collected_at: '2026-08-01T00:00:00.000Z',
+        processed: false,
+        processing_error: null,
+        metadata: { retry_after: future },
+      },
+      {
+        id: 'd2',
+        collected_at: '2026-08-01T01:00:00.000Z',
+        processed: false,
+        processing_error: null,
+        metadata: { retry_after: future },
+      },
+    ]
+    const client = makeMockClient(allDeferred)
+
+    const page = await fetchNextReadyPage(client, 0, 10)
+
+    assert.equal(page.error, null)
+    assert.equal(
+      page.rows.length,
+      0,
+      'a pool with genuinely no ready rows (only deferred ones) must correctly report an empty page -- this is a REAL exhaustion, not a masking bug',
+    )
+  })
+})
+
+describe('scheduleBucketStartPageIndex — cross-invocation fairness (real production incident: short invocations always started with pageIndex=0, so a short cycle ALWAYS began with the fresh pool, letting the old backlog starve across many consecutive short invocations even though within any single long-running cycle both pools alternate correctly)', () => {
+  test('two adjacent 4-hour UTC schedule buckets start with different pool parity (fresh vs old)', () => {
+    // A fixed reference instant, then exactly one real 4-hour bucket
+    // boundary later -- genuinely crossing into the NEXT schedule
+    // bucket, not a synthetic override of the bucket math itself.
+    const referenceMs = Date.UTC(2026, 7, 11, 1, 0, 0) // 2026-08-11T01:00:00Z -- inside bucket 0 (hours 0-3)
+    const nextBucketMs = referenceMs + 4 * 60 * 60 * 1000 // 2026-08-11T05:00:00Z -- inside bucket 1 (hours 4-7)
+
+    const firstIndex = scheduleBucketStartPageIndex(referenceMs)
+    const secondIndex = scheduleBucketStartPageIndex(nextBucketMs)
+
+    assert.notEqual(
+      firstIndex % 2,
+      secondIndex % 2,
+      `adjacent schedule buckets must alternate parity (fresh vs old) -- got ${firstIndex} then ${secondIndex}`,
+    )
+  })
+
+  test("six consecutive schedule buckets (a full real day, matching collect-4h.yml's own 6-cycles/day cadence) alternate parity throughout, including the wrap from bucket 5 back to bucket 0", () => {
+    const dayStartMs = Date.UTC(2026, 7, 11, 0, 0, 0)
+    const indices: number[] = []
+    for (let i = 0; i < 7; i++) {
+      // 7 samples -- 6 real buckets plus one that wraps back to bucket 0
+      indices.push(scheduleBucketStartPageIndex(dayStartMs + i * 4 * 60 * 60 * 1000))
+    }
+    for (let i = 1; i < indices.length; i++) {
+      assert.notEqual(
+        (indices[i - 1] as number) % 2,
+        (indices[i] as number) % 2,
+        `bucket ${i - 1} (index ${indices[i - 1]}) and bucket ${i} (index ${indices[i]}) must have alternating parity, including the wrap-around`,
+      )
+    }
+  })
+
+  test('two consecutive SHORT invocations (each completing only ONE page before its own deadline) genuinely alternate fresh/old across runs -- not merely within one', async () => {
+    const oldObs = {
+      id: 'old-1',
+      source_id: 's1',
+      title: 't',
+      content: 'c',
+      url: 'https://example.com',
+      published_at: '2026-07-01T00:00:00Z',
+      collected_at: '2026-07-01T00:00:00Z', // well outside the 24h fresh window
+      metadata: {},
+      processed: false,
+      processing_error: null,
+      signal_id: null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+    const freshObs = {
+      ...oldObs,
+      id: 'fresh-1',
+      collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1h ago -- inside the fresh window
+    }
+
+    const poolsSeen: Array<'fresh' | 'old'> = []
+    const makeDepsForPool = (): BatchProcessingDeps => ({
+      fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+      fetchObservationsPage: async (pageIndex: number) => {
+        // Real fresh/old alternation logic, matching fetchNextReadyPage
+        // itself: even pageIndex -> fresh pool, odd -> old.
+        const wantFresh = pageIndex % 2 === 0
+        const pool: 'fresh' | 'old' = wantFresh ? 'fresh' : 'old'
+        poolsSeen.push(pool)
+        return { rows: [wantFresh ? freshObs : oldObs], error: null, pool }
+      },
+      processObservation: (async (obs) => ({
+        observationId: obs.id,
+        outcome: 'signal_created' as const,
+        signalId: 'sig-1',
+      })) as BatchProcessingDeps['processObservation'],
+      markObservationProcessed: async () => ({ ok: true }),
+      markObservationForRetry: async () => 'ok',
+      sleep: async () => {},
+    })
+
+    // Invocation 1: schedule bucket 0 (even startPageIndex -> fresh
+    // first), deadline forces exactly one page.
+    const deps1 = makeDepsForPool()
+    await runEnrichmentCycle(Date.now() + 4_000, deps1, 0)
+
+    // Invocation 2: schedule bucket 1 (odd startPageIndex -> old
+    // first) -- simulating the NEXT real invocation, 4 real schedule
+    // hours later, with its own short deadline.
+    const deps2 = makeDepsForPool()
+    await runEnrichmentCycle(Date.now() + 4_000, deps2, 1)
+
+    assert.equal(
+      poolsSeen[0],
+      'fresh',
+      'invocation 1 (schedule bucket 0) must start with the fresh pool',
+    )
+    assert.equal(
+      poolsSeen[1],
+      'old',
+      'invocation 2 (schedule bucket 1) must start with the old pool -- proving old/fresh genuinely alternate ACROSS invocations, not merely within one long-running cycle',
+    )
+  })
+
+  test('fallback to the other pool still works when driven via a real schedule-bucket-derived starting index, not only pageIndex=0', async () => {
+    const oldOnly: FixtureObs = {
+      id: 'old-only',
+      collected_at: '2026-07-01T00:00:00.000Z',
+      processed: false,
+      processing_error: null,
+    }
+    const client = makeMockClient([oldOnly]) // no fresh material exists at all
+
+    // startPageIndex=0 (bucket 0, even -> prefers fresh) -- but no
+    // fresh material exists, so fetchNextReadyPage's own fallback must
+    // still find the old-pool row.
+    const page = await fetchNextReadyPage(
+      client,
+      scheduleBucketStartPageIndex(Date.UTC(2026, 7, 11, 1, 0, 0)),
+      10,
+    )
+    assert.equal(
+      page.pool,
+      'old',
+      'must fall back to the old pool even when the schedule-bucket-derived start prefers fresh',
+    )
+    assert.equal(page.rows.length, 1)
   })
 })

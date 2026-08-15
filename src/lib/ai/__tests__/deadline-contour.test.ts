@@ -658,3 +658,170 @@ describe('withModelQueue deadline and concurrency', () => {
     )
   })
 })
+
+// ── client.ts — TPM token estimation ──────────────────────────────────────────
+
+describe('estimateRequestTokens (real 429 incident regression)', () => {
+  test('estimates above the real observed cost of the enrichment call', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    // Reconstructs the real enrichment request shape from Groq's own
+    // logs for 2026-08-05..08: ~11,375 characters of prompt, billed at
+    // ~2,492 input tokens, with ~178 output tokens actually emitted
+    // (maxTokens permitted 1024).
+    const messages = [
+      { role: 'system' as const, content: 'x'.repeat(9_055) },
+      { role: 'user' as const, content: 'y'.repeat(2_300) },
+    ]
+    const estimate = estimateRequestTokens(messages, 1024)
+    const realObservedCost = 2_492 + 178
+
+    assert.ok(
+      estimate >= realObservedCost,
+      `estimate ${estimate} must not be below the real observed cost ${realObservedCost} -- ` +
+        `under-estimating is exactly what caused the 2026-08-07 429 incident`,
+    )
+    // The old fixed guess was maxTokens + 1000 = 2024, which sat BELOW
+    // the real cost. Confirm the new estimate is strictly better.
+    assert.ok(estimate > 1024 + 1000, 'must exceed the old fixed guess that caused the incident')
+  })
+
+  test('scales with prompt length — a longer prompt yields a larger estimate', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    const short = estimateRequestTokens([{ role: 'system', content: 'x'.repeat(1_000) }], 500)
+    const long = estimateRequestTokens([{ role: 'system', content: 'x'.repeat(10_000) }], 500)
+    // This is the property whose absence caused the incident: the old
+    // fixed estimate did not move when the system prompt grew by ~500
+    // tokens, so the TPM budget silently stopped matching reality.
+    assert.ok(long > short, 'estimate must grow when the prompt grows')
+  })
+
+  test('budgets worst-case output, not typical output', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    const lowCap = estimateRequestTokens([{ role: 'user', content: 'x'.repeat(400) }], 100)
+    const highCap = estimateRequestTokens([{ role: 'user', content: 'x'.repeat(400) }], 4_000)
+    assert.equal(highCap - lowCap, 3_900, 'maxTokens must pass through to the estimate exactly')
+  })
+
+  test('sums across multiple messages rather than measuring only the first', async () => {
+    const { estimateRequestTokens } = await import('../client')
+    const one = estimateRequestTokens([{ role: 'user', content: 'x'.repeat(4_000) }], 0)
+    const two = estimateRequestTokens(
+      [
+        { role: 'user', content: 'x'.repeat(4_000) },
+        { role: 'user', content: 'x'.repeat(4_000) },
+      ],
+      0,
+    )
+    assert.ok(two > one * 1.9, 'both messages must contribute to the estimate')
+  })
+})
+
+// ── Real 429 incident regression: fitsWithinModelTPM / AIRequestTooLargeError ──
+// Exact real values from the diagnosed production incident: three
+// genuine Groq 429s on llama-3.1-8b-instant (TPM limit 6,000), with
+// `used` in the 1,154-1,532 range and `requested` in the 5,137-5,144
+// range. limitTokens * SAFETY_MARGIN = 6,000 * 0.85 = 5,100 -- a
+// request of ~5,140 tokens exceeds this ENTIRE safety-margined ceiling
+// on its own, regardless of how much of the current minute's budget
+// is already used.
+
+describe('fitsWithinModelTPM (real 429 incident: limit 6000, used 1154-1532, requested 5137-5144)', () => {
+  test('a request of 5137 tokens against llama-3.1-8b-instant does NOT fit -- exceeds the 5100 safety-margined ceiling even with zero current usage', async () => {
+    const { fitsWithinModelTPM } = await import('../tpm-manager')
+    const result = fitsWithinModelTPM('llama-3.1-8b-instant', 5137)
+    assert.equal(
+      result.fits,
+      false,
+      'the real incident\'s lowest observed "requested" value must fail the physical-fit check',
+    )
+    assert.equal(
+      result.modelCeiling,
+      5100,
+      '6,000 TPM * 0.85 safety margin = 5,100, matching the real tpm-manager.ts constants',
+    )
+  })
+
+  test('a request of 5144 tokens (the highest real observed "requested" value) also does not fit', async () => {
+    const { fitsWithinModelTPM } = await import('../tpm-manager')
+    const result = fitsWithinModelTPM('llama-3.1-8b-instant', 5144)
+    assert.equal(result.fits, false)
+  })
+
+  test('a request of exactly 5100 (the ceiling itself) fits; 5101 does not -- the boundary is inclusive of the ceiling, not the raw 6000 limit', async () => {
+    const { fitsWithinModelTPM } = await import('../tpm-manager')
+    assert.equal(fitsWithinModelTPM('llama-3.1-8b-instant', 5100).fits, true)
+    assert.equal(fitsWithinModelTPM('llama-3.1-8b-instant', 5101).fits, false)
+  })
+
+  test("the SAME 5140-token request DOES fit llama-3.3-70b-versatile (12,000 TPM, 10,200 effective) -- confirms the real incident's root cause: a model-chain fallback sending an unreduced prompt from a higher-TPM model to a lower-TPM one, not an inherently-too-large prompt", async () => {
+    const { fitsWithinModelTPM } = await import('../tpm-manager')
+    const onMini = fitsWithinModelTPM('llama-3.1-8b-instant', 5140)
+    const onPrimary = fitsWithinModelTPM('llama-3.3-70b-versatile', 5140)
+    assert.equal(onMini.fits, false, 'too large for the 8b fallback model')
+    assert.equal(
+      onPrimary.fits,
+      true,
+      'comfortably fits the 70b primary model it was originally sized for',
+    )
+  })
+
+  test('checkTPMBudget on the exact real incident numbers (used=1300, requested=5140) independently confirms `allowed: false` -- consistent with fitsWithinModelTPM, not contradicting it', async () => {
+    const { checkTPMBudget, recordActualTokens } = await import('../tpm-manager')
+    // Seed the rolling window with a real observed "used" value from
+    // the incident range (1,154-1,532) via the module's own real
+    // recording function, not a hand-constructed internal state.
+    recordActualTokens('llama-3.1-8b-instant', 1_300, 0)
+    const check = checkTPMBudget('llama-3.1-8b-instant', 5_140)
+    assert.equal(check.allowed, false)
+    assert.equal(check.limitTokens, 5_100)
+  })
+})
+
+describe('AIRequestTooLargeError (real incident: controlled requeue, never a real Groq 429)', () => {
+  test('callProvider refuses BEFORE calling the provider when the estimate does not fit the target model -- real incident numbers, real messages shape', async () => {
+    const { callProvider, AIProviderError } = await import('../client')
+    let providerWasCalled = false
+    const originalFetch = globalThis.fetch
+    const originalApiKey = process.env['GROQ_API_KEY']
+    process.env['GROQ_API_KEY'] = 'test-key-not-a-real-secret'
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).fetch = async () => {
+      providerWasCalled = true
+      throw new Error('provider must never be called for a physically-too-large request')
+    }
+    try {
+      // Reconstructs a real, large enrichment-shaped prompt landing in
+      // the exact real incident's requested-token range (5,137-5,144)
+      // once run through estimateRequestTokens's own real
+      // chars-per-token math.
+      const bigMessages = [
+        { role: 'system' as const, content: 'x'.repeat(18_000) },
+        { role: 'user' as const, content: 'y'.repeat(2_500) },
+      ]
+      await assert.rejects(
+        () =>
+          callProvider(
+            { provider: 'groq', model: 'llama-3.1-8b-instant' },
+            bigMessages,
+            { maxTokens: 400 },
+            Date.now() + 30_000,
+          ),
+        (err: unknown) => {
+          assert.ok(err instanceof Error)
+          assert.equal((err as Error).name, 'AI_REQUEST_TOO_LARGE')
+          return true
+        },
+      )
+      assert.equal(
+        providerWasCalled,
+        false,
+        "the real incident's Groq 429 must never happen again -- refused before any network call",
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalApiKey === undefined) delete process.env['GROQ_API_KEY']
+      else process.env['GROQ_API_KEY'] = originalApiKey
+      void AIProviderError
+    }
+  })
+})

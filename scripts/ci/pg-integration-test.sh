@@ -53,6 +53,8 @@ METRICS_EXTEND_MIGRATION="supabase/migrations/20260809130000_extend_pipeline_met
 [[ -f "$METRICS_MIGRATION" ]] || { echo "FATAL: $METRICS_MIGRATION not found (run from repo root)"; exit 1; }
 METRICS_REJECTED_RETRIED_MIGRATION="supabase/migrations/20260811130000_extend_pipeline_metrics_rejected_retried.sql"
 [[ -f "$METRICS_REJECTED_RETRIED_MIGRATION" ]] || { echo "FATAL: $METRICS_REJECTED_RETRIED_MIGRATION not found (run from repo root)"; exit 1; }
+METRICS_CONTRACT_COMMENTS_MIGRATION="supabase/migrations/20260813120000_correct_pipeline_metrics_contract_comments.sql"
+[[ -f "$METRICS_CONTRACT_COMMENTS_MIGRATION" ]] || { echo "FATAL: $METRICS_CONTRACT_COMMENTS_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -170,6 +172,7 @@ $PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
 
 echo "Applying the pipeline-metrics rejected/retried extension migration..."
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$METRICS_CONTRACT_COMMENTS_MIGRATION" >/dev/null
 
 fail=0
 check() { # name expected actual
@@ -547,6 +550,7 @@ $PG -v ON_ERROR_STOP=1 -f "$CORROBORATION_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$METRICS_CONTRACT_COMMENTS_MIGRATION" >/dev/null
 POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
 

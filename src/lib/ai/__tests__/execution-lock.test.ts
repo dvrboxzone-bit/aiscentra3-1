@@ -209,8 +209,20 @@ describe('the enrichment route takes the shared lock', () => {
   test('acquires the lock before doing any work', () => {
     const s = src()
     const lockAt = s.indexOf('acquireEnrichmentLock(')
-    const processAt = s.indexOf('processBatchOfObservations(ready')
-    assert.ok(lockAt > -1 && lockAt < processAt, 'lock must precede processing')
+    // REAL REFACTOR (independent review): the POST handler's own
+    // inline processing loop was extracted into a separate, testable
+    // runEnrichmentCycle function (defined ABOVE POST in the file, so
+    // its own body -- including the literal string
+    // "processBatchOfObservations(ready" -- now appears earlier in the
+    // file than POST's own acquireEnrichmentLock call, even though the
+    // REAL runtime order is unchanged: POST still acquires the lock
+    // first, then calls runEnrichmentCycle, which is what actually
+    // invokes processBatchOfObservations. This check now looks for
+    // POST's own call site (runEnrichmentCycle(deadlineAt, deps)),
+    // which genuinely still appears after acquireEnrichmentLock in the
+    // file, matching the real invariant this test exists to guard.
+    const processAt = s.indexOf('runEnrichmentCycle(deadlineAt, deps)')
+    assert.ok(lockAt > -1 && processAt > -1 && lockAt < processAt, 'lock must precede processing')
   })
 
   test('a losing run returns early without processing', () => {

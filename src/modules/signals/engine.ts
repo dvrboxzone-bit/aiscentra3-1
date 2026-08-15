@@ -20,6 +20,7 @@ import { agentCompleteJSON } from '@/lib/ai/agent'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
+import { AIRequestTooLargeError } from '@/lib/ai/tpm-manager'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
   EnrichmentOutputSchema,
@@ -91,10 +92,24 @@ export function isWeakSignalDecision(
   signalScore: number,
 ): boolean {
   if (sisDecision === undefined) {
-    // SIS was unavailable for this observation (see engine's own
-    // "SIS failure -> proceed without SIS" fallback) -- fall back to the
-    // V1 signal_score threshold, unchanged from the pre-existing
-    // behavior for this specific case.
+    // Defensive fallback for this pure function's own signature --
+    // NOT an endorsed runtime path. As of the independent-review fix
+    // to processObservation's own SIS catch block, a genuine SIS
+    // failure (any non-retryable error) now returns
+    // `{ outcome: 'error' }` immediately and never reaches this
+    // function at all; the only call site (processObservation, via
+    // `isWeakSignalDecision(sisResult?.decision, signal_score)`) can
+    // only pass `undefined` here if `sisResult` itself is null, which
+    // by construction cannot happen once SIS has genuinely succeeded
+    // (sisResult is set unconditionally on the try block's success
+    // path) or genuinely failed (the catch block now either re-throws
+    // a retryable error or returns early on a non-retryable one --
+    // execution never reaches this call with sisResult still null).
+    // This branch exists purely so the function stays total and
+    // backward-compatible for any OTHER caller that might genuinely
+    // have no SIS decision to pass -- it does not imply the Signal
+    // Engine permits creating a signal via V1 scoring when SIS itself
+    // failed.
     return signalScore < 55
   }
   return sisDecision === 'WEAK_SIGNAL' || sisDecision === 'ARCHIVE'
@@ -506,8 +521,39 @@ export async function processObservation(
     // classifier had simply been skipped. The batch handler must see
     // this to requeue the observation and stop the cycle instead.
     if (err instanceof AITokenBudgetExceededError) throw err
-    // SIS failure → proceed without SIS (V1 fallback)
-    console.warn('[engine] SIS evaluation failed, proceeding without:', err)
+    // REAL PRODUCTION INCIDENT FIX: re-throw when the request is
+    // physically too large for every model in the SIS classifier's own
+    // chain (e.g. an oversized observation, or a fallback attempt whose
+    // full prompt doesn't fit the fallback model's smaller TPM budget)
+    // -- identical rationale to the deadline/budget cases above. This
+    // is NOT a genuine SIS unavailability that's safe to silently skip:
+    // "proceed without SIS" here would let a signal be created via the
+    // looser V1 scoring path for an observation whose SIS classification
+    // never actually completed, for reasons that may well resolve on a
+    // later attempt (a different batch composition, a config change) --
+    // the batch handler must requeue this observation instead.
+    if (err instanceof AIRequestTooLargeError) throw err
+    // REAL BUG FIXED (merge-blocking review): every OTHER SIS failure
+    // -- a genuine JSON-parse/Zod-validation error on all chain
+    // models, or any other non-retryable classifier failure -- was
+    // previously treated as safe to silently skip ("proceed without
+    // SIS"), letting the observation fall through to the looser V1
+    // scoring path (signal_score, via `sisResult?.sis.final ??
+    // signal_score` and `isWeakSignalDecision(sisResult?.decision,
+    // signal_score)` further down this function) for content whose
+    // SIS classification never actually completed. Only the four
+    // explicitly-retryable types above (rate limit, deadline, budget,
+    // request-too-large) are re-thrown for the batch handler to
+    // requeue; every other SIS failure now ends this observation with
+    // an honest error outcome instead of a silent, unscored pass-
+    // through -- scoring thresholds and the successful-SIS code path
+    // below are completely unchanged.
+    const message = err instanceof Error ? err.message : 'SIS evaluation failed'
+    console.error(
+      '[engine] SIS evaluation failed (non-retryable) — ending observation with an honest error, not V1 fallback:',
+      message,
+    )
+    return { observationId: observation.id, outcome: 'error', reason: `SIS: ${message}` }
   }
 
   // Apply SIS decision if available
@@ -592,6 +638,19 @@ export async function processObservation(
     // message and the observation would never be retried, even though
     // the refusal is temporary and resolves once budget frees up.
     if (err instanceof AITokenBudgetExceededError) throw err
+    // REAL PRODUCTION INCIDENT FIX: re-throw for the exact same reason
+    // as the deadline/budget cases above. This is the exact chain-
+    // exhaustion path a genuine 200 response from the primary model
+    // that fails JSON/Zod validation, followed by a fallback attempt
+    // whose full (unreduced) prompt doesn't fit the fallback model's
+    // own smaller TPM budget, produces -- three real Groq 429s (limit
+    // 6,000, requested ~5,140) were the direct, observed symptom of
+    // this NOT being re-thrown here. Falling through to the generic
+    // `outcome: 'error'` below would permanently mark this observation
+    // failed via markObservationProcessed; the batch handler must
+    // requeue it instead, since a physically-too-large-for-current-
+    // models condition is not necessarily permanent.
+    if (err instanceof AIRequestTooLargeError) throw err
     const message = err instanceof Error ? err.message : 'Enrichment failed'
     return { observationId: observation.id, outcome: 'error', reason: message }
   }
