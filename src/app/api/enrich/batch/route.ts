@@ -140,15 +140,21 @@ const SOURCE_READ_RETRY_MS = 60_000
 const INTER_REQUEST_MS = 2_200 // ~27.3 RPM, safety margin under Groq's real 30 RPM limit
 
 export interface BatchStats {
-  /** REAL BUG FIXED (production incident: metrics contradicted the
-   * decision log). `attempted` is now a single, honest count of every
-   * item processObservation was actually called for this cycle
-   * (whether it returned normally or threw) -- succeeded + rejected +
-   * failed always sums to exactly this value; retried items are
-   * tracked separately since they are NOT yet resolved (they get
-   * another real attempt on a future cycle, so counting them toward
-   * this cycle's attempted/succeeded/rejected/failed would misrepresent
-   * what THIS cycle actually decided). */
+  /** HONEST METRICS CONTRACT (real, enforced invariant across every
+   * error-handling branch in this file):
+   *
+   *     attempted = succeeded + rejected + failed + retried
+   *
+   * `attempted` counts every observation genuinely extracted from the
+   * queue and passed into the processing workflow this cycle --
+   * including one whose final resolution this cycle was a controlled
+   * requeue (retried, e.g. a rate limit, deadline, budget refusal, an
+   * oversized request, a genuine Source-read failure, or a genuine
+   * result-write failure), not only ones that reached a final
+   * succeeded/rejected/failed outcome. A genuine queue-read failure
+   * (the page fetch itself failing, before any observation was ever
+   * extracted) contributes 0 to attempted for that cycle -- there was
+   * nothing to attempt. */
   attempted: number
   /** signal_created + weak_signal_created + corroborated_existing_signal
    * -- every outcome that represents a genuine, positive Signal Engine
@@ -167,9 +173,14 @@ export interface BatchStats {
    * branch and was counted as an error. */
   rejected: number
   /** Requeued for a later attempt (429 rate limit, AI_DEADLINE_EXCEEDED,
-   * AI_TOKEN_BUDGET_EXCEEDED) -- NOT yet resolved, so intentionally
-   * excluded from the attempted/succeeded/rejected/failed accounting
-   * above; only counted here. */
+   * AI_TOKEN_BUDGET_EXCEEDED, AI_REQUEST_TOO_LARGE, a genuine Source-
+   * read failure, or a genuine result-write failure) -- not yet
+   * resolved this cycle. Real, enforced invariant: `retried` IS one of
+   * the four addends summing to `attempted` (see attempted's own
+   * comment above) -- it is never excluded from it. A requeue attempt
+   * that ALSO fails to write (the observation could not actually be
+   * put back in the queue) counts toward `failed` instead, never
+   * `retried` -- the requeue did not genuinely happen. */
   retried: number
   /** A genuine processing failure: outcome:'error' (a real, unexpected
    * condition inside processObservation that produced no decision at
@@ -320,7 +331,7 @@ export interface BatchProcessingDeps {
   processObservation: typeof processObservation
   markObservationProcessed: typeof markObservationProcessed
   markObservationForRetry: typeof markObservationForRetry
-  /** Overridable for tests that need to observe/skip the real 6s inter-request delay. */
+  /** Overridable for tests that need to observe/skip the real 2.2s (INTER_REQUEST_MS) inter-request delay. */
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -1068,8 +1079,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     // sub-classification) -- rejected and error items were counted
     // TWICE. combinedStats.attempted is now a single, directly-
     // maintained counter (see the classifyOutcome-based accounting
-    // above) that already equals succeeded+rejected+failed by
-    // construction, with no addition needed here.
+    // above), honestly satisfying the real, enforced contract:
+    //
+    //     attempted = succeeded + rejected + failed + retried
+    //
+    // (see BatchStats.attempted's own comment for the full invariant)
+    // -- with no addition needed here.
     await recordCycleMetrics(lockClient, {
       cycleType: 'enrichment',
       startedAt,
