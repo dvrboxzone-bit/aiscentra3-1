@@ -681,6 +681,79 @@ export function checkPngSignature(
   return { ok: true }
 }
 
+/**
+ * Extracts a safe, same-origin path to ONE real signal's detail page
+ * (e.g. "/signals/21a20bd4-...") from the raw HTML of the /signals
+ * listing page.
+ *
+ * ONE real implementation, shared across every consumer that needs a
+ * real signal URL for a live check -- staged smoke, the pre-promotion
+ * TOCTOU recheck, and the post-cutover verifyDomain -- matching the
+ * same "one function, multiple call sites via a shared CLI wrapper"
+ * pattern already established by checkActiveSignalCountAttribute (see
+ * check-signal-count.ts) rather than three independently hand-copied
+ * regexes that could drift out of sync with each other or with a
+ * future markup change.
+ *
+ * Real production markup this matches: signal-card.tsx's own
+ * `href={`/signals/${signal.id}`}`, rendered by Next.js as a plain
+ * relative `href="/signals/<id>"` attribute -- NOT the listing page's
+ * own href itself (`/signals` or `/signals?category=...`), which this
+ * function explicitly excludes.
+ *
+ * Fail-closed: returns null (not a fabricated/placeholder path) if no
+ * genuine signal detail link is found, is malformed, or is not a pure
+ * relative path -- callers must treat null as "cannot verify," never
+ * substitute a guessed path. Any absolute URL (even a same-origin
+ * `https://aiscentra.com/...` one) is rejected outright, not partially
+ * parsed: a real Next.js-rendered internal link is always relative, so
+ * there is no legitimate reason to accept an absolute form at all, and
+ * doing so previously risked extracting a path from a genuinely
+ * cross-origin URL (see this function's own real-bug-fixed comment
+ * below).
+ */
+export function extractRealSignalPath(html: string): string | null {
+  const hrefPattern = /href=["']([^"']+)["']/g
+  for (const match of html.matchAll(hrefPattern)) {
+    const raw = match[1]
+    if (!raw) continue
+
+    // REAL BUG FIXED (caught by this function's own test suite): a
+    // genuine Next.js-rendered internal link is ALWAYS a relative path
+    // (signal-card.tsx's own `href={`/signals/${signal.id}`}` never
+    // includes a scheme or host) -- there is no legitimate reason to
+    // accept ANY absolute URL form here at all. An earlier version of
+    // this function stripped the scheme+host from ANY absolute URL
+    // (including a genuinely cross-origin one) and returned its path
+    // regardless of which domain it pointed to -- a real security gap,
+    // not a hypothetical one: a same-shape path on an attacker-
+    // controlled domain would have been accepted as a "real" signal
+    // link. Fixed by requiring the raw href to start with exactly one
+    // `/` (a genuine relative path) and rejecting every other form
+    // (`http://`, `https://`, `//`, or anything else) outright, with
+    // no partial extraction attempted on them.
+    if (!raw.startsWith('/') || raw.startsWith('//')) continue
+
+    // Strip query string and fragment -- the required output shape is
+    // exactly "/signals/<slug>", nothing appended.
+    const candidate = raw.split('?')[0]?.split('#')[0] ?? ''
+
+    // Must be a genuine signal DETAIL page: "/signals/<non-empty-slug>",
+    // not the listing page itself ("/signals" or "/signals/") and not
+    // a nested/unexpected path shape. A slug is restricted to a safe,
+    // conservative character set (matches this project's real UUID
+    // signal IDs) -- deliberately narrow rather than permissive, since
+    // this path is later used to construct a live fetch URL.
+    const slugMatch = /^\/signals\/([A-Za-z0-9-]+)$/.exec(candidate)
+    if (!slugMatch) continue
+    const slug = slugMatch[1]
+    if (!slug) continue
+
+    return `/signals/${slug}`
+  }
+  return null
+}
+
 // --------------------------------------------------------------------
 // Artifact
 // --------------------------------------------------------------------
