@@ -950,7 +950,16 @@ jobs:
 
           SIGNAL_COUNT="$(echo "$CHECK_OUTPUT" | awk '{print $2}')"
           echo "Signal feed smoke: HTTP $STATUS, feed genuinely non-empty ($SIGNAL_COUNT active signals, verified via data-active-signal-count)."
-          rm -f /tmp/signals.html /tmp/signals-status.txt /tmp/signals-curl-stderr.txt
+          # REAL BUG FIXED (independent review, merge blocker): /tmp/signals.html
+          # (and its companion status/stderr files) are deliberately NOT
+          # removed here on the success path -- the "Per-signal Open
+          # Graph image smoke" step immediately below reuses this SAME
+          # already-fetched HTML to extract a real signal path via
+          # extract-signal-path.ts, rather than re-fetching /signals a
+          # second time. A prior version of this file removed the file
+          # right here, guaranteeing "fail could not read HTML file" in
+          # the very next step on every real run. Cleaned up once, at
+          # the very end of the per-signal Open Graph step below.
 
       - name: Open Graph image smoke (HTTP 200, image/png, PNG signature)
         env:
@@ -1080,6 +1089,11 @@ jobs:
 
           echo "Per-signal Open Graph smoke: $SIGNAL_PATH, HTTP $STATUS, content-type=$CONTENT_TYPE, body=${BODY_SIZE} bytes, PNG signature confirmed."
           rm -f /tmp/signal-og.png /tmp/signal-og-headers.txt /tmp/signal-og-status.txt /tmp/signal-og-curl-stderr.txt
+          # /tmp/signals.html (and its status/stderr companions) is the
+          # LAST staged-smoke consumer of this file -- genuinely safe to
+          # remove only now, after both the signal-feed check above AND
+          # this per-signal Open Graph check have read it.
+          rm -f /tmp/signals.html /tmp/signals-status.txt /tmp/signals-curl-stderr.txt
 
   # ---------------------------------------------------------------------
   # Job 7: TOCTOU re-check immediately before promotion. Fully repeats

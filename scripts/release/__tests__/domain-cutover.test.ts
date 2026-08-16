@@ -1080,4 +1080,53 @@ describe('per-signal Open Graph image protection (staged smoke, TOCTOU, and post
       "the final success return must come AFTER the new per-signal check and BEFORE the outer catch -- proving the check genuinely gates the same try block's own success path, not a disconnected side check",
     )
   })
+
+  test('regression: /tmp/signals.html is genuinely still readable when the per-signal Open Graph step reads it -- staged-smoke must NEVER remove it on the success path before the per-signal step consumes it (real merge-blocking incident: a prior version cleaned up the file immediately after the signal-feed smoke step\'s own success echo, guaranteeing "fail could not read HTML file" in the very next step on every real run)', () => {
+    const text = readFileSync(workflowPath2, 'utf-8')
+
+    // Locate the staged-smoke job's own "Signal feed smoke" success
+    // echo (the point right after which the OLD, buggy version removed
+    // the file) and the "Per-signal Open Graph image smoke" step's own
+    // read of that same file via the shared extract-signal-path.ts CLI
+    // wrapper.
+    const signalFeedEchoIndex = text.indexOf(
+      'Signal feed smoke: HTTP $STATUS, feed genuinely non-empty',
+    )
+    assert.ok(signalFeedEchoIndex > 0, "the Signal feed smoke step's own success echo must exist")
+
+    const perSignalReadIndex = text.indexOf(
+      'extract-signal-path.ts /tmp/signals.html',
+      signalFeedEchoIndex,
+    )
+    assert.ok(
+      perSignalReadIndex > signalFeedEchoIndex,
+      "the per-signal step must read /tmp/signals.html via the shared extract-signal-path.ts CLI wrapper, after the signal-feed step's own success echo",
+    )
+
+    // The real regression: a `rm -f` targeting /tmp/signals.html
+    // positioned ANYWHERE between those two points would delete the
+    // file before the per-signal step gets to read it -- this must be
+    // impossible, not merely improbable. Deliberately does not attempt
+    // to distinguish "textually before but inside an unrelated
+    // early-exit failure branch" from a genuine success-path removal --
+    // ANY occurrence in this exact window is disqualifying, since a
+    // correct fix removes the premature cleanup entirely rather than
+    // making it conditional.
+    const between = text.slice(signalFeedEchoIndex, perSignalReadIndex)
+    assert.doesNotMatch(
+      between,
+      /rm -f[^\n]*\/tmp\/signals\.html/,
+      '/tmp/signals.html must not be removed anywhere between the signal-feed step\'s own success echo and the per-signal step\'s own read of that file -- this is the exact real regression (staged-smoke would deterministically fail with "fail could not read HTML file" on every real production release)',
+    )
+
+    // Positive half of the same invariant: the file IS genuinely
+    // cleaned up eventually, just not prematurely -- after the
+    // per-signal read, not before it.
+    const afterPerSignalRead = text.slice(perSignalReadIndex)
+    assert.match(
+      afterPerSignalRead,
+      /rm -f[^\n]*\/tmp\/signals\.html/,
+      '/tmp/signals.html must still genuinely be cleaned up at some point after the per-signal step reads it -- not simply left behind forever',
+    )
+  })
 })
