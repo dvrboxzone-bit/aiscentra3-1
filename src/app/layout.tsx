@@ -1,5 +1,30 @@
 import type { Metadata, Viewport } from 'next'
+import { Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
+
+// vfinal Frontend Design Foundation: Inter (400;500;700) and JetBrains
+// Mono (400;500) -- the exact weights the approved HTML source loads
+// via its own Google Fonts <link>. Loaded through next/font (self-
+// hosted at build time, zero runtime request to fonts.googleapis.com)
+// per the explicit "не использовать runtime CDN... для шрифтов"
+// instruction -- not the HTML's own <link>/CDN approach. CSS variables
+// are additive (--font-pp/--font-mono in globals.css already reference
+// 'Inter'/'JetBrains Mono' by family name, which next/font's generated
+// @font-face satisfies automatically once these variables are applied
+// to <html> below).
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '700'],
+  variable: '--font-inter',
+  display: 'swap',
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--font-jetbrains-mono',
+  display: 'swap',
+})
 
 const FALLBACK_APP_URL = 'https://aiscentra.com'
 
@@ -56,7 +81,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <html lang="en">
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body>{children}</body>
     </html>
   )
