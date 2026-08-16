@@ -1,9 +1,12 @@
 import { VfinalLogoSymbol } from './vfinal-logo-symbol'
 import { VfinalHeader } from './vfinal-header'
 import { VfinalFooter } from './vfinal-footer'
+import { VfinalLenisProvider } from './vfinal-lenis-provider'
+import { VfinalProgressAndBackToTop } from './vfinal-progress-back-to-top'
 
 /**
- * AIscentra — vfinal public shell (Frontend Design Foundation, layer 2)
+ * AIscentra — vfinal public shell (Frontend Design Foundation, layer 2
+ * + layer 3 global interactive chrome)
  *
  * The unified header + logo-symbol + footer wrapper every public page
  * adopts as it migrates to the new design (task requirement: "Каждая
@@ -18,13 +21,17 @@ import { VfinalFooter } from './vfinal-footer'
  * first section, verified against its own section padding values)
  * -- content is never hidden underneath the fixed header.
  *
- * Lenis smooth-scroll, the scroll progress bar, and the back-to-top
- * button (all global, page-independent interactive chrome in the HTML
- * source) arrive in layer 3 and will be added to this same shell then.
+ * Layer 3 global interactive chrome, page-independent in the HTML
+ * source (VfinalLenisProvider, VfinalProgressAndBackToTop) is mounted
+ * here so every page adopting this shell gets it automatically, exactly
+ * matching the HTML's own single top-level placement of these elements
+ * right after <body>.
  */
 export function VfinalPublicShell({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <div className="min-h-screen bg-deep-obsidian text-frost">
+      <VfinalLenisProvider />
+      <VfinalProgressAndBackToTop />
       <VfinalLogoSymbol />
       <VfinalHeader />
       <main className="pt-24">{children}</main>
