@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
 import { getEventById } from '@/modules/events/queries'
 import { getSignalById } from '@/modules/signals/queries'
 import { formatDate, formatRelativeTime } from '@/lib/utils/format'
@@ -40,6 +41,12 @@ const FORECAST_OUTCOMES: Record<string, string> = {
   CONTRADICTED: 'Contradicted',
 }
 
+/**
+ * AIscentra — vfinal /events/[slug] page (Frontend Design Foundation,
+ * layer 5B). Real getEventById, getSignalById (origin signal),
+ * generateMetadata, generateStaticParams, notFound() -- all unchanged.
+ * Visual language migrated to vfinal.
+ */
 export default async function EventPage({ params }: EventPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
   const event = await getEventById(slug)
@@ -48,137 +55,133 @@ export default async function EventPage({ params }: EventPageProps): Promise<Rea
   const originSignal = await getSignalById(event.signal_id)
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10">
-      {/* Breadcrumb */}
-      <nav className="mb-6 font-mono text-xs text-text-muted">
-        <Link href="/events" className="hover:text-text-secondary">
-          Events
-        </Link>
-        <span className="mx-2 text-observatory-border">›</span>
-        <span>{EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}</span>
-      </nav>
+    <VfinalPublicShell>
+      <div className="textured-bg relative px-6 pb-24 pt-40">
+        <div className="tech-grid" />
+        <div className="relative z-10 mx-auto max-w-4xl">
+          <nav className="font-caption mb-6 text-silver-haze">
+            <Link href="/events" className="hover:text-mint-signal">
+              Events
+            </Link>
+            <span className="mx-2">›</span>
+            <span>{EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}</span>
+          </nav>
 
-      {/* Header */}
-      <header className="mb-8 border-b border-observatory-border pb-8">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="border border-observatory-border px-2 py-0.5 font-mono text-xs text-text-secondary">
-            {EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}
-          </span>
-          <span className="border border-observatory-border px-2 py-0.5 font-mono text-xs text-text-muted">
-            IMPACT {event.impact_score}
-          </span>
-          <span
-            className={`border px-2 py-0.5 font-mono text-xs ${
-              event.forecast_outcome === 'CONFIRMED'
-                ? 'border-text-secondary/30 text-text-secondary'
-                : 'border-observatory-border text-text-muted'
-            }`}
-          >
-            {FORECAST_OUTCOMES[event.forecast_outcome] ?? event.forecast_outcome}
-          </span>
-        </div>
-
-        <h1 className="mb-4 text-xl font-medium leading-snug text-text-primary md:text-2xl">
-          {event.title}
-        </h1>
-
-        <div className="flex flex-wrap items-center gap-4 font-mono text-xs text-text-muted">
-          <time dateTime={event.created_at}>Published {formatRelativeTime(event.created_at)}</time>
-          <span className="text-observatory-border">·</span>
-          <span>Timeline {formatDate(event.timeline_date)}</span>
-          <span className="text-observatory-border">·</span>
-          <span>EVENT {event.id.slice(0, 8).toUpperCase()}</span>
-        </div>
-      </header>
-
-      <div className="grid gap-8 md:grid-cols-[1fr_220px]">
-        {/* Main content */}
-        <div className="space-y-6">
-          {/* Summary */}
-          <section>
-            <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">SUMMARY</h2>
-            <p className="text-sm leading-relaxed text-text-secondary">{event.summary}</p>
-          </section>
-
-          {/* Impact */}
-          <section className="border border-observatory-border bg-observatory-surface p-5">
-            <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">
-              IMPACT ANALYSIS
-            </h2>
-            <p className="text-sm leading-relaxed text-text-secondary">{event.impact_summary}</p>
-          </section>
-
-          {/* Forecast */}
-          <section className="border border-observatory-border p-5">
-            <h2 className="mb-3 font-mono text-xs tracking-wider text-text-muted">
-              FORECAST
-              <span className="ml-2 text-observatory-border">·</span>
-              <span className="ml-2 text-text-muted">
-                {FORECAST_OUTCOMES[event.forecast_outcome]}
+          <header className="mb-8 border-b border-border-subtle pb-8">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className="pill border border-border-subtle px-2 py-0.5 text-xs text-silver-haze">
+                {EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}
               </span>
-            </h2>
-            <p className="text-sm italic leading-relaxed text-text-muted">{event.forecast}</p>
-            <p className="mt-3 text-xs text-text-muted opacity-60">
-              Forecasts are Observatory assessments, not factual claims. Marked UNRESOLVED until
-              subsequent signals confirm or contradict.
-            </p>
-          </section>
-
-          {/* Origin signal */}
-          {originSignal && (
-            <section className="border-t border-observatory-border pt-6">
-              <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">
-                ORIGIN SIGNAL
-              </h2>
-              <a
-                href={`/signals/${originSignal.id}`}
-                className="block border border-observatory-border bg-observatory-surface p-4 transition-colors hover:bg-observatory-dark"
+              <span className="pill border border-border-subtle px-2 py-0.5 text-xs text-silver-haze">
+                IMPACT {event.impact_score}
+              </span>
+              <span
+                className={`pill border px-2 py-0.5 text-xs ${
+                  event.forecast_outcome === 'CONFIRMED'
+                    ? 'border-mint-signal text-mint-signal'
+                    : 'border-border-subtle text-silver-haze'
+                }`}
               >
-                <div className="mb-1 flex items-center gap-3">
-                  <span className="font-mono text-xs text-text-muted">{originSignal.category}</span>
-                  <span className="font-mono text-xs text-text-muted">
-                    SCORE {originSignal.signal_score}
-                  </span>
-                </div>
-                <p className="text-sm text-text-secondary">{originSignal.title}</p>
-              </a>
-            </section>
-          )}
-        </div>
-
-        {/* Sidebar */}
-        <aside className="space-y-5">
-          <section className="border border-observatory-border bg-observatory-surface p-4">
-            <h2 className="mb-4 font-mono text-xs tracking-wider text-text-muted">EVENT METRICS</h2>
-            <div className="space-y-3">
-              <MetricRow
-                label="Type"
-                value={EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}
-              />
-              <MetricRow label="Impact" value={`${event.impact_score}/100`} />
-              <MetricRow label="Timeline" value={formatDate(event.timeline_date)} />
-              <MetricRow label="Entities" value={`${event.affected_entity_ids.length} linked`} />
-              <MetricRow label="Override" value={event.manual_override ? 'Manual' : 'Automated'} />
+                {FORECAST_OUTCOMES[event.forecast_outcome] ?? event.forecast_outcome}
+              </span>
             </div>
-          </section>
 
-          <Link
-            href="/events"
-            className="block text-center font-mono text-xs tracking-wider text-text-muted transition-colors hover:text-text-secondary"
-          >
-            ← ALL EVENTS
-          </Link>
-        </aside>
+            <h1 className="font-heading mb-4 text-3xl text-frost md:text-4xl">{event.title}</h1>
+
+            <div className="font-caption flex flex-wrap items-center gap-4 text-silver-haze">
+              <time dateTime={event.created_at}>
+                Published {formatRelativeTime(event.created_at)}
+              </time>
+              <span>·</span>
+              <span>Timeline {formatDate(event.timeline_date)}</span>
+              <span>·</span>
+              <span>EVENT {event.id.slice(0, 8).toUpperCase()}</span>
+            </div>
+          </header>
+
+          <div className="grid gap-8 md:grid-cols-[1fr_220px]">
+            <div className="space-y-6">
+              <section>
+                <h2 className="font-caption mb-3 text-silver-haze">SUMMARY</h2>
+                <p className="text-lg leading-relaxed text-silver-haze">{event.summary}</p>
+              </section>
+
+              <section className="border border-border-subtle bg-surface-tonal p-5">
+                <h2 className="font-caption mb-3 text-silver-haze">IMPACT ANALYSIS</h2>
+                <p className="leading-relaxed text-silver-haze">{event.impact_summary}</p>
+              </section>
+
+              <section className="border border-border-subtle p-5">
+                <h2 className="font-caption mb-3 text-silver-haze">
+                  FORECAST <span className="mx-2">·</span>
+                  <span>{FORECAST_OUTCOMES[event.forecast_outcome]}</span>
+                </h2>
+                <p className="italic leading-relaxed text-silver-haze">{event.forecast}</p>
+                <p className="mt-3 text-xs text-silver-haze opacity-60">
+                  Forecasts are Observatory assessments, not factual claims. Marked UNRESOLVED until
+                  subsequent signals confirm or contradict.
+                </p>
+              </section>
+
+              {originSignal && (
+                <section className="border-t border-border-subtle pt-6">
+                  <h2 className="font-caption mb-4 text-silver-haze">ORIGIN SIGNAL</h2>
+                  <Link
+                    href={`/signals/${originSignal.id}`}
+                    className="block border border-border-subtle bg-surface-tonal p-4 transition-colors hover:border-mint-signal"
+                  >
+                    <div className="mb-1 flex items-center gap-3">
+                      <span className="font-caption text-silver-haze">{originSignal.category}</span>
+                      <span className="font-caption text-silver-haze">
+                        SCORE {originSignal.signal_score}
+                      </span>
+                    </div>
+                    <p className="text-frost">{originSignal.title}</p>
+                  </Link>
+                </section>
+              )}
+            </div>
+
+            <aside className="space-y-5">
+              <section className="border border-border-subtle bg-surface-tonal p-4">
+                <h2 className="font-caption mb-4 text-silver-haze">EVENT METRICS</h2>
+                <div className="space-y-3">
+                  <MetricRow
+                    label="Type"
+                    value={EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}
+                  />
+                  <MetricRow label="Impact" value={`${event.impact_score}/100`} />
+                  <MetricRow label="Timeline" value={formatDate(event.timeline_date)} />
+                  <MetricRow
+                    label="Entities"
+                    value={`${event.affected_entity_ids.length} linked`}
+                  />
+                  <MetricRow
+                    label="Override"
+                    value={event.manual_override ? 'Manual' : 'Automated'}
+                  />
+                </div>
+              </section>
+
+              <Link
+                href="/events"
+                className="font-caption block text-center text-silver-haze transition-colors hover:text-mint-signal"
+              >
+                ← ALL EVENTS
+              </Link>
+            </aside>
+          </div>
+        </div>
       </div>
-    </div>
+    </VfinalPublicShell>
   )
 }
 
 function MetricRow({ label, value }: { label: string; value: string }): React.JSX.Element {
   return (
     <div>
-      <p className="mb-0.5 font-mono text-xs text-text-muted">{label.toUpperCase()}</p>
-      <p className="text-xs text-text-secondary">{value}</p>
+      <p className="font-caption mb-0.5 text-silver-haze">{label.toUpperCase()}</p>
+      <p className="text-xs text-frost">{value}</p>
     </div>
   )
 }
