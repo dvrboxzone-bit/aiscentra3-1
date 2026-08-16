@@ -45,7 +45,7 @@ function makeDeps(overrides: Partial<BatchProcessingDeps> = {}): {
 
   const deps: BatchProcessingDeps = {
     fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
-    fetchObservationsPage: async () => ({ rows: [], error: null }),
+    fetchObservationsPage: async () => ({ rows: [], error: null, pool: 'old' }),
     processObservation: (async (obs: ObservationRow) => {
       calls.processObservation.push(obs.id)
       return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
@@ -87,7 +87,7 @@ describe('processBatchOfObservations', () => {
     assert.deepEqual(processedIds, ['obs-1'], 'obs-2 must never have been attempted')
     assert.equal(stats.stopped_reason, 'deadline_exceeded')
     assert.equal(stats.retried, 1)
-    assert.equal(stats.processed, 0)
+    assert.equal(stats.attempted, 1)
     assert.deepEqual(calls.markForRetry, ['obs-1'])
   })
 
@@ -109,7 +109,7 @@ describe('processBatchOfObservations', () => {
 
     assert.equal(stats.stopped_reason, 'rate_limited')
     assert.equal(stats.retried, 1)
-    assert.equal(stats.processed, 0)
+    assert.equal(stats.attempted, 1)
     assert.deepEqual(calls.markForRetry, ['obs-1'])
     // obs-2's processObservation must never have been called -- confirmed
     // via markProcessed never being invoked for it (processObservation
@@ -164,8 +164,8 @@ describe('processBatchOfObservations', () => {
     const stats = await processBatchOfObservations([obs1, obs2], deadlineAt, deps)
 
     assert.equal(stats.stopped_reason, 'queue_empty')
-    assert.equal(stats.processed, 2)
-    assert.equal(stats.signal_created, 2)
+    assert.equal(stats.attempted, 2)
+    assert.equal(stats.succeeded, 2)
     assert.deepEqual(calls.processObservation, ['obs-1', 'obs-2'])
   })
 
@@ -205,9 +205,9 @@ describe('processBatchOfObservations', () => {
     assert.equal(stats.stopped_reason, 'budget_exhausted')
     assert.equal(stats.retried, 1, 'obs-1 must be requeued, not permanently failed')
     assert.equal(
-      stats.processed,
-      0,
-      'obs-1 must NOT count as processed -- it was refused, not completed',
+      stats.attempted,
+      1,
+      'obs-1 WAS genuinely attempted (processObservation ran and threw this specific error) -- honest contract: attempted = succeeded + rejected + failed + retried',
     )
     assert.deepEqual(calls.markForRetry, ['obs-1'], 'obs-1 must go through the normal requeue path')
     assert.equal(
@@ -339,11 +339,15 @@ describe('merge-blocker regression: markObservationProcessed write failure is ne
     const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
 
     assert.equal(
-      stats.processed,
+      stats.succeeded,
       0,
-      'a write that never actually landed in the database must NEVER be counted as a successfully processed item',
+      'a write that never actually landed in the database must NEVER be counted as a successful outcome',
     )
-    assert.equal(stats.signal_created, 0)
+    assert.equal(
+      stats.attempted,
+      1,
+      'the observation WAS genuinely attempted (AI processing ran) -- honest contract: attempted = succeeded + rejected + failed + retried',
+    )
     assert.deepEqual(
       calls.markForRetry,
       ['obs-1'],
@@ -368,7 +372,16 @@ describe('merge-blocker regression: markObservationProcessed write failure is ne
     const obs1 = makeObservation('obs-1')
     const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
 
-    assert.equal(stats.processed, 0)
+    assert.equal(
+      stats.attempted,
+      1,
+      'the observation was genuinely attempted, even though the requeue itself failed',
+    )
+    assert.equal(
+      stats.failed,
+      1,
+      'requeue-write failure: attempted+1, failed+1, retried+0 per the honest metrics contract',
+    )
     assert.equal(stats.retried, 0)
     assert.equal(stats.stopped_reason, 'requeue_failed')
     assert.equal(stats.error_breakdown.requeue_failed, 1)
@@ -378,7 +391,7 @@ describe('merge-blocker regression: markObservationProcessed write failure is ne
 describe('merge-blocker regression: a genuine queue-read failure is honestly reported as queue_read_failed, never masked as queue_empty', () => {
   test('runEnrichmentCycle: a real fetchObservationsPage error stops the cycle with stopped_reason "queue_read_failed", never processes an observation, and never calls markObservationProcessed/markObservationForRetry for anything', async () => {
     const { deps, calls } = makeDeps({
-      fetchObservationsPage: async () => ({ rows: null, error: { message: 'connection reset' } }),
+      fetchObservationsPage: async () => ({ rows: [], error: 'connection reset', pool: 'old' }),
     })
 
     const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
@@ -409,16 +422,16 @@ describe('merge-blocker regression: a genuine queue-read failure is honestly rep
       'markObservationForRetry must never be called for an observation that was never even fetched',
     )
     assert.equal(
-      stats.processed,
+      stats.attempted,
       0,
-      'a failed queue-read cycle must never be counted as successful processing',
+      'a failed queue-read cycle happens BEFORE any observation is fetched -- attempted must be 0 per the honest metrics contract',
     )
     assert.equal(stats.retried, 0)
   })
 
   test('runEnrichmentCycle: a genuinely empty queue (no error) still correctly reports queue_empty, distinguishing it from a real read failure', async () => {
     const { deps } = makeDeps({
-      fetchObservationsPage: async () => ({ rows: [], error: null }),
+      fetchObservationsPage: async () => ({ rows: [], error: null, pool: 'old' }),
     })
 
     const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
@@ -456,7 +469,7 @@ describe('merge-blocker regression: a real AIRequestTooLargeError thrown by proc
       'markObservationProcessed must never be called for a physically-too-large request',
     )
     assert.equal(stats.retried, 1)
-    assert.equal(stats.processed, 0)
+    assert.equal(stats.attempted, 1)
     assert.equal(stats.stopped_reason, 'request_too_large')
     assert.equal(stats.error_breakdown.request_too_large, 1)
     assert.deepEqual(
@@ -485,7 +498,7 @@ describe('merge-blocker regression: a real AIRequestTooLargeError thrown by proc
       0,
       'retried must not be incremented when the requeue write itself failed',
     )
-    assert.equal(stats.processed, 0)
+    assert.equal(stats.attempted, 1)
     assert.equal(stats.stopped_reason, 'requeue_failed')
     assert.equal(stats.error_breakdown.requeue_failed, 1)
     void calls
@@ -516,8 +529,8 @@ describe('merge-blocker regression: runEnrichmentCycle is fail-closed -- the out
       // real production scenario that previously let 'queue_empty'
       // silently overwrite the real terminal reason. If the fix works,
       // this function must never be called a second time at all.
-      if (calls > 1) return { rows: [], error: null }
-      return { rows: [obs], error: null }
+      if (calls > 1) return { rows: [], error: null, pool: 'old' }
+      return { rows: [obs], error: null, pool: 'old' }
     }
     return { fetchObservationsPage, callCount: () => calls }
   }
@@ -607,8 +620,8 @@ describe('merge-blocker regression: runEnrichmentCycle is fail-closed -- the out
     let calls = 0
     const fetchObservationsPage: BatchProcessingDeps['fetchObservationsPage'] = async () => {
       calls++
-      if (calls > 1) return { rows: [], error: null }
-      return { rows: [obs1, obs2], error: null }
+      if (calls > 1) return { rows: [], error: null, pool: 'old' }
+      return { rows: [obs1, obs2], error: null, pool: 'old' }
     }
     const processedIds: string[] = []
     const { deps } = makeDeps({
@@ -636,5 +649,150 @@ describe('merge-blocker regression: runEnrichmentCycle is fail-closed -- the out
       [],
       'neither observation should be processed -- the deadline check runs before the first item',
     )
+  })
+})
+
+describe('merge-blocker regression: a genuine error-record write failure (markObservationProcessed) attempts a controlled requeue instead of leaving the observation with no retry_after -- driven through the REAL runEnrichmentCycle, not processBatchOfObservations in isolation', () => {
+  test('successful requeue after error-record write failure: attempted=1, retried=1, failed=0, stopped_reason="write_failed", observation fetched once, processObservation called once, second observation never attempted', async () => {
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+    let fetchCalls = 0
+    const fetchObservationsPage: BatchProcessingDeps['fetchObservationsPage'] = async () => {
+      fetchCalls++
+      if (fetchCalls > 1) return { rows: [], error: null, pool: 'old' }
+      return { rows: [obs1, obs2], error: null, pool: 'old' }
+    }
+    let processObservationCalls = 0
+    let requeueCalls = 0
+    let markProcessedCalls = 0
+    const deps: BatchProcessingDeps = {
+      fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+      fetchObservationsPage,
+      processObservation: (async (obs) => {
+        processObservationCalls++
+        throw new Error(`generic processing failure for ${obs.id}`)
+      }) as BatchProcessingDeps['processObservation'],
+      markObservationProcessed: async () => {
+        markProcessedCalls++
+        // The error-record write itself genuinely fails.
+        return { ok: false, writeError: 'connection reset' }
+      },
+      markObservationForRetry: async () => {
+        requeueCalls++
+        return 'ok' // requeue genuinely succeeds
+      },
+      sleep: async () => {},
+    }
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(
+      fetchCalls,
+      1,
+      'the queue must be fetched exactly once -- the cycle must stop after this page, never fetch a second one',
+    )
+    assert.equal(
+      processObservationCalls,
+      1,
+      'processObservation must be called exactly once (for obs-1) -- obs-2 must never be attempted',
+    )
+    assert.equal(markProcessedCalls, 1, 'the error-record write must be attempted exactly once')
+    assert.equal(
+      requeueCalls,
+      1,
+      'exactly one requeue attempt must be made after the error-record write failure',
+    )
+    assert.equal(stats.attempted, 1)
+    assert.equal(
+      stats.retried,
+      1,
+      'the successful requeue counts toward retried, not failed -- this observation is not yet resolved this cycle',
+    )
+    assert.equal(stats.failed, 0)
+    assert.equal(stats.succeeded, 0)
+    assert.equal(stats.rejected, 0)
+    assert.equal(stats.stopped_reason, 'write_failed')
+  })
+
+  test('requeue ALSO fails after error-record write failure: attempted=1, failed=1, retried=0, stopped_reason="requeue_failed", error_breakdown.requeue_failed=1, observation fetched once, processObservation called once, second observation never attempted', async () => {
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+    let fetchCalls = 0
+    const fetchObservationsPage: BatchProcessingDeps['fetchObservationsPage'] = async () => {
+      fetchCalls++
+      if (fetchCalls > 1) return { rows: [], error: null, pool: 'old' }
+      return { rows: [obs1, obs2], error: null, pool: 'old' }
+    }
+    let processObservationCalls = 0
+    let requeueCalls = 0
+    const deps: BatchProcessingDeps = {
+      fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+      fetchObservationsPage,
+      processObservation: (async (obs) => {
+        processObservationCalls++
+        throw new Error(`generic processing failure for ${obs.id}`)
+      }) as BatchProcessingDeps['processObservation'],
+      markObservationProcessed: async () => ({ ok: false, writeError: 'connection reset' }),
+      markObservationForRetry: async () => {
+        requeueCalls++
+        throw new Error('requeue write also failed')
+      },
+      sleep: async () => {},
+    }
+
+    const stats = await runEnrichmentCycle(Date.now() + 30_000, deps)
+
+    assert.equal(fetchCalls, 1, 'the queue must be fetched exactly once')
+    assert.equal(
+      processObservationCalls,
+      1,
+      'processObservation must be called exactly once -- obs-2 must never be attempted',
+    )
+    assert.equal(
+      requeueCalls,
+      1,
+      'exactly one requeue attempt must be made, even though it also fails',
+    )
+    assert.equal(stats.attempted, 1)
+    assert.equal(
+      stats.failed,
+      1,
+      'a requeue that ALSO fails counts toward failed -- the observation is genuinely, permanently unresolved this cycle',
+    )
+    assert.equal(
+      stats.retried,
+      0,
+      'retried must NOT be incremented when the requeue write itself failed',
+    )
+    assert.equal(stats.succeeded, 0)
+    assert.equal(stats.rejected, 0)
+    assert.equal(stats.stopped_reason, 'requeue_failed')
+    assert.equal(stats.error_breakdown.requeue_failed, 1)
+  })
+
+  test('the successful (non-degraded) path is unaffected: a genuine processing error whose error-record write SUCCEEDS is still counted as failed, not retried', async () => {
+    const obs1 = makeObservation('obs-1')
+    const deps: BatchProcessingDeps = {
+      fetchSourceInfo: async () => ({ ok: true, trustScore: 0.8, sourceName: 'Test Source' }),
+      fetchObservationsPage: async () => ({ rows: [obs1], error: null, pool: 'old' }),
+      processObservation: (async (obs) => {
+        throw new Error(`generic processing failure for ${obs.id}`)
+      }) as BatchProcessingDeps['processObservation'],
+      markObservationProcessed: async () => ({ ok: true }), // the error-record write genuinely succeeds
+      markObservationForRetry: async () => {
+        throw new Error('markObservationForRetry must never be called on this path')
+      },
+      sleep: async () => {},
+    }
+
+    const stats = await processBatchOfObservations([obs1], Date.now() + 30_000, deps)
+
+    assert.equal(stats.attempted, 1)
+    assert.equal(
+      stats.failed,
+      1,
+      'a successfully-recorded permanent error is still counted as failed, matching the existing, unaffected behavior',
+    )
+    assert.equal(stats.retried, 0)
   })
 })
