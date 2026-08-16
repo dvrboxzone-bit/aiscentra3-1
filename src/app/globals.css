@@ -111,14 +111,19 @@
   --color-mint-signal: #a3f305;
   --color-surface-tonal: #0a0a0a;
   --color-border-subtle: #1a1a1a;
-  /* Real next/font-generated variables (see layout.tsx) -- self-hosted,
-     not the HTML source's own runtime Google Fonts <link>. Falls back
-     to the same generic stack the HTML itself specifies if next/font's
-     variable is ever unavailable (e.g. a component rendered outside
-     the root layout's <html> tag in a test environment). */
-  --font-pp: var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    'Segoe UI', Roboto, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), monospace;
+  /* REAL BUG FIXED (independent review, build FAILURE): these
+     previously referenced next/font-generated CSS variables
+     (--font-inter/--font-jetbrains-mono) that no longer exist --
+     layout.tsx now imports @fontsource's own @font-face declarations
+     directly (real, locally-bundled woff2 files, no build-time network
+     dependency on fonts.gstatic.com). @fontsource registers the exact
+     same family names ('Inter', 'JetBrains Mono') the HTML source's
+     own Google Fonts <link> requested -- referencing them directly
+     here (matching the HTML's own original :root values) is correct
+     again, with the same generic fallback stack. */
+  --font-pp: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
 }
 
 .font-display {

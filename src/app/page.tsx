@@ -4,6 +4,7 @@ import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
 import { VfinalHeroGlobe } from '@/components/layout/vfinal-hero-globe'
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
+import { VfinalSlider } from '@/components/layout/vfinal-slider'
 import { getFeaturedSignals, getSignals } from '@/modules/signals/queries'
 import { getObservationStats } from '@/modules/observations/queries'
 import type { Signal } from '@/types/database'
@@ -72,6 +73,26 @@ export default async function HomePage(): Promise<React.JSX.Element> {
   const featuredIds = new Set(featuredSignals.map((s) => s.id))
   const observationCandidates = widerPool.filter((s) => !featuredIds.has(s.id)).slice(0, 2)
 
+  // REAL BUG FIXED (independent review): block/subblock count must
+  // stay exactly 6 (Featured Signals) / 2 (Observations) regardless of
+  // how many real rows the database actually returns -- a genuinely
+  // empty or partial query result must never shrink the section's own
+  // geometry. Fixed-length slot arrays pad any missing real signal
+  // with `null`, rendered as an honest UNAVAILABLE card at the exact
+  // same size/position as a real one (see FeaturedSignalCard/
+  // ObservationCard's own null-branch below), rather than fabricating
+  // placeholder data or reducing the visible card count.
+  const FEATURED_SLOT_COUNT = 6
+  const OBSERVATION_SLOT_COUNT = 2
+  const featuredSlots: Array<Signal | null> = Array.from(
+    { length: FEATURED_SLOT_COUNT },
+    (_, i) => featuredSignals[i] ?? null,
+  )
+  const observationSlots: Array<Signal | null> = Array.from(
+    { length: OBSERVATION_SLOT_COUNT },
+    (_, i) => observationCandidates[i] ?? null,
+  )
+
   return (
     <VfinalPublicShell>
       {/* ── 01 — Hero ─────────────────────────────────────────────── */}
@@ -128,8 +149,8 @@ export default async function HomePage(): Promise<React.JSX.Element> {
             className="grid gap-px border border-border-subtle bg-deep-obsidian md:grid-cols-3"
             data-list="signals"
           >
-            {featuredSignals.map((signal, i) => (
-              <FeaturedSignalCard key={signal.id} signal={signal} index={i + 1} />
+            {featuredSlots.map((signal, i) => (
+              <FeaturedSignalCard key={signal?.id ?? `empty-${i}`} signal={signal} index={i + 1} />
             ))}
           </div>
           <div className="mt-12 flex justify-center">
@@ -380,8 +401,8 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           </div>
 
           <div className="grid gap-6">
-            {observationCandidates.map((signal) => (
-              <ObservationCard key={signal.id} signal={signal} />
+            {observationSlots.map((signal, i) => (
+              <ObservationCard key={signal?.id ?? `empty-${i}`} signal={signal} />
             ))}
           </div>
         </div>
@@ -491,7 +512,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           </p>
           <div className="grid gap-6">
             <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalImageSlot className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+              <VfinalSlider className="aspect-video border-0 md:aspect-auto md:w-2/5" />
               <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
                 <div className="mb-4 flex items-center gap-4">
                   <span className="font-caption text-silver-haze">FACT</span>
@@ -509,7 +530,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </div>
             </div>
             <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalImageSlot className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+              <VfinalSlider className="aspect-video border-0 md:aspect-auto md:w-2/5" />
               <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
                 <div className="mb-4 flex items-center gap-4">
                   <span className="font-caption text-silver-haze">EVENT</span>
@@ -554,14 +575,44 @@ function FeaturedSignalCard({
   signal,
   index,
 }: {
-  signal: Signal
+  signal: Signal | null
   index: number
 }): React.JSX.Element {
+  const slotIndex = String(index).padStart(2, '0')
+
+  // REAL BUG FIXED (independent review): a missing real signal for
+  // this slot must render an honest UNAVAILABLE card at the exact
+  // same size/DOM position -- never fewer than 6 cards, never a
+  // fabricated title/description/confidence to fill the gap.
+  if (!signal) {
+    return (
+      <div
+        className="card-sharp reveal group p-5"
+        data-content-slot="signal"
+        data-slot-index={slotIndex}
+      >
+        <VfinalImageSlot className="mb-5 h-40 border-0" />
+        <div className="mb-4 flex items-center justify-between">
+          <span className="font-caption text-deep-obsidian opacity-40">UNAVAILABLE</span>
+        </div>
+        <h3 className="mb-3 text-xl font-medium leading-tight text-gray-400">UNAVAILABLE</h3>
+        <p className="mb-6 text-sm text-gray-500">
+          No real signal is currently available for this slot.
+        </p>
+        <div className="flex items-center justify-between border-t border-gray-200 pt-4">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-gray-400">
+            CONFIDENCE UNAVAILABLE
+          </span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       className="card-sharp reveal group p-5"
       data-content-slot="signal"
-      data-slot-index={String(index).padStart(2, '0')}
+      data-slot-index={slotIndex}
       data-category={signal.category}
     >
       <VfinalImageSlot className="mb-5 h-40 border-0" />
@@ -586,7 +637,29 @@ function FeaturedSignalCard({
   )
 }
 
-function ObservationCard({ signal }: { signal: Signal }): React.JSX.Element {
+function ObservationCard({ signal }: { signal: Signal | null }): React.JSX.Element {
+  if (!signal) {
+    return (
+      <div
+        className="reveal group border border-border-subtle bg-surface-tonal md:flex"
+        data-content-slot="observation"
+      >
+        <VfinalImageSlot className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+        <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
+          <div className="mb-4 flex items-center gap-4">
+            <span className="font-caption text-silver-haze opacity-40">UNAVAILABLE</span>
+          </div>
+          <h3 className="font-heading mb-4 text-3xl text-silver-haze opacity-40 md:text-4xl">
+            UNAVAILABLE
+          </h3>
+          <p className="mb-6 max-w-[60ch] text-silver-haze opacity-60">
+            No real observation is currently available for this slot.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       className="reveal group border border-border-subtle bg-surface-tonal md:flex"
