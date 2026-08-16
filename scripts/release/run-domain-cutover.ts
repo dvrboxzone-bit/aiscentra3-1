@@ -53,6 +53,7 @@ import {
   checkOpenGraphImageStatus,
   checkOpenGraphImageContentType,
   checkPngSignature,
+  extractRealSignalPath,
   type GetCurrentHolderFn,
   type SetAliasFn,
   type VerifyDomainFn,
@@ -360,7 +361,51 @@ async function main(): Promise<void> {
       const pngCheck = checkPngSignature(toHex(sigBytes), pngSignatureHex)
       if (!pngCheck.ok) return { ok: false, detail: pngCheck.detail }
 
-      // 6. Routing for both domains is covered because verifyDomain runs
+      // 6. REAL PRODUCTION INCIDENT this closes: /opengraph-image (the
+      // site-wide OG image, checked immediately above) can return a
+      // genuine, non-empty PNG while a PER-SIGNAL illustration
+      // (/signals/<slug>/opengraph-image) returns HTTP 200 with
+      // content-type: image/png and a genuinely EMPTY (0-byte) body --
+      // a Satori-rendering error specific to that route's own render
+      // tree (a <div> with multiple children missing the required
+      // explicit `display`), silently swallowed rather than thrown as
+      // a visible 500. Uses the SAME real signal path already reached
+      // via signalsText (fetched above for the signal-feed check), via
+      // the ONE shared implementation (extractRealSignalPath,
+      // scripts/release/extract-signal-path.ts's own CLI wrapper for
+      // the CI-side callers) -- not a second, independently hand-
+      // copied extraction. Runs on the LIVE domain, immediately after
+      // cutover, in the SAME verify-then-rollback pass as every other
+      // check here -- a failure here triggers the identical automatic
+      // rollback already wired for root/health/SHA/site-wide-OG.
+      const signalPath = extractRealSignalPath(signalsText)
+      if (!signalPath) return fail('CONTENT_MISMATCH', 'signal-path-extraction')
+
+      const signalOgResp = await fetch(`https://${domain}${signalPath}/opengraph-image`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      const signalOgStatusCheck = checkOpenGraphImageStatus(signalOgResp.status)
+      if (!signalOgStatusCheck.ok) return { ok: false, detail: signalOgStatusCheck.detail }
+      const signalOgCtCheck = checkOpenGraphImageContentType(
+        signalOgResp.headers.get('content-type'),
+      )
+      if (!signalOgCtCheck.ok) return { ok: false, detail: signalOgCtCheck.detail }
+
+      const signalOgFullBytes = await readCapped(signalOgResp.body, MAX_HTML_BYTES)
+      if (signalOgFullBytes === null) return fail('BODY_TOO_LARGE', 'signal-og-image')
+      // REAL PRODUCTION INCIDENT this closes, verified directly: a
+      // genuinely EMPTY (0-byte) body is exactly what the real
+      // incident returned -- checked explicitly, not merely inferred
+      // from a short/truncated signature read below.
+      if (signalOgFullBytes.byteLength === 0)
+        return fail('CONTENT_MISMATCH', 'signal-og-image-empty-body')
+      if (signalOgFullBytes.byteLength < PNG_SIGNATURE_BYTES)
+        return fail('CONTENT_MISMATCH', 'signal-og-image-png-truncated')
+      const signalOgSigBytes = signalOgFullBytes.subarray(0, PNG_SIGNATURE_BYTES)
+      const signalPngCheck = checkPngSignature(toHex(signalOgSigBytes), pngSignatureHex)
+      if (!signalPngCheck.ok) return { ok: false, detail: signalPngCheck.detail }
+
+      // 7. Routing for both domains is covered because verifyDomain runs
       // once per domain and fetch() follows redirects, so www's own
       // checks exercise its final destination.
       return { ok: true, detail: 'verified' }

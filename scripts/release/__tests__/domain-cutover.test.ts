@@ -34,6 +34,7 @@ import {
   checkOpenGraphImageStatus,
   checkOpenGraphImageContentType,
   checkPngSignature,
+  extractRealSignalPath,
   MAX_DETAIL_LENGTH,
   type GetCurrentHolderFn,
   type SetAliasFn,
@@ -746,6 +747,83 @@ describe('pure content checks', () => {
     assert.equal(checkPngSignature(sig.toUpperCase(), sig).ok, true)
     assert.equal(checkPngSignature('deadbeef00000000', sig).ok, false)
   })
+
+  describe('extractRealSignalPath -- the shared helper behind staged smoke, TOCTOU, and post-cutover verifyDomain', () => {
+    test("a real signal-card href (matching signal-card.tsx's own `/signals/${signal.id}` output) is extracted as a clean same-origin path", () => {
+      // Real markup shape this project's own /signals page actually
+      // renders (signal-card.tsx: `href={`/signals/${signal.id}`}`).
+      const realHtml =
+        '<a class="block" href="/signals/21a20bd4-d3f6-45f4-b9c3-f23f48103888"><h3>GitHub Availability</h3></a>'
+      assert.equal(extractRealSignalPath(realHtml), '/signals/21a20bd4-d3f6-45f4-b9c3-f23f48103888')
+    })
+
+    test("the listing page's OWN links (bare /signals and /signals?category=...) are excluded -- only a genuine detail-page slug counts", () => {
+      const html =
+        '<a href="/signals?category=RESEARCH">Research</a><a href="/signals">All</a>' +
+        '<a href="/signals/real-slug-1">Real Signal</a>'
+      assert.equal(
+        extractRealSignalPath(html),
+        '/signals/real-slug-1',
+        'must skip the category-filter and bare-listing links entirely and find the real detail link',
+      )
+    })
+
+    test('an absolute URL (even a genuinely same-origin one) is rejected outright, not partially parsed -- a real Next.js-rendered internal link is always relative, and accepting an absolute form at all previously created a real cross-origin extraction bug (see the next test)', () => {
+      const html = '<a href="https://aiscentra.com/signals/abc-123-def">Title</a>'
+      assert.equal(
+        extractRealSignalPath(html),
+        null,
+        'an absolute URL must never be accepted, even when its own host happens to be the real site -- only a genuine relative href is trusted',
+      )
+    })
+
+    test('a query string or fragment appended to a real signal link is stripped -- exact required output shape "/signals/<slug>"', () => {
+      assert.equal(
+        extractRealSignalPath('<a href="/signals/xyz-1?utm_source=x">t</a>'),
+        '/signals/xyz-1',
+      )
+      assert.equal(
+        extractRealSignalPath('<a href="/signals/xyz-2#section">t</a>'),
+        '/signals/xyz-2',
+      )
+    })
+
+    test('a cross-origin link is never returned, even if it superficially resembles a signal path', () => {
+      assert.equal(
+        extractRealSignalPath('<a href="https://evil.example.com/signals/fake-1">t</a>'),
+        null,
+        'a real signal link must be same-origin -- an external domain is never a valid extraction result',
+      )
+    })
+
+    test('a protocol-relative (//host/...) link is never returned', () => {
+      assert.equal(extractRealSignalPath('<a href="//evil.example.com/signals/fake-2">t</a>'), null)
+    })
+
+    test('fail-closed: no signal link present at all returns null, never a fabricated/guessed path', () => {
+      assert.equal(
+        extractRealSignalPath('<html><body>No signal links here at all</body></html>'),
+        null,
+      )
+    })
+
+    test("fail-closed: only the listing page's own links present (no real detail link) returns null", () => {
+      assert.equal(
+        extractRealSignalPath(
+          '<a href="/signals">All</a><a href="/signals?category=MODELS">Models</a>',
+        ),
+        null,
+      )
+    })
+
+    test('the FIRST genuine signal link is returned when multiple exist, matching real /signals page markup with many signal cards', () => {
+      const html =
+        '<a href="/signals?category=RESEARCH">Research</a>' +
+        '<a href="/signals/first-real-signal">First</a>' +
+        '<a href="/signals/second-real-signal">Second</a>'
+      assert.equal(extractRealSignalPath(html), '/signals/first-real-signal')
+    })
+  })
 })
 
 describe('workflow graph (semantic, parsed -- not comment matching)', () => {
@@ -880,5 +958,175 @@ describe('holder state typing', () => {
       'HOLDER_UNKNOWN',
     ]
     assert.equal(states.length, 4)
+  })
+})
+
+describe('per-signal Open Graph image protection (staged smoke, TOCTOU, and post-cutover) -- real production incident: /signals/<slug>/opengraph-image returned HTTP 200, image/png, and a genuinely empty (0-byte) body', () => {
+  const workflowPath2 = join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    '.github',
+    'workflows',
+    'production-release.yml',
+  )
+  const runCutoverPath = join(__dirname, '..', 'run-domain-cutover.ts')
+
+  test('staged-smoke declares a real per-signal Open Graph smoke step, using the SAME shared extractRealSignalPath implementation (via its CLI wrapper) as the site-wide checks', () => {
+    const text = readFileSync(workflowPath2, 'utf-8')
+    assert.match(
+      text,
+      /Per-signal Open Graph image smoke/,
+      'staged-smoke must declare a real step name for the per-signal OG check',
+    )
+    assert.match(
+      text,
+      /scripts\/release\/extract-signal-path\.ts/,
+      'staged-smoke must invoke the ONE shared extractRealSignalPath CLI wrapper, not a hand-copied extraction',
+    )
+  })
+
+  test('the pre-promotion TOCTOU recheck job ALSO declares a real per-signal Open Graph re-check step, using the same shared implementation -- not a second, independently hand-copied one', () => {
+    const text = readFileSync(workflowPath2, 'utf-8')
+    const toctouSectionStart = text.indexOf('pre-promotion-recheck:')
+    assert.ok(toctouSectionStart > 0, 'the pre-promotion-recheck job must exist')
+    const toctouSection = text.slice(toctouSectionStart)
+    assert.match(
+      toctouSection,
+      /Re-check[\s\S]{0,4000}extract-signal-path\.ts/,
+      'the TOCTOU job must re-invoke the SAME shared extract-signal-path.ts CLI wrapper for its own per-signal OG re-check, immediately before promotion',
+    )
+  })
+
+  test('the TOCTOU recheck genuinely fails closed on an empty per-signal OG body -- the exact real production incident, checked explicitly by size, not merely inferred from a truncated signature read', () => {
+    const text = readFileSync(workflowPath2, 'utf-8')
+    assert.match(
+      text,
+      /RECHECK_SIGNAL_OG_SIZE.*-ne 0/,
+      'the TOCTOU per-signal OG re-check must explicitly reject a genuinely empty (0-byte) body, matching the real incident exactly',
+    )
+  })
+
+  test('the post-cutover verifyDomain (run-domain-cutover.ts) genuinely imports and calls the SAME shared extractRealSignalPath implementation -- not a hand-copied regex reimplemented for the live-domain check', () => {
+    const text = readFileSync(runCutoverPath, 'utf-8')
+    const importBlockMatch = /import\s*\{([\s\S]{0,1000}?)\}\s*from\s*'\.\/domain-cutover'/.exec(
+      text,
+    )
+    assert.ok(
+      importBlockMatch,
+      "run-domain-cutover.ts must have a real import from './domain-cutover'",
+    )
+    assert.match(
+      importBlockMatch?.[1] ?? '',
+      /extractRealSignalPath/,
+      'run-domain-cutover.ts must import extractRealSignalPath from the ONE shared implementation in domain-cutover.ts',
+    )
+    assert.match(
+      text,
+      /const signalPath = extractRealSignalPath\(signalsText\)/,
+      'verifyDomain must genuinely call extractRealSignalPath against the real, already-fetched live /signals HTML (signalsText), not a separately-fetched or fabricated value',
+    )
+  })
+
+  test('the post-cutover verifyDomain fails closed (returns ok:false) when no real signal path is found -- never silently skips the check or substitutes a guessed path', () => {
+    const text = readFileSync(runCutoverPath, 'utf-8')
+    assert.match(
+      text,
+      /if \(!signalPath\) return fail\('CONTENT_MISMATCH', 'signal-path-extraction'\)/,
+      'a missing signal path must be a hard, explicit verifyDomain failure -- not a silently-skipped check',
+    )
+  })
+
+  test('the post-cutover verifyDomain explicitly rejects a genuinely empty (0-byte) per-signal OG body -- the exact real production incident this whole protection exists for', () => {
+    const text = readFileSync(runCutoverPath, 'utf-8')
+    assert.match(
+      text,
+      /signalOgFullBytes\.byteLength === 0[\s\S]{0,100}return fail\('CONTENT_MISMATCH', 'signal-og-image-empty-body'\)/,
+      'verifyDomain must explicitly check for and reject a genuinely empty body -- the literal real production defect (HTTP 200, image/png, 0 bytes)',
+    )
+  })
+
+  test('a verifyDomain failure genuinely participates in the SAME rollback mechanism as every other check -- proven by planDomainCutover\'s own already-tested "any verify failure triggers rollback" behavior, since the new per-signal check is INSIDE the same try block returning the same { ok: false } shape verifyDomain always returns', () => {
+    const text = readFileSync(runCutoverPath, 'utf-8')
+    // The new per-signal OG checks must live INSIDE the same verifyDomain
+    // function body as the pre-existing root/health/SHA/site-wide-OG
+    // checks (which are already proven, via the "rollback confirmation
+    // by observation" and "holders, aborts and the happy path" describe
+    // blocks above, to trigger rollback through planDomainCutover's real
+    // decision logic whenever verifyDomain returns ok:false) -- not a
+    // separate, unwired function whose failure would never reach that
+    // mechanism at all.
+    const verifyDomainStart = text.indexOf('const verifyDomain: VerifyDomainFn')
+    assert.ok(verifyDomainStart > 0, 'verifyDomain must be defined as a real VerifyDomainFn')
+    const signalPathCallIndex = text.indexOf('extractRealSignalPath(signalsText)')
+    assert.ok(signalPathCallIndex > verifyDomainStart, 'the call must be inside verifyDomain')
+    // The real outer catch that closes verifyDomain's own try block --
+    // searched AFTER the signal-path call itself (not the first catch
+    // after verifyDomainStart, since an earlier, nested try/catch for a
+    // sub-operation inside the same function would otherwise be found
+    // instead, giving a false negative).
+    const outerCatchIndex = text.indexOf('} catch (err) {', signalPathCallIndex)
+    assert.ok(
+      outerCatchIndex > signalPathCallIndex,
+      'verifyDomain must have a real outer catch after the new check',
+    )
+    const finalSuccessReturnIndex = text.indexOf(
+      "return { ok: true, detail: 'verified' }",
+      signalPathCallIndex,
+    )
+    assert.ok(
+      finalSuccessReturnIndex > signalPathCallIndex && finalSuccessReturnIndex < outerCatchIndex,
+      "the final success return must come AFTER the new per-signal check and BEFORE the outer catch -- proving the check genuinely gates the same try block's own success path, not a disconnected side check",
+    )
+  })
+
+  test('regression: /tmp/signals.html is genuinely still readable when the per-signal Open Graph step reads it -- staged-smoke must NEVER remove it on the success path before the per-signal step consumes it (real merge-blocking incident: a prior version cleaned up the file immediately after the signal-feed smoke step\'s own success echo, guaranteeing "fail could not read HTML file" in the very next step on every real run)', () => {
+    const text = readFileSync(workflowPath2, 'utf-8')
+
+    // Locate the staged-smoke job's own "Signal feed smoke" success
+    // echo (the point right after which the OLD, buggy version removed
+    // the file) and the "Per-signal Open Graph image smoke" step's own
+    // read of that same file via the shared extract-signal-path.ts CLI
+    // wrapper.
+    const signalFeedEchoIndex = text.indexOf(
+      'Signal feed smoke: HTTP $STATUS, feed genuinely non-empty',
+    )
+    assert.ok(signalFeedEchoIndex > 0, "the Signal feed smoke step's own success echo must exist")
+
+    const perSignalReadIndex = text.indexOf(
+      'extract-signal-path.ts /tmp/signals.html',
+      signalFeedEchoIndex,
+    )
+    assert.ok(
+      perSignalReadIndex > signalFeedEchoIndex,
+      "the per-signal step must read /tmp/signals.html via the shared extract-signal-path.ts CLI wrapper, after the signal-feed step's own success echo",
+    )
+
+    // The real regression: a `rm -f` targeting /tmp/signals.html
+    // positioned ANYWHERE between those two points would delete the
+    // file before the per-signal step gets to read it -- this must be
+    // impossible, not merely improbable. Deliberately does not attempt
+    // to distinguish "textually before but inside an unrelated
+    // early-exit failure branch" from a genuine success-path removal --
+    // ANY occurrence in this exact window is disqualifying, since a
+    // correct fix removes the premature cleanup entirely rather than
+    // making it conditional.
+    const between = text.slice(signalFeedEchoIndex, perSignalReadIndex)
+    assert.doesNotMatch(
+      between,
+      /rm -f[^\n]*\/tmp\/signals\.html/,
+      '/tmp/signals.html must not be removed anywhere between the signal-feed step\'s own success echo and the per-signal step\'s own read of that file -- this is the exact real regression (staged-smoke would deterministically fail with "fail could not read HTML file" on every real production release)',
+    )
+
+    // Positive half of the same invariant: the file IS genuinely
+    // cleaned up eventually, just not prematurely -- after the
+    // per-signal read, not before it.
+    const afterPerSignalRead = text.slice(perSignalReadIndex)
+    assert.match(
+      afterPerSignalRead,
+      /rm -f[^\n]*\/tmp\/signals\.html/,
+      '/tmp/signals.html must still genuinely be cleaned up at some point after the per-signal step reads it -- not simply left behind forever',
+    )
   })
 })

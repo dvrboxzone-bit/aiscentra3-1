@@ -52,6 +52,7 @@ TEST_DIRS=(
   "src/app/api/enrich/batch/__tests__"
   "src/app/api/cron/verify-urls/__tests__"
   "src/modules/assistant/__tests__"
+  "src/app/signals/__tests__"
 )
 
 TEST_FILES=()
@@ -59,7 +60,7 @@ for dir in "${TEST_DIRS[@]}"; do
   if [[ -d "$dir" ]]; then
     while IFS= read -r -d '' f; do
       TEST_FILES+=("$f")
-    done < <(find "$dir" -name '*.test.ts' -type f -print0 2>/dev/null)
+    done < <(find "$dir" -name '*.test.ts' -not -name '*.moduleMock.test.ts' -type f -print0 2>/dev/null)
   fi
 done
 
@@ -101,6 +102,42 @@ if [[ ${#DOM_TEST_FILES[@]} -gt 0 ]]; then
     if ! node --import tsx --test "$domfile"; then
       echo ""
       echo "FAIL: DOM test $domfile failed."
+      exit 1
+    fi
+  done
+  echo ""
+fi
+
+# ── Module-mock tests (`*.moduleMock.test.ts`) — REAL ISOLATION REQUIRED ──
+#
+# Node's `node:test` mock.module() (used for OG-image tests that need
+# to substitute getSignalById with a controlled fixture, without a real
+# Next.js request context for next/headers' cookies()) replaces a
+# module GLOBALLY for the whole process it runs in -- running this in
+# the SAME `node --test` process as every other test file risks
+# silently substituting the same module for unrelated tests that import
+# it elsewhere. Same isolation rationale as the DOM tests above, same
+# one-file-per-process treatment. Requires
+# --experimental-test-module-mocks, applied ONLY to this isolated
+# invocation, never to the main batch.
+MODULE_MOCK_TEST_FILES=()
+for dir in "${TEST_DIRS[@]}"; do
+  if [[ -d "$dir" ]]; then
+    while IFS= read -r -d '' f; do
+      MODULE_MOCK_TEST_FILES+=("$f")
+    done < <(find "$dir" -name '*.moduleMock.test.ts' -type f -print0 2>/dev/null)
+  fi
+done
+
+if [[ ${#MODULE_MOCK_TEST_FILES[@]} -gt 0 ]]; then
+  echo "Found ${#MODULE_MOCK_TEST_FILES[@]} module-mock test file(s), each run in its own isolated process:"
+  printf '  %s\n' "${MODULE_MOCK_TEST_FILES[@]}"
+  echo ""
+  for mmfile in "${MODULE_MOCK_TEST_FILES[@]}"; do
+    echo "--- running $mmfile (isolated module-mock process) ---"
+    if ! node --import tsx --experimental-test-module-mocks --test "$mmfile"; then
+      echo ""
+      echo "FAIL: module-mock test $mmfile failed."
       exit 1
     fi
   done

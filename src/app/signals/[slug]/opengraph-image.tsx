@@ -343,7 +343,14 @@ export default async function SignalOGImage({
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <div style={{ fontSize: 14, color: P.textMuted, letterSpacing: '0.3em' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  fontSize: 14,
+                  color: P.textMuted,
+                  letterSpacing: '0.3em',
+                }}
+              >
                 AISCENTRA — {formatCategory(signal.category).toUpperCase()}
               </div>
             </div>
