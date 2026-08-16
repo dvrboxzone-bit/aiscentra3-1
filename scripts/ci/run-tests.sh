@@ -54,6 +54,7 @@ TEST_DIRS=(
   "src/modules/assistant/__tests__"
   "src/app/signals/__tests__"
   "src/components/layout/__tests__"
+  "src/app/__tests__"
 )
 
 TEST_FILES=()
@@ -126,7 +127,7 @@ for dir in "${TEST_DIRS[@]}"; do
   if [[ -d "$dir" ]]; then
     while IFS= read -r -d '' f; do
       MODULE_MOCK_TEST_FILES+=("$f")
-    done < <(find "$dir" -name '*.moduleMock.test.ts' -type f -print0 2>/dev/null)
+    done < <(find "$dir" \( -name '*.moduleMock.test.ts' -o -name '*.moduleMock.test.tsx' \) -type f -print0 2>/dev/null)
   fi
 done
 
