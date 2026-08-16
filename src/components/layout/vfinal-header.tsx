@@ -19,13 +19,21 @@
  *   hrefs.
  * - "Observations" (#news anchor in the HTML): mapped to /observatory,
  *   the real existing route covering this content.
- * - "Framework" dropdown: the HTML's own 4 sub-items (Epistemic Model,
- *   Methodology, Security & Data, Roadmap) all point to href="#" with
- *   no corresponding real page -- fabricating 4 new pages is
- *   explicitly forbidden by this task. Collapsed to a single direct
- *   link to /about (the closest real existing page covering this
- *   content) with the dropdown submenu removed -- the nav ITEM itself
- *   (the block) is preserved, only its fake sub-destinations are not.
+ * - "Framework" dropdown: REAL BUG FIXED (independent review) --
+ *   the HTML's own 4 sub-items (Epistemic Model, Methodology, Security
+ *   & Data, Roadmap) originally pointed to href="#" with no
+ *   corresponding real page. A prior version of this component
+ *   collapsed the dropdown to a single link, removing the submenu
+ *   entirely -- but the HTML's own dropdown IS a real block/subblock
+ *   structure (4 distinct sub-items), and removing it violated the
+ *   task's own explicit "не менять количество блоков/подблоков"
+ *   constraint. Restored: the dropdown submenu (same 4 sub-items,
+ *   same order) now links to real anchors on /about
+ *   (/about#epistemic-model, /about#methodology, /about#security-data,
+ *   /about#roadmap) -- fragments that will exist once /about migrates
+ *   in a later layer and gains matching section ids. No fabricated
+ *   page is created; every link resolves to the real, existing /about
+ *   route.
  * - "Assistant": #assistant anchor -> /assistant (real route).
  * - "Help the project": kept as-is (mailto:, a valid, real anchor
  *   target, not a fabricated page).
@@ -90,12 +98,20 @@ export function VfinalHeader(): React.JSX.Element {
             Observations
           </Link>
 
-          <Link
-            href="/about"
-            className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
-          >
-            Framework
-          </Link>
+          <div className="dropdown hide-mobile">
+            <Link
+              href="/about"
+              className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+            >
+              Framework <span className="text-xs">▼</span>
+            </Link>
+            <div className="dropdown-content">
+              <Link href="/about#epistemic-model">Epistemic Model</Link>
+              <Link href="/about#methodology">Methodology</Link>
+              <Link href="/about#security-data">Security &amp; Data</Link>
+              <Link href="/about#roadmap">Roadmap</Link>
+            </div>
+          </div>
 
           <Link
             href="/assistant"

@@ -66,8 +66,10 @@ const CYCLE_DURATION_MS = 12000
  * deliberately NOT ported -- see the homepage migration in layer 4).
  *
  * SSR-safe: 'use client', all canvas work inside useEffect.
- * IntersectionObserver pauses the draw loop outside the viewport
- * (matches the HTML's own isMemVisible flag). Full cleanup on unmount:
+ * IntersectionObserver genuinely STOPS scheduling requestAnimationFrame
+ * entirely outside the viewport (cancelAnimationFrame + rafId reset to
+ * 0) and RESTARTS the loop on re-entry (see draw()'s own comment for
+ * the real incident this closes). Full cleanup on unmount:
  * cancelAnimationFrame, resize listener removed, observer disconnected.
  * prefers-reduced-motion: renders one static frame at the animation's
  * midpoint (stage ~3.5) instead of starting the loop -- not present in
@@ -199,14 +201,21 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
     }
 
     let rafId = 0
-    let isMemVisible = true
 
+    // REAL BUG FIXED (independent review): see vfinal-hero-globe.tsx's
+    // identical animateGlobe() comment for the full explanation -- the
+    // prior version called requestAnimationFrame(draw) unconditionally
+    // as the first statement, before the visibility check, so the loop
+    // kept firing every frame even fully offscreen with only the draw
+    // work skipped. Fixed: requestAnimationFrame is scheduled from
+    // inside the frame body, so the loop genuinely stops calling itself
+    // when offscreen and is explicitly restarted by the
+    // IntersectionObserver callback below.
     function draw(): void {
-      rafId = requestAnimationFrame(draw)
-      if (!isMemVisible) return
       const elapsed = (Date.now() - animStart) % CYCLE_DURATION_MS
       const progress = elapsed / CYCLE_DURATION_MS
       drawFrame(progress * 7)
+      rafId = requestAnimationFrame(draw)
     }
 
     if (prefersReducedMotion) {
@@ -218,7 +227,13 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
     const memObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          isMemVisible = entry.isIntersecting
+          if (prefersReducedMotion) return // loop never runs; nothing to (re)start
+          if (entry.isIntersecting) {
+            if (rafId === 0) rafId = requestAnimationFrame(draw)
+          } else {
+            cancelAnimationFrame(rafId)
+            rafId = 0
+          }
         })
       },
       { threshold: 0.1 },

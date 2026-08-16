@@ -30,8 +30,12 @@ import * as THREE from 'three'
  *   object this component itself creates -- prevents a second
  *   animation loop or leaked WebGL context after client-side
  *   navigation away from and back to a page using this component.
- * - IntersectionObserver pauses the render loop entirely outside the
- *   viewport (matches the HTML's own isGlobeVisible flag).
+ * - IntersectionObserver genuinely STOPS scheduling requestAnimationFrame
+ *   entirely once the globe leaves the viewport (cancelAnimationFrame +
+ *   rafId reset to 0) and RESTARTS the loop when it re-enters -- not
+ *   merely skipping the draw work while the callback keeps firing every
+ *   frame regardless (see animateGlobe's own comment for the real
+ *   incident this closes).
  * - prefers-reduced-motion: rendering happens once (a static frame) and
  *   the animation loop never starts -- not present in the original
  *   HTML, added per this task's own explicit technical-boundaries
@@ -191,12 +195,24 @@ export function VfinalHeroGlobe(): React.JSX.Element {
     document.addEventListener('mousemove', onMouseMove)
 
     let time = 0
-    let isGlobeVisible = true
     let rafId = 0
 
+    // REAL BUG FIXED (independent review): the previous version's
+    // animateGlobe() called `rafId = requestAnimationFrame(animateGlobe)`
+    // UNCONDITIONALLY as its very first statement, before the
+    // isGlobeVisible check -- meaning the browser kept scheduling and
+    // firing a new animation frame every ~16ms even while fully outside
+    // the viewport, with only the draw/render work itself skipped. This
+    // is NOT a real stop: the callback still runs every frame, still
+    // costs a function call and a visibility check, and (more
+    // importantly) does not match the task's own explicit requirement
+    // ("останавливаться вне viewport"). Fixed: requestAnimationFrame is
+    // now called ONLY from inside the frame body, AFTER confirming
+    // visibility -- when the globe scrolls offscreen, the loop
+    // genuinely stops scheduling itself and no further frames fire at
+    // all until the IntersectionObserver callback below explicitly
+    // restarts it.
     function animateGlobe(): void {
-      rafId = requestAnimationFrame(animateGlobe)
-      if (!isGlobeVisible) return
       time += 0.05
       targetX += (mouseX - targetX) * 0.05
       targetY += (mouseY - targetY) * 0.05
@@ -212,6 +228,7 @@ export function VfinalHeroGlobe(): React.JSX.Element {
         }
       })
       renderer.render(scene, camera)
+      rafId = requestAnimationFrame(animateGlobe)
     }
 
     if (prefersReducedMotion) {
@@ -226,7 +243,18 @@ export function VfinalHeroGlobe(): React.JSX.Element {
     const globeObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          isGlobeVisible = entry.isIntersecting
+          if (prefersReducedMotion) return // loop never runs; nothing to (re)start
+          if (entry.isIntersecting) {
+            // Restart: only schedule a new frame if one isn't already
+            // pending (guards against a redundant double-loop if two
+            // intersection callbacks fire in quick succession).
+            if (rafId === 0) rafId = requestAnimationFrame(animateGlobe)
+          } else {
+            // Real stop: cancel the pending frame and clear rafId so a
+            // later restart is genuinely possible.
+            cancelAnimationFrame(rafId)
+            rafId = 0
+          }
         })
       },
       { threshold: 0.1 },

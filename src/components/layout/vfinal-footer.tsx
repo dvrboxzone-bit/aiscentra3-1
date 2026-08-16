@@ -84,22 +84,22 @@ export function VfinalFooter(): React.JSX.Element {
             <span className="font-caption mb-4 block text-silver-haze opacity-50">Framework</span>
             <ul className="space-y-3 text-sm">
               <li>
-                <Link href="/about" className="text-frost hover:text-mint-signal">
+                <Link href="/about#epistemic-model" className="text-frost hover:text-mint-signal">
                   Epistemic Model
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="text-frost hover:text-mint-signal">
+                <Link href="/about#methodology" className="text-frost hover:text-mint-signal">
                   Methodology
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="text-frost hover:text-mint-signal">
+                <Link href="/about#security-data" className="text-frost hover:text-mint-signal">
                   Security &amp; Data
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="text-frost hover:text-mint-signal">
+                <Link href="/about#roadmap" className="text-frost hover:text-mint-signal">
                   Roadmap
                 </Link>
               </li>
