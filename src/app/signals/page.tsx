@@ -36,6 +36,14 @@ function isRealCategory(value: string): value is SignalCategory {
   return (REAL_CATEGORIES as readonly string[]).includes(value)
 }
 
+// Strict positive integer only: no decimals ("2.5"), no trailing/
+// leading garbage ("2abc", "3e2"), no leading zero ("01"), no
+// whitespace (" 2 "), no "0" itself, no negative sign. Exactly what a
+// canonical, hand-typed page number looks like -- anything else is
+// dirty input that must redirect to the canonical URL, never be
+// silently parsed/truncated into a different, unstated page.
+const STRICT_PAGE_PATTERN = /^[1-9][0-9]*$/
+
 interface SignalsPageProps {
   searchParams: Promise<{ category?: string; page?: string }>
 }
@@ -72,13 +80,23 @@ interface SignalsPageProps {
  * notFound() -- never silently falls back to the ALL catalog, which
  * would mask a broken or typo'd link as if it were valid.
  *
- * Page bounds: an invalid, fractional, or <1 page value is canonicalized
- * to page 1 (a genuine user-facing convenience, not an error case --
- * e.g. page=abc or page=-3 in a hand-edited URL). A page GENUINELY
- * beyond the real total (page > totalPages, computed from the real
- * getSignalsCount()) returns the real Next.js notFound() -- the
- * previous version's "page 999 of 6" was a real, confirmed defect
- * (a false, self-contradictory state shown to a real visitor).
+ * Page canonicalization (independent-audit correction): only a strict
+ * positive integer >= 2 (matching /^[1-9][0-9]*$/ exactly -- no
+ * decimals, no trailing garbage, no leading zero, no whitespace, no
+ * negative sign) is accepted as a real page value. Any other page
+ * param -- dirty input ("2.5", "2abc", "3e2", "0", "-3", " 2 ", "01")
+ * OR the literal, redundant "1" -- triggers a real Next.js redirect()
+ * to the canonical URL (page param dropped entirely) BEFORE any
+ * signals/count/sources query runs. This replaced an earlier version
+ * that silently parseInt()-truncated dirty input (e.g. "2.5" ->
+ * page 2, "2abc" -> page 2) into an unstated, different page number
+ * instead of canonicalizing the URL itself.
+ *
+ * Page bounds: a page GENUINELY beyond the real total (page >
+ * totalPages, computed from the real getSignalsCount()) returns the
+ * real Next.js notFound() -- the previous version's "page 999 of 6"
+ * was a real, confirmed defect (a false, self-contradictory state
+ * shown to a real visitor).
  *
  * Real per-card source data: ONE batch getSourceLinksForSignals() call
  * for the whole page (REAL BUG FIXED -- was previously up to 25
@@ -117,8 +135,22 @@ export default async function SignalsPage({
 
   const activeCategory = params.category as SignalCategory | undefined
 
-  const rawPage = Number.parseInt(params.page ?? '1', 10)
-  const currentPage = Number.isInteger(rawPage) && rawPage >= 1 ? rawPage : 1
+  // Real canonicalization, performed BEFORE any signals/count/sources
+  // query: a page param that is either absent (already canonical) or
+  // a strict positive integer >= 2 is kept as-is. Anything else --
+  // missing strictness ("2.5", "2abc", "3e2", "0", "-3", " 2 ",
+  // leading-zero "01") OR the literal, redundant "1" -- redirects to
+  // the real canonical URL (no page param at all), never silently
+  // reinterpreted into a different, unstated page number.
+  const rawPage = params.page
+  if (rawPage !== undefined && (rawPage === '1' || !STRICT_PAGE_PATTERN.test(rawPage))) {
+    const qs = new URLSearchParams()
+    if (activeCategory !== undefined) qs.set('category', activeCategory)
+    const query = qs.toString()
+    redirect(query ? `/signals?${query}` : '/signals')
+  }
+
+  const currentPage = rawPage !== undefined ? Number.parseInt(rawPage, 10) : 1
 
   const [signals, totalCount] = await Promise.all([
     getSignals({
