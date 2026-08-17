@@ -41,6 +41,8 @@ Object.defineProperty(globalThis, 'navigator', {
 ;(globalThis as any).Event = dom.window.Event
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ;(globalThis as any).getComputedStyle = dom.window.getComputedStyle
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+;(globalThis as any).MutationObserver = dom.window.MutationObserver
 
 // REAL BUG FIXED (independent review): rendering a real page tree that
 // uses next/link (which internally calls requestIdleCallback, itself

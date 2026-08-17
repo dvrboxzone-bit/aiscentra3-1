@@ -282,6 +282,10 @@
   filter: grayscale(0%) contrast(1.05) brightness(1);
 }
 
+#assistant {
+  scroll-margin-top: 100px;
+}
+
 #progress {
   position: fixed;
   top: 0;

@@ -41,9 +41,28 @@
  *
  * Lenis/scroll-linked backdrop behavior arrives in layer 3 -- this
  * component's own markup and static styling are complete now.
+ *
+ * REAL BUG FIXED (Public Interactivity Correction checkpoint,
+ * confirmed defect #2): "Assistant" pointed at the `/assistant` route
+ * instead of the homepage's own `#assistant` section (a real, existing
+ * `<section id="assistant">` on `/`, see src/app/page.tsx) -- clicking
+ * it from the homepage navigated away instead of scrolling to that
+ * section. Now a client component (`usePathname`) so the href can
+ * differ by route: `#assistant` on the homepage itself, `/#assistant`
+ * from every other route (Next.js navigates to `/` then jumps to the
+ * fragment). The standalone `/assistant` page and its own form/action
+ * are unchanged. On the homepage, the click is intercepted to scroll
+ * via the active Lenis instance (when one exists) so the jump is
+ * smooth and consistent with the rest of the page's own scroll
+ * behavior, instead of a native instant jump that would fight Lenis's
+ * virtual scroll position.
  */
+'use client'
+
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import type { SignalCategory } from '@/types/database'
+import { getActiveLenisInstance } from './vfinal-lenis-provider'
 
 const SIGNAL_CATEGORIES: ReadonlyArray<{ value: SignalCategory; label: string }> = [
   { value: 'RESEARCH', label: 'Research' },
@@ -58,6 +77,20 @@ const SIGNAL_CATEGORIES: ReadonlyArray<{ value: SignalCategory; label: string }>
 ]
 
 export function VfinalHeader(): React.JSX.Element {
+  const pathname = usePathname()
+  const onHomepage = pathname === '/'
+  const assistantHref = onHomepage ? '#assistant' : '/#assistant'
+
+  const handleAssistantClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    if (!onHomepage) return
+    const target = document.getElementById('assistant')
+    if (!target) return
+    e.preventDefault()
+    const lenis = getActiveLenisInstance()
+    if (lenis) lenis.scrollTo(target, { offset: -100 })
+    else target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
     <header
       id="header"
@@ -114,7 +147,8 @@ export function VfinalHeader(): React.JSX.Element {
           </div>
 
           <Link
-            href="/assistant"
+            href={assistantHref}
+            onClick={handleAssistantClick}
             className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
           >
             Assistant

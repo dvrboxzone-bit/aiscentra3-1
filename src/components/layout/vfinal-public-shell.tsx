@@ -3,6 +3,7 @@ import { VfinalHeader } from './vfinal-header'
 import { VfinalFooter } from './vfinal-footer'
 import { VfinalLenisProvider } from './vfinal-lenis-provider'
 import { VfinalProgressAndBackToTop } from './vfinal-progress-back-to-top'
+import { VfinalInteractionController } from './vfinal-interaction-controller'
 
 /**
  * AIscentra — vfinal public shell (Frontend Design Foundation, layer 2
@@ -39,6 +40,7 @@ export function VfinalPublicShell({ children }: { children: React.ReactNode }): 
   return (
     <div className="min-h-screen bg-deep-obsidian text-frost">
       <VfinalLenisProvider />
+      <VfinalInteractionController />
       <VfinalProgressAndBackToTop />
       <VfinalLogoSymbol />
       <VfinalHeader />
