@@ -6,7 +6,7 @@ import { formatRelativeTime } from '@/lib/utils/format'
 import type { EventType } from '@/types/database'
 
 export const metadata: Metadata = {
-  title: 'Events — AIscentra',
+  title: 'Events',
   description:
     'AI ecosystem events — significant developments promoted from the Observatory signal feed.',
 }

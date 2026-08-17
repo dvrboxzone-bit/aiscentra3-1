@@ -6,8 +6,8 @@ import { render } from '@testing-library/react'
 import { forceReducedMotion } from '../../../app/__tests__/homepage-fixtures'
 import { makeReport } from './layer5b-fixtures'
 
-describe('/reports — real query preserved, VfinalPublicShell, no forbidden URLs', () => {
-  test('the real /reports page renders real reports with shared header/footer and real /reports/[id] links', async (t) => {
+describe('/reports — real query preserved, VfinalPublicShell, no forbidden URLs, real type map', () => {
+  test('the real /reports page renders real reports with shared header/footer, real /reports/[id] links, and the real report-type legend (labels + descriptions)', async (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
     const reports = [
@@ -28,5 +28,16 @@ describe('/reports — real query preserved, VfinalPublicShell, no forbidden URL
     assert.doesNotMatch(container.innerHTML, /href="#"/)
     assert.doesNotMatch(container.innerHTML, /picsum/i)
     assert.doesNotMatch(container.innerHTML, /z-cdn/i)
+
+    // Real REPORT_TYPE_LABELS / REPORT_TYPE_DESCRIPTIONS legend --
+    // always rendered (independent of query result), the real 4
+    // report types with their real, exact descriptions.
+    assert.match(container.innerHTML, /Signal Brief/)
+    assert.match(container.innerHTML, /Concise analysis of a single high-significance signal\./)
+    assert.match(container.innerHTML, /Event Analysis/)
+    assert.match(container.innerHTML, /Deep interpretation of a promoted ecosystem event\./)
+    assert.match(container.innerHTML, /Weekly Review/)
+    assert.match(container.innerHTML, /Trend Report/)
+    assert.match(container.innerHTML, /Pattern analysis across a signal category over 30 days\./)
   })
 })

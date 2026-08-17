@@ -6,7 +6,7 @@ import { formatRelativeTime } from '@/lib/utils/format'
 import type { ReportType } from '@/types/database'
 
 export const metadata: Metadata = {
-  title: 'Reports — AIscentra',
+  title: 'Reports',
   description:
     'Intelligence publications — signal briefs, event analyses, weekly reviews and trend reports.',
 }
