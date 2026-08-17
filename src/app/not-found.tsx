@@ -1,23 +1,23 @@
 import Link from 'next/link'
+import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
 
+/**
+ * AIscentra — vfinal 404 not-found state (Frontend Design Foundation,
+ * layer 5C). Real, working return-home link (href="/", a genuine
+ * route) -- not href="#". Same shared header/footer as every real
+ * page.
+ */
 export default function NotFound(): React.JSX.Element {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-observatory-black">
-      <div className="text-center">
-        <p className="mb-2 text-xs tracking-[0.3em] text-text-muted uppercase">
-          Observatory Signal
-        </p>
-        <h1 className="mb-2 text-6xl font-light text-text-primary">404</h1>
-        <p className="mb-8 text-sm text-text-muted">
-          This signal was not detected in the Observatory.
-        </p>
-        <Link
-          href="/"
-          className="text-xs tracking-wider text-text-secondary underline-offset-4 hover:text-text-primary hover:underline transition-colors"
-        >
-          Return to Observatory
+    <VfinalPublicShell>
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
+        <span className="font-caption mb-2 text-silver-haze">OBSERVATORY SIGNAL</span>
+        <h1 className="font-display mb-2 text-6xl text-frost">404</h1>
+        <p className="mb-8 text-silver-haze">This signal was not detected in the Observatory.</p>
+        <Link href="/" className="arrow-link magnetic">
+          Return to Observatory <span>→</span>
         </Link>
       </div>
-    </main>
+    </VfinalPublicShell>
   )
 }
