@@ -28,20 +28,29 @@ describe('/signals catalog cards — real publication date, real source (favicon
     })
     mock.module('@/modules/observations/queries', {
       namedExports: {
-        // Real, per-signal behavior: only a signal with real
-        // observation ids genuinely has a source link -- matches the
-        // real getSourceLinksForSignal([]) => [] early-return.
-        getSourceLinksForSignal: async (observationIds: string[]) => {
-          if (observationIds.length > 0) {
-            return [
-              {
-                url: 'https://example.com/article',
-                sourceName: 'Example Source',
-                faviconUrl: 'https://example.com/favicon.ico',
-              },
-            ]
+        // Real batch behavior: getSourceLinksForSignals() returns ONE
+        // Map keyed by signalId -- only the signal with real
+        // observation ids genuinely has a non-empty entry, matching
+        // the real function's own per-signal distribution logic.
+        getSourceLinksForSignals: async (
+          signalObservationIds: Array<{ signalId: string; observationIds: string[] }>,
+        ) => {
+          const map = new Map<string, unknown[]>()
+          for (const { signalId, observationIds } of signalObservationIds) {
+            map.set(
+              signalId,
+              observationIds.length > 0
+                ? [
+                    {
+                      url: 'https://example.com/article',
+                      sourceName: 'Example Source',
+                      faviconUrl: 'https://example.com/favicon.ico',
+                    },
+                  ]
+                : [],
+            )
           }
-          return []
+          return map
         },
       },
     })

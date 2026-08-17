@@ -22,7 +22,7 @@ describe('/signals — real pagination: 25 per page, Previous/Next, page numbers
       },
     })
     mock.module('@/modules/observations/queries', {
-      namedExports: { getSourceLinksForSignal: async () => [] },
+      namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
     const { default: SignalsPage } = await import('../../../app/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({ page: '2' }) })

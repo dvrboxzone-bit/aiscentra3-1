@@ -32,11 +32,20 @@ export async function getSignals(filters: SignalFilters = {}): Promise<Signal[]>
   // Stable sort with a mandatory tie-breaker: created_at alone is not
   // unique (multiple signals can share the same timestamp, especially
   // ones ingested in the same enrichment cycle) -- without a second,
-  // deterministic ORDER BY column, PostgreSQL's own sort order for
-  // tied rows is NOT guaranteed stable across separate paginated
-  // queries, which would silently duplicate or skip rows across page
-  // boundaries. `id` (a UUID, already unique per row) closes this gap
-  // cheaply -- no new index needed beyond the primary key's own.
+  // deterministic ORDER BY column, rows sharing an identical
+  // created_at have no defined relative order at all, and could
+  // legitimately appear in a different sequence between two otherwise
+  // identical queries. `id` (a UUID, already unique per row) closes
+  // this gap for TIES within one query's own snapshot -- it does NOT,
+  // by itself, guarantee zero duplicates or skips across separate
+  // paginated requests against a live, growing table: a new signal
+  // published between a visitor's page-1 and page-2 fetch still shifts
+  // every subsequent row's real offset, which can shift a row onto a
+  // different page than it would have occupied moments earlier. That
+  // is an inherent property of offset-based (.range()) pagination
+  // against changing data, not something this tie-breaker eliminates
+  // -- it only removes the SEPARATE, avoidable non-determinism that
+  // an unspecified tie order would otherwise add on top.
   let query = supabase
     .from('signals')
     .select('*')
