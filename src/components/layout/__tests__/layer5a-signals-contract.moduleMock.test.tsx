@@ -12,7 +12,13 @@ describe('/signals — critical release-gate contract intact', () => {
     t.after(restore)
     const signals = [makeSignal({ id: 's1' }), makeSignal({ id: 's2' })]
     mock.module('@/modules/signals/queries', {
-      namedExports: { getSignals: async () => signals },
+      namedExports: {
+        getSignals: async () => signals,
+        getSignalsCount: async () => signals.length,
+      },
+    })
+    mock.module('@/modules/observations/queries', {
+      namedExports: { getSourceLinksForSignal: async () => [] },
     })
     const { default: SignalsPage } = await import('../../../app/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({}) })

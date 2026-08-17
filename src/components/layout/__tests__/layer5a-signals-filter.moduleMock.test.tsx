@@ -10,7 +10,10 @@ describe('/signals — real category filter links', () => {
     const restore = forceReducedMotion()
     t.after(restore)
     mock.module('@/modules/signals/queries', {
-      namedExports: { getSignals: async () => [] },
+      namedExports: { getSignals: async () => [], getSignalsCount: async () => 0 },
+    })
+    mock.module('@/modules/observations/queries', {
+      namedExports: { getSourceLinksForSignal: async () => [] },
     })
     const { default: SignalsPage } = await import('../../../app/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({}) })
