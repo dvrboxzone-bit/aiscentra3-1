@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
 
 export const metadata: Metadata = {
-  title: 'About — AIscentra',
+  title: 'About',
   description:
     'AIscentra is an independent Intelligence Observatory dedicated to monitoring the global AI ecosystem.',
 }

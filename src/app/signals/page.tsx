@@ -6,7 +6,7 @@ import { getSignals } from '@/modules/signals/queries'
 import type { Signal, SignalCategory } from '@/types/database'
 
 export const metadata: Metadata = {
-  title: 'Signals — AIscentra',
+  title: 'Signals',
   description:
     'Live AI ecosystem signal feed. Browse, filter and explore scored intelligence signals.',
 }
