@@ -4,6 +4,12 @@
  * Recovered verbatim from an early project archive (Readiness Assessment
  * Blocker B-02) -- pure auth, no dependency on the V1/V2 schema, so no
  * adaptation was needed.
+ *
+ * Frontend Design Foundation, layer 6: the real supabase.auth.signInWithOtp
+ * call, the real emailRedirectTo pointing at /auth/callback (the real
+ * production bug fix documented below, unchanged), and all real
+ * loading/sent/error state are completely UNCHANGED -- only the visual
+ * JSX is migrated to vfinal.
  */
 'use client'
 
@@ -53,22 +59,20 @@ export default function AdminLoginPage(): React.JSX.Element {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-observatory-black">
+    <div className="flex min-h-screen items-center justify-center bg-deep-obsidian px-6 text-frost">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <p className="mb-2 font-mono text-xs tracking-[0.3em] text-text-muted">
-            INTELLIGENCE OBSERVATORY
-          </p>
-          <h1 className="text-xl font-light text-text-primary">Admin Access</h1>
+          <span className="font-caption mb-2 block text-mint-signal">INTELLIGENCE OBSERVATORY</span>
+          <h1 className="font-heading text-2xl text-frost">Admin Access</h1>
         </div>
 
         {sent ? (
-          <div className="border border-observatory-border bg-observatory-surface p-6 text-center">
-            <p className="mb-2 font-mono text-xs tracking-wider text-text-muted">CHECK EMAIL</p>
-            <p className="text-sm text-text-secondary">
-              Magic link sent to <strong>{email}</strong>
+          <div className="border border-border-subtle bg-surface-tonal p-6 text-center">
+            <span className="font-caption mb-2 block text-silver-haze">CHECK EMAIL</span>
+            <p className="text-silver-haze">
+              Magic link sent to <strong className="text-frost">{email}</strong>
             </p>
-            <p className="mt-2 text-xs text-text-muted">
+            <p className="mt-2 text-xs text-silver-haze">
               Click the link in your email to access the admin panel.
             </p>
           </div>
@@ -80,10 +84,7 @@ export default function AdminLoginPage(): React.JSX.Element {
             className="space-y-4"
           >
             <div>
-              <label
-                htmlFor="email"
-                className="mb-1 block font-mono text-xs tracking-wider text-text-muted"
-              >
+              <label htmlFor="email" className="font-caption mb-1 block text-silver-haze">
                 ADMIN EMAIL
               </label>
               <input
@@ -93,7 +94,7 @@ export default function AdminLoginPage(): React.JSX.Element {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 placeholder="admin@aiscentra.com"
-                className="w-full border border-observatory-border bg-observatory-surface px-4 py-2.5 text-sm text-text-primary placeholder-text-muted outline-none transition-colors focus:border-text-muted"
+                className="observatory-input font-body w-full border border-border-subtle bg-surface-tonal px-4 py-2.5 text-frost placeholder-silver-haze"
               />
             </div>
 
@@ -102,7 +103,7 @@ export default function AdminLoginPage(): React.JSX.Element {
             <button
               type="submit"
               disabled={loading || !email}
-              className="w-full border border-observatory-border py-2.5 font-mono text-xs tracking-wider text-text-muted transition-colors hover:border-text-muted hover:text-text-secondary disabled:opacity-40"
+              className="btn-pill magnetic w-full text-xs disabled:opacity-40"
             >
               {loading ? 'SENDING...' : 'SEND MAGIC LINK'}
             </button>

@@ -6,7 +6,12 @@
  * SignalStatus union (CANDIDATE, DRAFT, WEAK, ACTIVE, PROMOTED, EXPIRED,
  * DORMANT, REJECTED) -- the archive only listed 5 of these 8 values,
  * predating the V2 lifecycle states WEAK/CANDIDATE/DORMANT.
+ *
+ * Frontend Design Foundation, layer 6: real query (status filter,
+ * pagination via range(), status-count tabs), real /signals/[id]
+ * links -- all UNCHANGED, only the visual JSX is migrated to vfinal.
  */
+import Link from 'next/link'
 import { createAdminClient } from '@/lib/supabase/server'
 import { formatRelativeTime } from '@/lib/utils/format'
 import { getSignalSeverity, type SignalStatus } from '@/types/database'
@@ -53,7 +58,6 @@ export default async function AdminSignalsPage({
 
   const totalPages = Math.ceil((count ?? 0) / pageSize)
 
-  // Count by status for tabs
   const statusCounts = await Promise.all(
     ALL_STATUSES.map(async (s) => {
       const { count: c } = await supabase
@@ -68,44 +72,41 @@ export default async function AdminSignalsPage({
     <div>
       <div className="mb-6 flex items-baseline justify-between">
         <div>
-          <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">SIGNAL MANAGEMENT</p>
-          <h1 className="text-2xl font-light text-text-primary">Signals</h1>
+          <span className="font-caption mb-1 block text-mint-signal">SIGNAL MANAGEMENT</span>
+          <h1 className="font-heading text-2xl text-frost">Signals</h1>
         </div>
-        <span className="font-mono text-xs text-text-muted">
+        <span className="font-caption text-silver-haze">
           {count ?? 0} {status.toLowerCase()}
         </span>
       </div>
 
-      {/* Status tabs */}
       <div className="mb-6 flex flex-wrap gap-2">
         {statusCounts.map(({ status: s, count: c }) => (
-          <a
+          <Link
             key={s}
             href={`/admin/signals?status=${s}`}
-            className={`px-3 py-1 font-mono text-xs transition-colors ${
+            className={`px-3 py-1 text-xs font-medium transition-colors ${
               s === status
-                ? 'border border-observatory-border bg-observatory-surface text-text-primary'
-                : 'text-text-muted hover:text-text-secondary'
+                ? 'border border-border-subtle bg-surface-tonal text-frost'
+                : 'text-silver-haze hover:text-mint-signal'
             }`}
           >
             {s} ({c})
-          </a>
+          </Link>
         ))}
       </div>
 
-      {/* Signal list */}
-      <div className="divide-y divide-observatory-border border border-observatory-border">
-        {/* Header */}
-        <div className="grid grid-cols-[80px_60px_60px_1fr_100px_100px] gap-4 bg-observatory-surface px-4 py-2">
+      <div className="divide-y divide-border-subtle border border-border-subtle bg-surface-tonal">
+        <div className="grid grid-cols-[80px_60px_60px_1fr_100px_100px] gap-4 bg-deep-obsidian px-4 py-2">
           {['SCORE', 'CONF', 'CAT', 'TITLE', 'CREATED', 'ACTIONS'].map((h) => (
-            <span key={h} className="font-mono text-xs text-text-muted">
+            <span key={h} className="font-caption text-silver-haze">
               {h}
             </span>
           ))}
         </div>
 
         {(signals ?? []).length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-text-muted">
+          <div className="px-4 py-8 text-center text-sm text-silver-haze">
             No {status.toLowerCase()} signals.
           </div>
         ) : (
@@ -115,22 +116,22 @@ export default async function AdminSignalsPage({
             const severity = getSignalSeverity(score)
             const sevColor =
               severity === 'CRITICAL'
-                ? 'text-text-primary'
+                ? 'text-frost'
                 : severity === 'HIGH'
-                  ? 'text-signal-high'
+                  ? 'text-mint-signal'
                   : severity === 'MEDIUM'
-                    ? 'text-signal-medium'
-                    : 'text-signal-low'
+                    ? 'text-silver-haze'
+                    : 'text-silver-haze opacity-60'
             const validationFlags = (signal['validation_flags'] as string[] | null) ?? []
 
             return (
               <div
                 key={signal['id'] as string}
-                className="grid grid-cols-[80px_60px_60px_1fr_100px_100px] items-center gap-4 px-4 py-3 hover:bg-observatory-surface"
+                className="grid grid-cols-[80px_60px_60px_1fr_100px_100px] items-center gap-4 px-4 py-3 hover:bg-deep-obsidian"
               >
                 <span className={`font-mono text-xs tabular-nums ${sevColor}`}>{score}</span>
-                <span className="font-mono text-xs tabular-nums text-text-muted">{conf}%</span>
-                <span className="truncate font-mono text-xs text-text-muted">
+                <span className="font-mono text-xs tabular-nums text-silver-haze">{conf}%</span>
+                <span className="truncate font-mono text-xs text-silver-haze">
                   {(signal['category'] as string).slice(0, 6)}
                 </span>
                 <div className="min-w-0">
@@ -138,7 +139,7 @@ export default async function AdminSignalsPage({
                     href={`/signals/${signal['id'] as string}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="block truncate text-xs text-text-secondary hover:text-text-primary"
+                    className="block truncate text-xs text-silver-haze hover:text-mint-signal"
                   >
                     {signal['title'] as string}
                   </a>
@@ -146,7 +147,7 @@ export default async function AdminSignalsPage({
                     <span className="text-xs text-amber-400">⚠ {validationFlags.length} flag</span>
                   )}
                 </div>
-                <span className="font-mono text-xs text-text-muted">
+                <span className="font-caption text-silver-haze">
                   {formatRelativeTime(signal['created_at'] as string)}
                 </span>
                 <div className="flex gap-2">
@@ -154,7 +155,7 @@ export default async function AdminSignalsPage({
                     href={`/signals/${signal['id'] as string}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-mono text-xs text-text-muted hover:text-text-secondary"
+                    className="font-caption text-silver-haze hover:text-mint-signal"
                   >
                     VIEW
                   </a>
@@ -165,28 +166,27 @@ export default async function AdminSignalsPage({
         )}
       </div>
 
-      {/* Pagination */}
       {totalPages > 1 && (
-        <div className="mt-4 flex items-center justify-between font-mono text-xs text-text-muted">
+        <div className="font-caption mt-4 flex items-center justify-between text-silver-haze">
           <span>
             Page {page} of {totalPages}
           </span>
           <div className="flex gap-3">
             {page > 1 && (
-              <a
+              <Link
                 href={`/admin/signals?status=${status}&page=${page - 1}`}
-                className="hover:text-text-secondary"
+                className="hover:text-mint-signal"
               >
                 ← Prev
-              </a>
+              </Link>
             )}
             {page < totalPages && (
-              <a
+              <Link
                 href={`/admin/signals?status=${status}&page=${page + 1}`}
-                className="hover:text-text-secondary"
+                className="hover:text-mint-signal"
               >
                 Next →
-              </a>
+              </Link>
             )}
           </div>
         </div>

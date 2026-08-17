@@ -5,6 +5,9 @@
  * Assessment Blocker B-02) -- the sources table's shape used here
  * (name, url, type, trust_score, status, last_checked_at) is unchanged
  * since the archive, confirmed against the live schema before reuse.
+ *
+ * Frontend Design Foundation, layer 6: the real query is completely
+ * unchanged -- only the visual JSX is migrated to vfinal.
  */
 import { createAdminClient } from '@/lib/supabase/server'
 import { formatRelativeTime } from '@/lib/utils/format'
@@ -21,16 +24,15 @@ export default async function AdminSourcesPage(): Promise<React.JSX.Element> {
   return (
     <div>
       <div className="mb-6">
-        <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">SOURCE REGISTRY</p>
-        <h1 className="text-2xl font-light text-text-primary">Sources</h1>
-        <p className="mt-1 text-sm text-text-muted">{(sources ?? []).length} registered sources</p>
+        <span className="font-caption mb-1 block text-mint-signal">SOURCE REGISTRY</span>
+        <h1 className="font-heading text-2xl text-frost">Sources</h1>
+        <p className="mt-1 text-sm text-silver-haze">{(sources ?? []).length} registered sources</p>
       </div>
 
-      <div className="divide-y divide-observatory-border border border-observatory-border">
-        {/* Header */}
-        <div className="grid grid-cols-[1fr_80px_80px_100px_120px] gap-4 bg-observatory-surface px-4 py-2">
+      <div className="divide-y divide-border-subtle border border-border-subtle bg-surface-tonal">
+        <div className="grid grid-cols-[1fr_80px_80px_100px_120px] gap-4 bg-deep-obsidian px-4 py-2">
           {['NAME', 'TYPE', 'TRUST', 'STATUS', 'LAST CHECK'].map((h) => (
-            <span key={h} className="font-mono text-xs text-text-muted">
+            <span key={h} className="font-caption text-silver-haze">
               {h}
             </span>
           ))}
@@ -44,22 +46,22 @@ export default async function AdminSourcesPage(): Promise<React.JSX.Element> {
           return (
             <div
               key={source['id'] as string}
-              className="grid grid-cols-[1fr_80px_80px_100px_120px] items-center gap-4 px-4 py-3 hover:bg-observatory-surface"
+              className="grid grid-cols-[1fr_80px_80px_100px_120px] items-center gap-4 px-4 py-3 hover:bg-deep-obsidian"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm text-text-secondary">{source['name'] as string}</p>
-                <p className="truncate font-mono text-xs text-text-muted">
+                <p className="truncate text-sm text-silver-haze">{source['name'] as string}</p>
+                <p className="truncate font-mono text-xs text-silver-haze opacity-60">
                   {source['url'] as string}
                 </p>
               </div>
-              <span className="font-mono text-xs text-text-muted">{source['type'] as string}</span>
+              <span className="font-mono text-xs text-silver-haze">{source['type'] as string}</span>
               <span
                 className={`font-mono text-xs tabular-nums ${
                   trust >= 0.9
-                    ? 'text-text-primary'
+                    ? 'text-frost'
                     : trust >= 0.7
-                      ? 'text-text-secondary'
-                      : 'text-text-muted'
+                      ? 'text-silver-haze'
+                      : 'text-silver-haze opacity-60'
                 }`}
               >
                 {trust.toFixed(2)}
@@ -67,15 +69,15 @@ export default async function AdminSourcesPage(): Promise<React.JSX.Element> {
               <span
                 className={`font-mono text-xs ${
                   status === 'ACTIVE'
-                    ? 'text-text-secondary'
+                    ? 'text-mint-signal'
                     : status === 'ERROR'
                       ? 'text-amber-400'
-                      : 'text-text-muted'
+                      : 'text-silver-haze'
                 }`}
               >
                 {status}
               </span>
-              <span className="font-mono text-xs text-text-muted">
+              <span className="font-mono text-xs text-silver-haze">
                 {lastCheck ? formatRelativeTime(lastCheck) : 'Never'}
               </span>
             </div>
@@ -83,13 +85,13 @@ export default async function AdminSourcesPage(): Promise<React.JSX.Element> {
         })}
       </div>
 
-      <div className="mt-6 border border-observatory-border bg-observatory-surface p-4">
-        <p className="mb-2 font-mono text-xs tracking-wider text-text-muted">ADD SOURCE</p>
-        <p className="text-xs text-text-muted">
+      <div className="mt-6 border border-border-subtle bg-surface-tonal p-4">
+        <span className="font-caption mb-2 block text-silver-haze">ADD SOURCE</span>
+        <p className="text-xs text-silver-haze">
           Insert new sources directly in Supabase Dashboard → Table Editor → sources. Required
           fields: name, type, url, trust_score (0.0–1.0), status (ACTIVE).
         </p>
-        <code className="mt-2 block font-mono text-xs text-text-muted">
+        <code className="mt-2 block font-mono text-xs text-silver-haze">
           insert into sources (name, type, url, trust_score) values (...)
         </code>
       </div>

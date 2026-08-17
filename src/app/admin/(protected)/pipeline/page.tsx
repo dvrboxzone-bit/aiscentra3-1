@@ -9,6 +9,10 @@
  * metadata.retry_after instead of being marked permanently failed).
  * Without this section an admin would have no visibility into whether
  * that fix is actually taking effect in production.
+ *
+ * Frontend Design Foundation, layer 6: every real query (24h metrics,
+ * pending-retry computation, recent observations, recent errors) is
+ * completely UNCHANGED -- only the visual JSX is migrated to vfinal.
  */
 import { createAdminClient } from '@/lib/supabase/server'
 import { formatRelativeTime } from '@/lib/utils/format'
@@ -93,13 +97,12 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
   return (
     <div className="space-y-8">
       <div>
-        <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">PIPELINE MONITORING</p>
-        <h1 className="text-2xl font-light text-text-primary">Pipeline Status</h1>
+        <span className="font-caption mb-1 block text-mint-signal">PIPELINE MONITORING</span>
+        <h1 className="font-heading text-2xl text-frost">Pipeline Status</h1>
       </div>
 
-      {/* 24h metrics */}
       <div>
-        <p className="mb-3 font-mono text-xs tracking-wider text-text-muted">LAST 24 HOURS</p>
+        <span className="font-caption mb-3 block text-silver-haze">LAST 24 HOURS</span>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           {[
             { label: 'Observations', value: obs24h.count ?? 0 },
@@ -118,13 +121,10 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
             { label: 'Pending Retry', value: pendingRetryObs.length, alert: dueNow.length > 0 },
             { label: 'Total Observations', value: totalObs.count ?? 0 },
           ].map(({ label, value, alert }) => (
-            <div
-              key={label}
-              className="border border-observatory-border bg-observatory-surface p-4"
-            >
-              <p className="mb-1 font-mono text-xs text-text-muted">{label.toUpperCase()}</p>
+            <div key={label} className="border border-border-subtle bg-surface-tonal p-4">
+              <p className="font-caption mb-1 text-silver-haze">{label.toUpperCase()}</p>
               <p
-                className={`font-mono text-2xl tabular-nums ${alert ? 'text-amber-400' : 'text-text-secondary'}`}
+                className={`font-mono text-2xl tabular-nums ${alert ? 'text-amber-400' : 'text-silver-haze'}`}
               >
                 {value}
               </p>
@@ -139,13 +139,13 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
           "still in backoff". */}
       {pendingRetryObs.length > 0 && (
         <div>
-          <p className="mb-3 font-mono text-xs tracking-wider text-text-muted">
+          <span className="font-caption mb-3 block text-silver-haze">
             PENDING RETRY ({pendingRetryObs.length}, {dueNow.length} due now)
-          </p>
-          <div className="divide-y divide-observatory-border border border-observatory-border">
-            <div className="grid grid-cols-[1fr_140px_100px] gap-4 bg-observatory-surface px-4 py-2">
+          </span>
+          <div className="divide-y divide-border-subtle border border-border-subtle bg-surface-tonal">
+            <div className="grid grid-cols-[1fr_140px_100px] gap-4 bg-deep-obsidian px-4 py-2">
               {['TITLE', 'RETRY AFTER', 'COLLECTED'].map((h) => (
-                <span key={h} className="font-mono text-xs text-text-muted">
+                <span key={h} className="font-caption text-silver-haze">
                   {h}
                 </span>
               ))}
@@ -158,13 +158,13 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
                   key={obs['id'] as string}
                   className="grid grid-cols-[1fr_140px_100px] items-center gap-4 px-4 py-3"
                 >
-                  <p className="truncate text-xs text-text-secondary">{obs['title'] as string}</p>
+                  <p className="truncate text-xs text-silver-haze">{obs['title'] as string}</p>
                   <span
-                    className={`font-mono text-xs ${isDue ? 'text-amber-400' : 'text-text-muted'}`}
+                    className={`font-mono text-xs ${isDue ? 'text-amber-400' : 'text-silver-haze'}`}
                   >
                     {isDue ? 'DUE NOW' : formatRelativeTime(retryAfter)}
                   </span>
-                  <span className="font-mono text-xs text-text-muted">
+                  <span className="font-mono text-xs text-silver-haze">
                     {formatRelativeTime(obs['collected_at'] as string)}
                   </span>
                 </div>
@@ -174,13 +174,12 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
         </div>
       )}
 
-      {/* Recent observations */}
       <div>
-        <p className="mb-3 font-mono text-xs tracking-wider text-text-muted">RECENT OBSERVATIONS</p>
-        <div className="divide-y divide-observatory-border border border-observatory-border">
-          <div className="grid grid-cols-[1fr_80px_100px] gap-4 bg-observatory-surface px-4 py-2">
+        <span className="font-caption mb-3 block text-silver-haze">RECENT OBSERVATIONS</span>
+        <div className="divide-y divide-border-subtle border border-border-subtle bg-surface-tonal">
+          <div className="grid grid-cols-[1fr_80px_100px] gap-4 bg-deep-obsidian px-4 py-2">
             {['TITLE', 'STATUS', 'COLLECTED'].map((h) => (
-              <span key={h} className="font-mono text-xs text-text-muted">
+              <span key={h} className="font-caption text-silver-haze">
                 {h}
               </span>
             ))}
@@ -200,15 +199,13 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
                 key={obs['id'] as string}
                 className="grid grid-cols-[1fr_80px_100px] items-center gap-4 px-4 py-3"
               >
-                <p className="truncate text-xs text-text-secondary">{obs['title'] as string}</p>
+                <p className="truncate text-xs text-silver-haze">{obs['title'] as string}</p>
                 <span
-                  className={`font-mono text-xs ${
-                    obs['processed'] ? 'text-text-secondary' : 'text-amber-400'
-                  }`}
+                  className={`font-mono text-xs ${obs['processed'] ? 'text-silver-haze' : 'text-amber-400'}`}
                 >
                   {label}
                 </span>
-                <span className="font-mono text-xs text-text-muted">
+                <span className="font-mono text-xs text-silver-haze">
                   {formatRelativeTime(obs['collected_at'] as string)}
                 </span>
               </div>
@@ -217,16 +214,13 @@ export default async function AdminPipelinePage(): Promise<React.JSX.Element> {
         </div>
       </div>
 
-      {/* Errors */}
       {(recentErrors.data ?? []).length > 0 && (
         <div>
-          <p className="mb-3 font-mono text-xs tracking-wider text-amber-400">PROCESSING ERRORS</p>
-          <div className="divide-y divide-observatory-border border border-amber-400/20">
+          <span className="font-caption mb-3 block text-amber-400">PROCESSING ERRORS</span>
+          <div className="divide-y divide-amber-400/20 border border-amber-400/20">
             {(recentErrors.data ?? []).map((obs: Record<string, unknown>) => (
               <div key={obs['id'] as string} className="px-4 py-3">
-                <p className="mb-1 truncate text-xs text-text-secondary">
-                  {obs['title'] as string}
-                </p>
+                <p className="mb-1 truncate text-xs text-silver-haze">{obs['title'] as string}</p>
                 <p className="font-mono text-xs text-amber-400">
                   {(obs['processing_error'] as string).slice(0, 120)}
                 </p>
