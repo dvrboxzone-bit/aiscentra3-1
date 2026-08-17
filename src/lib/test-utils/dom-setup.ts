@@ -12,6 +12,9 @@
  * getter, which a plain `globalThis.navigator = ...` throws against.
  */
 import { JSDOM } from 'jsdom'
+import { createRequire } from 'node:module'
+import type * as NodeTest from 'node:test'
+import type * as TestingLibraryReact from '@testing-library/react'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -98,23 +101,49 @@ if (typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserve
 
 // REAL BUG FIXED (independent review): VfinalHeroGlobe and
 // VfinalStrategicMemoryCanvas both unconditionally construct a real
-// `new IntersectionObserver(...)` on mount (even under
-// prefers-reduced-motion, which only gates whether the ANIMATION LOOP
-// itself starts) -- without any IntersectionObserver implementation in
-// this jsdom environment at all, rendering either component crashes
-// with "IntersectionObserver is not defined". A minimal, inert stub
-// (never fires its callback) is sufficient here: no test in this file
-// relies on jsdom itself triggering real viewport intersection: tests
-// that need that behavior provide and fire their own explicit fake
-// observer (see vfinal-hero-globe.test.ts and
-// vfinal-strategic-memory-canvas.dom.test.tsx).
+// `new IntersectionObserver(...)` on mount -- without any
+// IntersectionObserver implementation in this jsdom environment at
+// all, rendering either component crashes with "IntersectionObserver
+// is not defined". Tests that need to control real viewport
+// intersection provide and fire their own explicit fake observer (see
+// vfinal-hero-globe.test.ts and
+// vfinal-strategic-memory-canvas.dom.test.tsx) -- those override
+// globalThis.IntersectionObserver themselves and are unaffected by
+// this default.
+//
+// REAL BUG FIXED (Preview correction): VfinalHeroGlobe and
+// VfinalStrategicMemoryCanvas now start their requestAnimationFrame
+// loop unconditionally on mount (prefers-reduced-motion no longer
+// gates this, to match the reference HTML exactly -- see each
+// component's own comment). A stub that NEVER fires its callback left
+// that loop running forever via dom-setup's own real-timer
+// requestAnimationFrame stand-in, hanging any homepage-level test that
+// renders the real page tree (previously masked by forcing
+// prefers-reduced-motion in those tests, which is no longer a valid
+// off-switch). This default stub now reports "not intersecting" on the
+// next microtask after observe() -- a jsdom environment has no real
+// viewport for anything to genuinely intersect, so this is also the
+// more honest default, and it lets each component's own
+// IntersectionObserver callback perform its own real cancelAnimationFrame
+// stop shortly after mount instead of looping unbounded.
 if (
   typeof (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver ===
   'undefined'
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(globalThis as any).IntersectionObserver = class {
-    observe(): void {}
+    private callback: IntersectionObserverCallback
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback
+    }
+    observe(target: Element): void {
+      queueMicrotask(() => {
+        this.callback(
+          [{ target, isIntersecting: false } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        )
+      })
+    }
     unobserve(): void {}
     disconnect(): void {}
   }
@@ -143,5 +172,34 @@ if (
   ;(globalThis as any).cancelAnimationFrame = (id: ReturnType<typeof setTimeout>): void =>
     clearTimeout(id)
 }
+
+// REAL BUG FIXED (Preview correction): VfinalLenisProvider now
+// constructs a real Lenis instance unconditionally on mount
+// (prefers-reduced-motion no longer gates it, to match the reference
+// HTML exactly -- see vfinal-lenis-provider.tsx's own comment). Its
+// raf() loop reschedules itself via this module's own timer-based
+// requestAnimationFrame stand-in forever until the component unmounts
+// (lenis.destroy() + cancelAnimationFrame in its effect cleanup) --
+// several existing DOM test files render a full page tree (via
+// VfinalPublicShell) without ever calling the `unmount` returned by
+// `render()`, which previously didn't matter because
+// prefers-reduced-motion (forced in most of those files' own fixtures)
+// skipped Lenis entirely. With that off-switch gone, an un-unmounted
+// render now leaves a real recursive setTimeout chain running forever,
+// hanging the whole `node --test` process for that file after its own
+// tests finish. `@testing-library/react`'s own `cleanup()` unmounts
+// every tree rendered via `render()` (running each component's real
+// effect-cleanup, including Lenis's own destroy()) -- registered once
+// here, via node:test's own `after` hook, so every DOM test file that
+// imports this module gets it automatically without each test file
+// needing its own explicit unmount bookkeeping. These imports must stay
+// late: static ESM imports are hoisted ahead of the jsdom globals above,
+// which makes Testing Library's `screen` bind before `document` exists.
+// createRequire keeps the load synchronous for tsx's CommonJS output while
+// still evaluating Testing Library only after document has been installed.
+const requireAfterDomSetup = createRequire(__filename)
+const { after } = requireAfterDomSetup('node:test') as typeof NodeTest
+const { cleanup } = requireAfterDomSetup('@testing-library/react') as typeof TestingLibraryReact
+after(cleanup)
 
 export { dom }

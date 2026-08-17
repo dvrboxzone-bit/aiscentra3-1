@@ -38,14 +38,21 @@ import { useEffect } from 'react'
  * a fresh scan runs for the new page. No listener/observer survives
  * past this component's own unmount.
  *
- * prefers-reduced-motion: magnetic elements are left untouched (no
- * transform is ever applied) so nothing moves under mouse input;
- * reveal elements are still observed and still get `.in` added on
- * intersection, but globals.css's own reduced-motion override
- * (`.reveal { opacity:1; transform:none; transition:none }`) already
- * makes that a no-op visually -- consistent with the original hooks'
- * own division of responsibility (JS only toggles a class, the actual
- * animation/no-animation behavior lives in CSS).
+ * REAL BUG FIXED (Preview correction, root-cause pass against the
+ * original AIscentra-vfinal-adapt.html reference): binding magnetic
+ * elements was previously skipped entirely under prefers-reduced-
+ * motion -- the reference HTML's own mousemove/mouseleave binding
+ * (lines ~676-691) is unconditional, no reduced-motion check at all.
+ * Chromium defaults prefers-reduced-motion to "reduce" in headless/
+ * automated contexts, so this silently disabled the magnetic effect in
+ * exactly the environments used to verify it. Removed to match the
+ * reference exactly: magnetic always binds. Reveal elements are always
+ * observed too (matching the reference's own unconditional
+ * `document.querySelectorAll('.reveal').forEach(el => io.observe(el))`)
+ * -- globals.css's own reduced-motion override
+ * (`.reveal { opacity:1; transform:none; transition:none }`) is what
+ * makes the effect a visual no-op for users who asked for it, not a
+ * JS-level skip.
  */
 const MAGNETIC_SELECTOR = '.magnetic'
 const REVEAL_SELECTOR = '.reveal'
@@ -55,8 +62,6 @@ const REVEAL_BOUND_ATTR = 'data-reveal-bound'
 
 export function VfinalInteractionController(): null {
   useEffect(() => {
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
     const magneticCleanups = new WeakMap<Element, () => void>()
 
     const revealObserver = new IntersectionObserver(
@@ -72,7 +77,6 @@ export function VfinalInteractionController(): null {
     )
 
     function bindMagnetic(el: Element): void {
-      if (prefersReducedMotion) return
       if (magneticCleanups.has(el)) return
       const node = el as HTMLElement
 

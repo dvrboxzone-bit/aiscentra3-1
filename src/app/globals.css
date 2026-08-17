@@ -221,13 +221,14 @@
   opacity: 1;
   transform: translateY(0);
 }
-@media (prefers-reduced-motion: reduce) {
-  .reveal {
-    opacity: 1;
-    transform: none;
-    transition: none;
-  }
-}
+/* REAL BUG FIXED (Preview correction, root-cause pass against the
+   original AIscentra-vfinal-adapt.html reference): a
+   prefers-reduced-motion override here previously forced .reveal to
+   opacity:1/no-transition immediately, skipping the scroll-triggered
+   fade/slide-in entirely whenever the browser reports reduced motion --
+   not present in the reference HTML's own CSS (lines 90-91), which has
+   no such media query. Removed to match the reference exactly: the
+   reveal transition always runs. */
 
 .schematic-bg {
   stroke: rgba(229, 231, 235, 0.05);

@@ -102,12 +102,17 @@ describe('VfinalHeroGlobe source: real stop/restart, not merely skipped animatio
     )
   })
 
-  test('prefers-reduced-motion is checked before starting the loop -- animateGlobe() is only called in the else branch, a single renderer.render() happens in the reduced-motion branch instead', () => {
+  test('prefers-reduced-motion does not disable the required globe animation loop', () => {
     const text = src()
+    assert.doesNotMatch(
+      text,
+      /const prefersReducedMotion\s*=|matchMedia\('\(prefers-reduced-motion: reduce\)'\)/,
+      'the required globe animation must not be gated by prefers-reduced-motion',
+    )
     assert.match(
       text,
-      /if \(prefersReducedMotion\) \{\s*\/\/[^\n]*\n[^\n]*\n[^\n]*\n\s*renderer\.render\(scene, camera\)\s*\} else \{\s*animateGlobe\(\)\s*\}/,
-      'reduced-motion must render exactly one static frame and never call animateGlobe (which is what starts the requestAnimationFrame loop)',
+      /animateGlobe\(\)\s*const globeObserver/,
+      'animateGlobe() must start unconditionally before viewport observation takes over pause/restart control',
     )
   })
 

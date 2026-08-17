@@ -127,7 +127,7 @@ describe('VfinalInteractionController — real magnetic mousemove/mouseleave', (
     )
   })
 
-  test('prefers-reduced-motion: a .magnetic element never receives a transform', (t) => {
+  test('prefers-reduced-motion: a .magnetic element still binds and receives a transform (matches the reference HTML, which has no reduced-motion gate on this effect)', (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
 
@@ -155,7 +155,11 @@ describe('VfinalInteractionController — real magnetic mousemove/mouseleave', (
       configurable: true,
     })
     el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 60, clientY: 30 }))
-    assert.equal(el.style.transform, '', 'reduced motion must leave the transform untouched')
+    assert.match(
+      el.style.transform,
+      /translate\(2\.5px, 2\.5px\)/,
+      'reduced motion must not disable magnetic binding -- the reference HTML has no such gate',
+    )
   })
 })
 

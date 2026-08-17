@@ -71,9 +71,13 @@ const CYCLE_DURATION_MS = 12000
  * 0) and RESTARTS the loop on re-entry (see draw()'s own comment for
  * the real incident this closes). Full cleanup on unmount:
  * cancelAnimationFrame, resize listener removed, observer disconnected.
- * prefers-reduced-motion: renders one static frame at the animation's
- * midpoint (stage ~3.5) instead of starting the loop -- not present in
- * the original HTML, added per this task's explicit requirement.
+ *
+ * REAL BUG FIXED (Preview correction, root-cause pass against the
+ * original AIscentra-vfinal-adapt.html reference): a prefers-reduced-
+ * motion check previously rendered one static frame at the midpoint
+ * instead of starting the loop -- not present in the reference HTML's
+ * own draw() (lines ~909-999), which always runs. Removed to match the
+ * reference exactly: the animation always loops.
  */
 export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -84,8 +88,6 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
     if (!canvas || !parent) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     let w = 0
     let h = 0
@@ -218,16 +220,11 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
       rafId = requestAnimationFrame(draw)
     }
 
-    if (prefersReducedMotion) {
-      drawFrame(3.5) // static mid-cycle frame, no animation loop
-    } else {
-      draw()
-    }
+    draw()
 
     const memObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (prefersReducedMotion) return // loop never runs; nothing to (re)start
           if (entry.isIntersecting) {
             if (rafId === 0) rafId = requestAnimationFrame(draw)
           } else {

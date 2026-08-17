@@ -1,6 +1,7 @@
 /**
  * AIscentra — VfinalStrategicMemoryCanvas: layer-3 regression tests
- * (cleanup/unmount, prefers-reduced-motion, real stop/restart offscreen)
+ * (cleanup/unmount, required animation under reduced motion, real
+ * stop/restart offscreen)
  *
  * REAL BUG this closes (independent review): the animation loop's own
  * requestAnimationFrame call previously happened UNCONDITIONALLY as the
@@ -174,10 +175,14 @@ describe('VfinalStrategicMemoryCanvas — real stop/restart, not merely skipped 
     )
   })
 
-  test('prefers-reduced-motion: renders a single static frame, requestAnimationFrame is never called at all', () => {
+  test('prefers-reduced-motion does not disable the required animation loop', () => {
     reducedMotion = true
     render(React.createElement(VfinalStrategicMemoryCanvas))
-    assert.equal(rafCallCount, 0, 'under reduced motion, the animation loop must never start')
+    assert.equal(
+      rafCallCount,
+      1,
+      'the required strategic-memory animation must still start under reduced motion',
+    )
   })
 
   test('unmount fully disconnects the IntersectionObserver (real cleanup, not a leaked observer)', () => {

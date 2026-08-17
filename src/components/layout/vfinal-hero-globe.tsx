@@ -36,10 +36,13 @@ import * as THREE from 'three'
  *   merely skipping the draw work while the callback keeps firing every
  *   frame regardless (see animateGlobe's own comment for the real
  *   incident this closes).
- * - prefers-reduced-motion: rendering happens once (a static frame) and
- *   the animation loop never starts -- not present in the original
- *   HTML, added per this task's own explicit technical-boundaries
- *   requirement ("учитывать prefers-reduced-motion").
+ *
+ * REAL BUG FIXED (Preview correction, root-cause pass against the
+ * original AIscentra-vfinal-adapt.html reference): a prefers-reduced-
+ * motion check previously made this render one static frame and never
+ * start the animation loop -- not present in the reference HTML's own
+ * animateGlobe() (lines ~828-846), which always runs. Removed to match
+ * the reference exactly: the globe always rotates/animates.
  */
 export function VfinalHeroGlobe(): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -51,8 +54,6 @@ export function VfinalHeroGlobe(): React.JSX.Element {
     const w = container.clientWidth
     const h = container.clientHeight
     if (w === 0 || h === 0) return
-
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 1000)
@@ -231,19 +232,11 @@ export function VfinalHeroGlobe(): React.JSX.Element {
       rafId = requestAnimationFrame(animateGlobe)
     }
 
-    if (prefersReducedMotion) {
-      // Static single frame -- no requestAnimationFrame loop starts at
-      // all, matching the task's own reduced-motion requirement (not
-      // present in the original HTML).
-      renderer.render(scene, camera)
-    } else {
-      animateGlobe()
-    }
+    animateGlobe()
 
     const globeObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (prefersReducedMotion) return // loop never runs; nothing to (re)start
           if (entry.isIntersecting) {
             // Restart: only schedule a new frame if one isn't already
             // pending (guards against a redundant double-loop if two
