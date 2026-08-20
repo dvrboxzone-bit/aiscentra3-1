@@ -20,14 +20,10 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
     let height = 0
     let rafId = 0
     const startedAt = Date.now()
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
     function drawFrame(timeSeconds: number): void {
       if (!ctx) return
       ctx.clearRect(0, 0, width, height)
-      const breathe = reducedMotion
-        ? 1
-        : 0.82 + 0.18 * Math.sin((timeSeconds / CYCLE_SECONDS) * Math.PI * 2)
+      const breathe = 0.82 + 0.18 * Math.sin((timeSeconds / CYCLE_SECONDS) * Math.PI * 2)
       const minGap = 3 * breathe
       const maxGap = (width / 20) * breathe
       let x = 0
@@ -71,12 +67,11 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
     resizeCanvas()
     window.addEventListener('resize', resizeCanvas)
 
-    if (!reducedMotion) draw()
+    draw()
 
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (reducedMotion) return
           if (entry.isIntersecting) {
             if (rafId === 0) rafId = requestAnimationFrame(draw)
           } else {
@@ -97,15 +92,16 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="hero-density-wrap" data-component="hero-density-scan">
-      <div className="hero-density-status">
+    <div className="hero-density-scan-wrap" data-component="hero-density-scan">
+      <div className="hero-density-scan-status">
         <span className="font-caption text-silver-haze">SYSTEM: SCANNING</span>
-        <span className="font-caption text-mint-signal">SIG</span>
       </div>
-      <canvas ref={canvasRef} id="hero-density-scan" aria-hidden="true" />
-      <div className="hero-density-count" aria-label="Signal count unavailable">
-        <span className="font-mono-vf text-frost">—</span>
-        <span className="font-caption text-silver-haze">SIGNALS INDEXED</span>
+      <div className="hero-density-scan-label">
+        <span className="font-caption text-silver-haze">SIG</span>
+        <span className="font-caption text-mint-signal">574,780</span>
+      </div>
+      <div className="hero-density-scan-container">
+        <canvas ref={canvasRef} id="hero-density-scan" aria-hidden="true" />
       </div>
     </div>
   )

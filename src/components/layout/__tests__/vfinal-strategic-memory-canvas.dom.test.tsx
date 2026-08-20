@@ -28,6 +28,7 @@ let intersectionCallback: ((entries: Array<{ isIntersecting: boolean }>) => void
 let observedElements: Element[] = []
 let disconnectCalled = false
 let reducedMotion = false
+let recordedFonts: string[] = []
 
 /** Fires a queued callback by ID, matching real browser semantics: a
  * cancelled ID never fires, exactly like a real cancelAnimationFrame()
@@ -47,6 +48,7 @@ beforeEach(() => {
   observedElements = []
   disconnectCalled = false
   reducedMotion = false
+  recordedFonts = []
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) => {
@@ -99,6 +101,9 @@ beforeEach(() => {
     translate: () => {},
     scale: () => {},
     setLineDash: () => {},
+    set font(value: string) {
+      recordedFonts.push(value)
+    },
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(globalThis as any).window.HTMLCanvasElement.prototype.getContext = () => ctxStub
@@ -183,6 +188,19 @@ describe('VfinalStrategicMemoryCanvas — real stop/restart, not merely skipped 
       1,
       'the required strategic-memory animation must still start under reduced motion',
     )
+  })
+
+  test('uses the approved enlarged timeline and node-label fonts', () => {
+    const originalNow = Date.now
+    let nowCalls = 0
+    Date.now = () => (nowCalls++ === 0 ? 0 : 1000)
+    try {
+      render(React.createElement(VfinalStrategicMemoryCanvas))
+    } finally {
+      Date.now = originalNow
+    }
+    assert.ok(recordedFonts.includes('24px JetBrains Mono'))
+    assert.ok(recordedFonts.includes('20px JetBrains Mono'))
   })
 
   test('unmount fully disconnects the IntersectionObserver (real cleanup, not a leaked observer)', () => {

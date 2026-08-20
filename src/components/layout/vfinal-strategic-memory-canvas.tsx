@@ -135,7 +135,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
         { val: 4, label: '2000' },
         { val: 6, label: '2026' },
       ]
-      ctx.font = '12px JetBrains Mono'
+      ctx.font = '24px JetBrains Mono'
       ctx.fillStyle = 'rgba(229, 231, 235, 0.5)'
       ctx.textAlign = 'center'
       timeMarks.forEach((m) => {
@@ -144,7 +144,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
         ctx.moveTo(x, tlY - 5)
         ctx.lineTo(x, tlY + 5)
         ctx.stroke()
-        ctx.fillText(m.label, x, tlY + 20)
+        ctx.fillText(m.label, x, tlY + 32)
       })
 
       const markerX = 50 + (stage / 7) * 900
@@ -190,11 +190,11 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
           ctx.arc(node.x, node.y, 4, 0, Math.PI * 2)
           ctx.fill()
           ctx.shadowBlur = 0
-          ctx.font = '10px JetBrains Mono'
+          ctx.font = '20px JetBrains Mono'
           ctx.fillStyle = isNew ? '#8B9D83' : 'rgba(229, 231, 235, 0.6)'
           ctx.textAlign = 'left'
           node.label.split('\n').forEach((line, i) => {
-            ctx.fillText(line, node.x + 8, node.y + 4 + i * 12)
+            ctx.fillText(line, node.x + 12, node.y + 6 + i * 22)
           })
         }
       })

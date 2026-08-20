@@ -8,11 +8,13 @@ import { VfinalHeroDensityScan } from '../vfinal-hero-density-scan'
 let rafCalls = 0
 let reducedMotion = false
 let observerCallback: IntersectionObserverCallback | null = null
+let rafCallback: FrameRequestCallback | null = null
 
 beforeEach(() => {
   rafCalls = 0
   reducedMotion = false
   observerCallback = null
+  rafCallback = null
   window.matchMedia = ((query: string) => ({
     matches: query.includes('prefers-reduced-motion') && reducedMotion,
     media: query,
@@ -21,7 +23,10 @@ beforeEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   })) as any
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).requestAnimationFrame = () => ++rafCalls
+  ;(globalThis as any).requestAnimationFrame = (callback: FrameRequestCallback) => {
+    rafCallback = callback
+    return ++rafCalls
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(globalThis as any).cancelAnimationFrame = () => {}
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,21 +58,23 @@ afterEach(() => {
 })
 
 describe('VfinalHeroDensityScan', () => {
-  test('renders the approved status, SIG label, neutral count and canvas', () => {
+  test('renders the approved status, SIG count and canvas without placeholder symbols', () => {
     const { container } = render(<VfinalHeroDensityScan />)
     assert.match(container.textContent ?? '', /SYSTEM: SCANNING/)
     assert.match(container.textContent ?? '', /SIG/)
-    assert.match(container.textContent ?? '', /SIGNALS INDEXED/)
+    assert.match(container.textContent ?? '', /574,780/)
+    assert.doesNotMatch(container.textContent ?? '', /SIGNALS INDEXED|—/)
     const canvas = container.querySelector<HTMLCanvasElement>('canvas#hero-density-scan')
     assert.ok(canvas)
     assert.equal(canvas.style.height, '', 'CSS remains the source of the approved 70/50px height')
     assert.equal(canvas.height, 70, 'bitmap height follows the canvas, not the 308px wrapper')
   })
 
-  test('renders a static frame and starts no infinite loop under reduced motion', () => {
+  test('keeps the required breathing animation running under reduced motion', () => {
     reducedMotion = true
     render(<VfinalHeroDensityScan />)
-    assert.equal(rafCalls, 0)
+    assert.equal(rafCalls, 1)
+    assert.ok(rafCallback, 'the breathing loop schedules its next frame')
     assert.ok(observerCallback, 'the canvas still registers viewport cleanup')
   })
 })
