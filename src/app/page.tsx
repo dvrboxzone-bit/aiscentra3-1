@@ -5,6 +5,13 @@ import { VfinalHeroDensityScan } from '@/components/layout/vfinal-hero-density-s
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
 import { VfinalSlider } from '@/components/layout/vfinal-slider'
+import {
+  assetAt,
+  FORECAST_ASSETS,
+  getFeaturedSignalAsset,
+  HISTORY_ASSETS,
+  OBSERVATION_ASSETS,
+} from '@/components/layout/vfinal-landing-assets'
 import { getFeaturedSignals, getSignals } from '@/modules/signals/queries'
 import type { Signal } from '@/types/database'
 
@@ -88,15 +95,12 @@ const TRAJECTORIES = [
  *   a dead or fabricated link.
  * - History ("Signal 001"): genuine static editorial content (Turing
  *   1950, Dartmouth 1956) -- not fabricated production data, kept
- *   verbatim. Its own external Wikipedia/press image URLs are replaced
- *   with neutral VfinalImageSlot panels, matching every other image
- *   slot on this page (task: no photo folder yet, no external URLs).
+ *   verbatim. Its external reference images are replaced with the
+ *   approved local WebP assets from the typed landing asset map.
  *
- * Image slots: every <img> in the HTML source (Featured Signals x6,
- * Forecasts x2, Observations x2, History x4) is replaced by
- * VfinalImageSlot -- same geometry/aspect-ratio classes, no
- * Picsum/z-cdn/temporary/signed URLs, ready to receive a real photo
- * once the approved photo folder exists (a separate, later task).
+ * Image slots: every image in the HTML source (Featured Signals x6,
+ * Forecasts x2, Observations x2, History x4) is backed by the approved
+ * typed local WebP map. No external or temporary image URLs are used.
  */
 export default async function HomePage(): Promise<React.JSX.Element> {
   const [featuredSignals, widerPool] = await Promise.all([
@@ -270,8 +274,14 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </span>
             </div>
             <div className="reveal grid grid-cols-2 gap-6">
-              <VfinalImageSlot className="aspect-[3/4] border border-border-subtle" />
-              <VfinalImageSlot className="mt-12 aspect-[3/4] border border-border-subtle" />
+              <VfinalImageSlot
+                asset={assetAt(FORECAST_ASSETS, 0)}
+                className="aspect-[3/4] border border-border-subtle"
+              />
+              <VfinalImageSlot
+                asset={assetAt(FORECAST_ASSETS, 1)}
+                className="mt-12 aspect-[3/4] border border-border-subtle"
+              />
             </div>
           </div>
         </div>
@@ -298,7 +308,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
           <div className="grid gap-6">
             {observationSlots.map((signal, i) => (
-              <ObservationCard key={signal?.id ?? `empty-${i}`} signal={signal} />
+              <ObservationCard key={signal?.id ?? `empty-${i}`} signal={signal} index={i} />
             ))}
           </div>
         </div>
@@ -408,7 +418,10 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           </p>
           <div className="grid gap-6">
             <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalSlider className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+              <VfinalSlider
+                assets={[assetAt(HISTORY_ASSETS, 0), assetAt(HISTORY_ASSETS, 1)]}
+                className="aspect-video border-0 md:aspect-auto md:w-2/5"
+              />
               <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
                 <div className="mb-4 flex items-center gap-4">
                   <span className="font-caption text-silver-haze">FACT</span>
@@ -426,7 +439,10 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </div>
             </div>
             <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalSlider className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+              <VfinalSlider
+                assets={[assetAt(HISTORY_ASSETS, 2), assetAt(HISTORY_ASSETS, 3)]}
+                className="aspect-video border-0 md:aspect-auto md:w-2/5"
+              />
               <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
                 <div className="mb-4 flex items-center gap-4">
                   <span className="font-caption text-silver-haze">EVENT</span>
@@ -487,7 +503,10 @@ function FeaturedSignalCard({
         data-content-slot="signal"
         data-slot-index={slotIndex}
       >
-        <VfinalImageSlot className="mb-5 h-40 border-0" />
+        <VfinalImageSlot
+          asset={getFeaturedSignalAsset(undefined, index)}
+          className="mb-5 h-40 border-0"
+        />
         <div className="mb-4 flex items-center justify-between">
           <span className="font-caption text-deep-obsidian opacity-40">UNAVAILABLE</span>
         </div>
@@ -511,7 +530,10 @@ function FeaturedSignalCard({
       data-slot-index={slotIndex}
       data-category={signal.category}
     >
-      <VfinalImageSlot className="mb-5 h-40 border-0" />
+      <VfinalImageSlot
+        asset={getFeaturedSignalAsset(signal.category, index)}
+        className="mb-5 h-40 border-0"
+      />
       <div className="mb-4 flex items-center justify-between">
         <span className="font-caption text-deep-obsidian">{signal.status}</span>
         <span className="text-xs font-medium text-gray-500">{relativeTime(signal.created_at)}</span>
@@ -533,14 +555,23 @@ function FeaturedSignalCard({
   )
 }
 
-function ObservationCard({ signal }: { signal: Signal | null }): React.JSX.Element {
+function ObservationCard({
+  signal,
+  index,
+}: {
+  signal: Signal | null
+  index: number
+}): React.JSX.Element {
   if (!signal) {
     return (
       <div
         className="reveal group border border-border-subtle bg-surface-tonal md:flex"
         data-content-slot="observation"
       >
-        <VfinalImageSlot className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+        <VfinalImageSlot
+          asset={assetAt(OBSERVATION_ASSETS, index)}
+          className="aspect-video border-0 md:aspect-auto md:w-2/5"
+        />
         <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
           <div className="mb-4 flex items-center gap-4">
             <span className="font-caption text-silver-haze opacity-40">UNAVAILABLE</span>
@@ -561,7 +592,10 @@ function ObservationCard({ signal }: { signal: Signal | null }): React.JSX.Eleme
       className="reveal group border border-border-subtle bg-surface-tonal md:flex"
       data-content-slot="observation"
     >
-      <VfinalImageSlot className="aspect-video border-0 md:aspect-auto md:w-2/5" />
+      <VfinalImageSlot
+        asset={assetAt(OBSERVATION_ASSETS, index)}
+        className="aspect-video border-0 md:aspect-auto md:w-2/5"
+      />
       <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
         <div className="mb-4 flex items-center gap-4">
           <span className="font-caption text-silver-haze">{signal.category}</span>

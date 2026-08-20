@@ -1,4 +1,5 @@
 import { VfinalImageSlot } from './vfinal-image-slot'
+import type { LandingAsset } from './vfinal-landing-assets'
 
 /**
  * AIscentra — vfinal image slider (Frontend Design Foundation, layer 4
@@ -18,19 +19,23 @@ import { VfinalImageSlot } from './vfinal-image-slot'
  * existing `.slider-container`/`.slider-slide` CSS (no new animation
  * logic invented, no button/JS-driven controls -- the task explicitly
  * says to use the existing slider CSS as-is, not fabricate manual
- * navigation), with two VfinalImageSlot panels as its two slides
- * (neutral, no external/temporary URLs, per this layer's own image-
- * slot policy).
+ * navigation), with two approved local assets as its two slides.
  */
-export function VfinalSlider({ className = '' }: { className?: string }): React.JSX.Element {
+export function VfinalSlider({
+  assets,
+  className = '',
+}: {
+  assets: readonly [LandingAsset, LandingAsset]
+  className?: string
+}): React.JSX.Element {
   return (
     <div className={`overflow-hidden bg-deep-obsidian ${className}`}>
       <div className="slider-container group">
         <div className="slider-slide">
-          <VfinalImageSlot className="h-full w-full border-0" />
+          <VfinalImageSlot asset={assets[0]} className="h-full w-full border-0" />
         </div>
         <div className="slider-slide">
-          <VfinalImageSlot className="h-full w-full border-0" />
+          <VfinalImageSlot asset={assets[1]} className="h-full w-full border-0" />
         </div>
       </div>
     </div>

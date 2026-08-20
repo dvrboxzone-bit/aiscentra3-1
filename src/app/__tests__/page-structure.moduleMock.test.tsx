@@ -80,7 +80,8 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
 
     // 6. Exactly 14 total image slots (6 Featured + 2 Forecasts + 2
     //    Observations + 4 History slider slides).
-    assert.equal(container.querySelectorAll('[data-image-slot="neutral-placeholder"]').length, 14)
+    assert.equal(container.querySelectorAll('[data-image-slot="local-asset"]').length, 14)
+    assert.equal(container.querySelectorAll('img[src^="/images/"][src$=".webp"]').length, 14)
 
     // 7. No Picsum, z-cdn, or literal href="#" anywhere on the real page.
     const html = container.innerHTML
