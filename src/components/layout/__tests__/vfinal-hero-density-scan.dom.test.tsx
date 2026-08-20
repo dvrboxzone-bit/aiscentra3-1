@@ -42,7 +42,9 @@ beforeEach(() => {
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(window.HTMLCanvasElement.prototype as any).getContext = () => context
-  HTMLElement.prototype.getBoundingClientRect = () => ({ width: 520, height: 70 }) as DOMRect
+  HTMLElement.prototype.getBoundingClientRect = () => ({ width: 520, height: 308 }) as DOMRect
+  window.HTMLCanvasElement.prototype.getBoundingClientRect = () =>
+    ({ width: 520, height: 70 }) as DOMRect
 })
 
 afterEach(() => {
@@ -56,7 +58,10 @@ describe('VfinalHeroDensityScan', () => {
     assert.match(container.textContent ?? '', /SYSTEM: SCANNING/)
     assert.match(container.textContent ?? '', /SIG/)
     assert.match(container.textContent ?? '', /SIGNALS INDEXED/)
-    assert.ok(container.querySelector('canvas#hero-density-scan'))
+    const canvas = container.querySelector<HTMLCanvasElement>('canvas#hero-density-scan')
+    assert.ok(canvas)
+    assert.equal(canvas.style.height, '', 'CSS remains the source of the approved 70/50px height')
+    assert.equal(canvas.height, 70, 'bitmap height follows the canvas, not the 308px wrapper')
   })
 
   test('renders a static frame and starts no infinite loop under reduced motion', () => {

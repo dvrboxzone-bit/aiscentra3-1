@@ -225,6 +225,12 @@
   opacity: 1;
   transform: translateY(0);
 }
+.card-sharp.reveal {
+  transition:
+    background-color 0.3s ease,
+    opacity 0.8s ease,
+    transform 0.8s ease;
+}
 /* REAL BUG FIXED (Preview correction, root-cause pass against the
    original AIscentra-vfinal-adapt.html reference): a
    prefers-reduced-motion override here previously forced .reveal to
@@ -410,6 +416,8 @@
 .mobile-menu-overlay {
   position: fixed;
   inset: 0;
+  width: 100vw;
+  height: 100dvh;
   z-index: 60;
   border: 0;
   background: rgba(0, 0, 0, 0.72);
@@ -428,6 +436,7 @@
   top: 0;
   right: 0;
   bottom: 0;
+  height: 100dvh;
   z-index: 70;
   width: min(88vw, 420px);
   background: var(--color-deep-obsidian);

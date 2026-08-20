@@ -11,12 +11,10 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
 
   useEffect(() => {
     const canvas = canvasRef.current
-    const parent = canvas?.parentElement
-    if (!canvas || !parent) return
+    if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     const densityCanvas = canvas
-    const container = parent
 
     let width = 0
     let height = 0
@@ -53,13 +51,14 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
 
     function resizeCanvas(): void {
       if (!ctx) return
-      const rect = container.getBoundingClientRect()
+      // CSS owns the approved 70px/50px visual height. Measuring the
+      // wrapper includes the status/count rows and feeding that value back
+      // as an inline canvas height makes the wrapper grow on every resize.
+      const rect = densityCanvas.getBoundingClientRect()
       width = rect.width
       height = rect.height
-      densityCanvas.width = width * window.devicePixelRatio
-      densityCanvas.height = height * window.devicePixelRatio
-      densityCanvas.style.width = `${width}px`
-      densityCanvas.style.height = `${height}px`
+      densityCanvas.width = Math.round(width * window.devicePixelRatio)
+      densityCanvas.height = Math.round(height * window.devicePixelRatio)
       ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0)
       drawFrame((Date.now() - startedAt) / 1000)
     }

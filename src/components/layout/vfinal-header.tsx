@@ -94,7 +94,10 @@ export function VfinalHeader(): React.JSX.Element {
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     getActiveLenisInstance()?.stop()
-    menuCloseRef.current?.focus()
+    // Let the opener's click finish before moving focus into the dialog.
+    // A synchronous effect focus can be overwritten by the browser's
+    // post-click focus handling in real Chrome.
+    const focusTimer = window.setTimeout(() => menuCloseRef.current?.focus(), 50)
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
@@ -125,6 +128,7 @@ export function VfinalHeader(): React.JSX.Element {
     window.addEventListener('resize', handleResize)
 
     return () => {
+      window.clearTimeout(focusTimer)
       document.body.style.overflow = previousOverflow
       getActiveLenisInstance()?.start()
       document.removeEventListener('keydown', handleKeyDown)
@@ -148,107 +152,109 @@ export function VfinalHeader(): React.JSX.Element {
   }
 
   return (
-    <header
-      id="header"
-      className="fixed left-0 right-0 top-0 z-50 border-b border-border-subtle bg-[rgba(3,3,3,0.8)] backdrop-blur-md"
-    >
-      <nav className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-4">
-        <Link
-          href="/"
-          className="flex items-center gap-4 text-lg font-bold tracking-tight text-frost"
-        >
-          <svg width="48" height="48">
-            <use href="#aiscentra-logo" />
-          </svg>
-          <span>AIscentra</span>
-        </Link>
+    <>
+      <header
+        id="header"
+        className="fixed left-0 right-0 top-0 z-50 border-b border-border-subtle bg-[rgba(3,3,3,0.8)] backdrop-blur-md"
+      >
+        <nav className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-4">
+          <Link
+            href="/"
+            className="flex items-center gap-4 text-lg font-bold tracking-tight text-frost"
+          >
+            <svg width="48" height="48">
+              <use href="#aiscentra-logo" />
+            </svg>
+            <span>AIscentra</span>
+          </Link>
 
-        <div className="flex items-center gap-8">
-          <div className="dropdown hide-mobile">
-            <Link
-              href="/signals"
-              className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
-            >
-              Signals <span className="text-xs">▼</span>
-            </Link>
-            <div className="dropdown-content">
-              {SIGNAL_CATEGORIES.map((cat) => (
-                <Link key={cat.value} href={`/signals?category=${cat.value}`}>
-                  {cat.label}
-                </Link>
-              ))}
+          <div className="flex items-center gap-8">
+            <div className="dropdown hide-mobile">
+              <Link
+                href="/signals"
+                className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+              >
+                Signals <span className="text-xs">▼</span>
+              </Link>
+              <div className="dropdown-content">
+                {SIGNAL_CATEGORIES.map((cat) => (
+                  <Link key={cat.value} href={`/signals?category=${cat.value}`}>
+                    {cat.label}
+                  </Link>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <Link
-            href="/observatory"
-            className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
-          >
-            Observations
-          </Link>
-
-          <Link
-            href={onHomepage ? '#trajectories' : '/#trajectories'}
-            className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
-          >
-            Trajectories
-          </Link>
-
-          <div className="dropdown hide-mobile">
             <Link
-              href="/about"
-              className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+              href="/observatory"
+              className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
             >
-              Framework <span className="text-xs">▼</span>
+              Observations
             </Link>
-            <div className="dropdown-content">
-              <Link href="/about#epistemic-model">Epistemic Model</Link>
-              <Link href="/about#methodology">Methodology</Link>
-              <Link href="/about#security-data">Security &amp; Data</Link>
-              <Link href="/about#roadmap">Roadmap</Link>
+
+            <Link
+              href={onHomepage ? '#trajectories' : '/#trajectories'}
+              className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
+            >
+              Trajectories
+            </Link>
+
+            <div className="dropdown hide-mobile">
+              <Link
+                href="/about"
+                className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+              >
+                Framework <span className="text-xs">▼</span>
+              </Link>
+              <div className="dropdown-content">
+                <Link href="/about#epistemic-model">Epistemic Model</Link>
+                <Link href="/about#methodology">Methodology</Link>
+                <Link href="/about#security-data">Security &amp; Data</Link>
+                <Link href="/about#roadmap">Roadmap</Link>
+              </div>
             </div>
+
+            <Link
+              href={assistantHref}
+              onClick={handleAssistantClick}
+              className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
+            >
+              Assistant
+            </Link>
+
+            <a
+              href="mailto:contact@aiscentra.com"
+              className="hide-mobile text-sm font-medium text-mint-signal underline-offset-4 hover:underline"
+            >
+              Help the project
+            </a>
+
+            <Link href="/signals" className="btn-pill magnetic hide-mobile text-sm">
+              Enter ↗
+            </Link>
+
+            <button
+              ref={menuButtonRef}
+              type="button"
+              className="hamburger-btn"
+              aria-label="Open navigation menu"
+              aria-expanded={menuOpen}
+              aria-controls="mobile-menu-panel"
+              onClick={() => setMenuOpen(true)}
+            >
+              <span />
+              <span />
+              <span />
+            </button>
           </div>
-
-          <Link
-            href={assistantHref}
-            onClick={handleAssistantClick}
-            className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
-          >
-            Assistant
-          </Link>
-
-          <a
-            href="mailto:contact@aiscentra.com"
-            className="hide-mobile text-sm font-medium text-mint-signal underline-offset-4 hover:underline"
-          >
-            Help the project
-          </a>
-
-          <Link href="/signals" className="btn-pill magnetic hide-mobile text-sm">
-            Enter ↗
-          </Link>
-
-          <button
-            ref={menuButtonRef}
-            type="button"
-            className="hamburger-btn"
-            aria-label="Open navigation menu"
-            aria-expanded={menuOpen}
-            aria-controls="mobile-menu-panel"
-            onClick={() => setMenuOpen(true)}
-          >
-            <span />
-            <span />
-            <span />
-          </button>
-        </div>
-      </nav>
+        </nav>
+      </header>
 
       <button
         type="button"
         className={`mobile-menu-overlay ${menuOpen ? 'open' : ''}`}
         aria-label="Close menu overlay"
-        tabIndex={menuOpen ? 0 : -1}
+        tabIndex={-1}
         onClick={() => closeMobileMenu()}
       />
       <div
@@ -329,6 +335,6 @@ export function VfinalHeader(): React.JSX.Element {
           </Link>
         </nav>
       </div>
-    </header>
+    </>
   )
 }

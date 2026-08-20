@@ -16,6 +16,7 @@ describe('VfinalHeader mobile off-canvas menu', () => {
 
     const openButton = getByRole('button', { name: 'Open navigation menu' })
     fireEvent.click(openButton)
+    await new Promise((resolve) => window.setTimeout(resolve, 75))
 
     const dialog = getByRole('dialog', { name: 'Mobile navigation' })
     assert.equal(openButton.getAttribute('aria-expanded'), 'true')
@@ -24,6 +25,11 @@ describe('VfinalHeader mobile off-canvas menu', () => {
     assert.match(dialog.textContent ?? '', /Trajectories/)
     assert.match(dialog.textContent ?? '', /Security & Data/)
     assert.equal(document.activeElement, getByRole('button', { name: 'Close navigation menu' }))
+    assert.equal(
+      dialog.closest('header'),
+      null,
+      'fixed dialog must not use the header as its containing block',
+    )
 
     fireEvent.keyDown(document, { key: 'Escape' })
     await new Promise((resolve) => window.setTimeout(resolve, 10))

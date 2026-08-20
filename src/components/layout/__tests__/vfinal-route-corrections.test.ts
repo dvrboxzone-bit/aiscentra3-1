@@ -23,4 +23,14 @@ describe('public route correction contracts', () => {
     }
     assert.match(css, /scroll-margin-top:\s*100px/)
   })
+
+  test('Preview correction preserves the card hover transition and viewport-sized mobile menu', () => {
+    const css = source('app/globals.css')
+    assert.match(
+      css,
+      /\.card-sharp\.reveal\s*\{[^}]*background-color\s+0\.3s\s+ease[^}]*opacity\s+0\.8s\s+ease[^}]*transform\s+0\.8s\s+ease/s,
+    )
+    assert.match(css, /\.mobile-menu-overlay\s*\{[^}]*height:\s*100dvh/s)
+    assert.match(css, /\.mobile-menu-panel\s*\{[^}]*height:\s*100dvh/s)
+  })
 })
