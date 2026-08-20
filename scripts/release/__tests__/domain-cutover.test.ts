@@ -910,22 +910,22 @@ describe('workflow graph (semantic, parsed -- not comment matching)', () => {
     return { jobs, needs, stepsByJob }
   }
 
-  test('domain-cutover exists and is the final job: nothing depends on it', () => {
+  test('the single protected production-release job is final: nothing depends on it', () => {
     const { jobs, needs } = readWorkflowGraph()
-    assert.ok(jobs.includes('domain-cutover'), 'domain-cutover job must exist')
+    assert.ok(jobs.includes('production-release'), 'production-release job must exist')
     assert.equal(jobs.includes('post-promotion-smoke'), false, 'post-promotion-smoke must be gone')
     for (const [job, dependsOn] of Object.entries(needs)) {
       assert.equal(
-        dependsOn.includes('domain-cutover'),
+        dependsOn.includes('production-release'),
         false,
-        `${job} must not depend on domain-cutover`,
+        `${job} must not depend on production-release`,
       )
     }
   })
 
   test('every step after the cutover step is explicitly non-blocking', () => {
     const { stepsByJob } = readWorkflowGraph()
-    const steps = stepsByJob['domain-cutover'] ?? []
+    const steps = stepsByJob['production-release'] ?? []
     const cutoverIndex = steps.findIndex(
       (s) => /cutover/i.test(s.name) && !/artifact/i.test(s.name),
     )
@@ -940,11 +940,13 @@ describe('workflow graph (semantic, parsed -- not comment matching)', () => {
     }
   })
 
-  test('the job carries a timeout-minutes backstop', () => {
+  test('the cutover step carries a timeout-minutes backstop', () => {
     const text = readFileSync(workflowPath, 'utf-8')
     assert.ok(
-      /^ {4}timeout-minutes:\s*\d+\s*$/m.test(text),
-      'domain-cutover must declare timeout-minutes as a last-resort backstop',
+      /- name: Run explicit domain cutover\r?\n {8}id: cutover\r?\n {8}timeout-minutes:\s*\d+/m.test(
+        text,
+      ),
+      'the domain cutover step must declare timeout-minutes as a last-resort backstop',
     )
   })
 })
@@ -989,8 +991,8 @@ describe('per-signal Open Graph image protection (staged smoke, TOCTOU, and post
 
   test('the pre-promotion TOCTOU recheck job ALSO declares a real per-signal Open Graph re-check step, using the same shared implementation -- not a second, independently hand-copied one', () => {
     const text = readFileSync(workflowPath2, 'utf-8')
-    const toctouSectionStart = text.indexOf('pre-promotion-recheck:')
-    assert.ok(toctouSectionStart > 0, 'the pre-promotion-recheck job must exist')
+    const toctouSectionStart = text.indexOf('# pre-promotion-recheck')
+    assert.ok(toctouSectionStart > 0, 'the pre-promotion-recheck phase must exist')
     const toctouSection = text.slice(toctouSectionStart)
     assert.match(
       toctouSection,
