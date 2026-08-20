@@ -1,5 +1,5 @@
 /**
- * AIscentra — production-release.yml schema-check job structure test
+ * AIscentra — production-release.yml protected release job structure test
  *
  * Real production incident this guards against: the `schema-check`
  * job previously had NO checkout step at all -- the repository was
@@ -23,21 +23,21 @@ import { readFileSync } from 'node:fs'
 
 const workflowSrc = (): string => readFileSync('.github/workflows/production-release.yml', 'utf8')
 
-/** Extracts the raw text of the `schema-check:` job block, up to the
+/** Extracts the raw text of the `production-release:` job block, up to the
  * next top-level (2-space-indented) job key. */
-function extractSchemaCheckJob(src: string): string {
-  const startMatch = /^ {2}schema-check:\n/m.exec(src)
-  assert.ok(startMatch, 'schema-check job must exist in the workflow')
+function extractProductionReleaseJob(src: string): string {
+  const startMatch = /^ {2}production-release:\r?\n/m.exec(src)
+  assert.ok(startMatch, 'production-release job must exist in the workflow')
   const start = startMatch.index
   const rest = src.slice(start + startMatch[0].length)
-  const nextJobMatch = /^ {2}[a-zA-Z0-9_-]+:\n/m.exec(rest)
+  const nextJobMatch = /^ {2}[a-zA-Z0-9_-]+:\r?\n/m.exec(rest)
   const end = nextJobMatch ? start + startMatch[0].length + nextJobMatch.index : src.length
   return src.slice(start, end)
 }
 
 describe('production-release.yml — schema-check job has a real checkout before the SQL verification step', () => {
   test('a checkout step is present in the schema-check job', () => {
-    const job = extractSchemaCheckJob(workflowSrc())
+    const job = extractProductionReleaseJob(workflowSrc())
     assert.match(
       job,
       /uses:\s*actions\/checkout@/,
@@ -46,7 +46,7 @@ describe('production-release.yml — schema-check job has a real checkout before
   })
 
   test('the checkout step appears BEFORE the SQL verification step, not after', () => {
-    const job = extractSchemaCheckJob(workflowSrc())
+    const job = extractProductionReleaseJob(workflowSrc())
     const checkoutIdx = job.search(/uses:\s*actions\/checkout@/)
     const verifyIdx = job.indexOf('psql "$SUPABASE_DB_URL"')
     assert.ok(checkoutIdx >= 0, 'checkout step must exist')
@@ -58,7 +58,7 @@ describe('production-release.yml — schema-check job has a real checkout before
   })
 
   test('the checkout uses the exact release commit_sha (validate job output), not a branch name or default ref', () => {
-    const job = extractSchemaCheckJob(workflowSrc())
+    const job = extractProductionReleaseJob(workflowSrc())
     assert.match(
       job,
       /ref:\s*\$\{\{\s*needs\.validate\.outputs\.commit_sha\s*\}\}/,
@@ -67,13 +67,42 @@ describe('production-release.yml — schema-check job has a real checkout before
   })
 
   test('the checkout uses fetch-depth: 1 and persist-credentials: false, matching the minimal, credential-safe checkout already used elsewhere in this workflow', () => {
-    const job = extractSchemaCheckJob(workflowSrc())
+    const job = extractProductionReleaseJob(workflowSrc())
     assert.match(job, /fetch-depth:\s*1\b/)
     assert.match(job, /persist-credentials:\s*false\b/)
   })
 
-  test('schema-check depends on the validate job, so needs.validate.outputs.commit_sha is genuinely available', () => {
-    const job = extractSchemaCheckJob(workflowSrc())
+  test('the protected release job depends on validate, so needs.validate.outputs.commit_sha is genuinely available', () => {
+    const job = extractProductionReleaseJob(workflowSrc())
     assert.match(job, /needs:\s*\[[^\]]*\bvalidate\b[^\]]*\]/)
+  })
+})
+
+describe('production-release.yml — one approval boundary and no release-time data mutation', () => {
+  test('exactly one job uses the protected production environment', () => {
+    const matches = workflowSrc().match(/^ {4}environment:\s*production\s*$/gm) ?? []
+    assert.equal(matches.length, 1)
+  })
+
+  test('the single protected job contains stage, metadata, smoke, TOCTOU and cutover in order', () => {
+    const job = extractProductionReleaseJob(workflowSrc())
+    const orderedMarkers = [
+      '# staged-deploy',
+      '# deployment-metadata-gate',
+      '# staged-smoke',
+      '# pre-promotion-recheck',
+      '# domain-cutover',
+    ]
+    let previous = -1
+    for (const marker of orderedMarkers) {
+      const current = job.indexOf(marker)
+      assert.ok(current > previous, `${marker} must exist after the previous protected phase`)
+      previous = current
+    }
+  })
+
+  test('release workflow contains no priority backfill job or verify-urls mutation call', () => {
+    const source = workflowSrc()
+    assert.doesNotMatch(source, /priority-backfill|priorityOnly|\/api\/cron\/verify-urls/)
   })
 })
