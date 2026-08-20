@@ -82,6 +82,11 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     //    Observations + 4 History slider slides).
     assert.equal(container.querySelectorAll('[data-image-slot="local-asset"]').length, 14)
     assert.equal(container.querySelectorAll('img[src^="/images/"][src$=".webp"]').length, 14)
+    assert.equal(
+      container.querySelectorAll('[data-asset-purpose="forecast"].group > img.img-mono').length,
+      2,
+      'both Forecast images must activate the shared color-on-hover contract',
+    )
 
     // 7. No Picsum, z-cdn, or literal href="#" anywhere on the real page.
     const html = container.innerHTML

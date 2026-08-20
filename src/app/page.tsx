@@ -276,11 +276,11 @@ export default async function HomePage(): Promise<React.JSX.Element> {
             <div className="reveal grid grid-cols-2 gap-6">
               <VfinalImageSlot
                 asset={assetAt(FORECAST_ASSETS, 0)}
-                className="aspect-[3/4] border border-border-subtle"
+                className="group aspect-[3/4] border border-border-subtle"
               />
               <VfinalImageSlot
                 asset={assetAt(FORECAST_ASSETS, 1)}
-                className="mt-12 aspect-[3/4] border border-border-subtle"
+                className="group mt-12 aspect-[3/4] border border-border-subtle"
               />
             </div>
           </div>
