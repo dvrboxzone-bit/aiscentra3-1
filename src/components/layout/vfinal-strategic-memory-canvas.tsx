@@ -62,7 +62,7 @@ const CYCLE_DURATION_MS = 12000
  * order/styling (shadow blur, dash patterns, alpha) are copied
  * verbatim -- this is a genuine, real illustration of the actual
  * Knowledge Graph architecture, not fabricated data (distinct from
- * the fake telemetry emulator elsewhere in the HTML, which is
+ * the fabricated live-metrics emulator in the older HTML, which is
  * deliberately NOT ported -- see the homepage migration in layer 4).
  *
  * SSR-safe: 'use client', all canvas work inside useEffect.
@@ -148,8 +148,8 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
       })
 
       const markerX = 50 + (stage / 7) * 900
-      ctx.fillStyle = '#a3f305'
-      ctx.shadowColor = '#a3f305'
+      ctx.fillStyle = '#8B9D83'
+      ctx.shadowColor = '#8B9D83'
       ctx.shadowBlur = 10
       ctx.beginPath()
       ctx.arc(markerX, tlY, 4, 0, Math.PI * 2)
@@ -165,7 +165,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
           const endX = n1.x + (n2.x - n1.x) * drawProgress
           const endY = n1.y + (n2.y - n1.y) * drawProgress
           const age = stage - link.born
-          const color = age < 1 ? '#a3f305' : 'rgba(229, 231, 235, 0.3)'
+          const color = age < 1 ? '#8B9D83' : 'rgba(229, 231, 235, 0.3)'
           ctx.strokeStyle = color
           ctx.lineWidth = age < 1 ? 1.5 : 1
           ctx.setLineDash(link.dashed ? [4, 4] : [])
@@ -181,9 +181,9 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
         if (stage > node.born) {
           const age = stage - node.born
           const isNew = age < 1
-          ctx.fillStyle = isNew ? '#a3f305' : '#e5e7eb'
+          ctx.fillStyle = isNew ? '#8B9D83' : '#e5e7eb'
           if (isNew) {
-            ctx.shadowColor = '#a3f305'
+            ctx.shadowColor = '#8B9D83'
             ctx.shadowBlur = 15
           }
           ctx.beginPath()
@@ -191,7 +191,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
           ctx.fill()
           ctx.shadowBlur = 0
           ctx.font = '10px JetBrains Mono'
-          ctx.fillStyle = isNew ? '#a3f305' : 'rgba(229, 231, 235, 0.6)'
+          ctx.fillStyle = isNew ? '#8B9D83' : 'rgba(229, 231, 235, 0.6)'
           ctx.textAlign = 'left'
           node.label.split('\n').forEach((line, i) => {
             ctx.fillText(line, node.x + 8, node.y + 4 + i * 12)
@@ -204,9 +204,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
 
     let rafId = 0
 
-    // REAL BUG FIXED (independent review): see vfinal-hero-globe.tsx's
-    // identical animateGlobe() comment for the full explanation -- the
-    // prior version called requestAnimationFrame(draw) unconditionally
+    // The prior version called requestAnimationFrame(draw) unconditionally
     // as the first statement, before the visibility check, so the loop
     // kept firing every frame even fully offscreen with only the draw
     // work skipped. Fixed: requestAnimationFrame is scheduled from

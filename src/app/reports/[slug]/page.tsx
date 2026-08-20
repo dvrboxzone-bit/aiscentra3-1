@@ -6,7 +6,7 @@ import { getReportById } from '@/modules/reports/queries'
 import { formatRelativeTime } from '@/lib/utils/format'
 import type { ReportType } from '@/types/database'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
 
 interface ReportPageProps {
   params: Promise<{ slug: string }>

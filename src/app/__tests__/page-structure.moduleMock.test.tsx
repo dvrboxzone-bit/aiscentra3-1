@@ -3,8 +3,8 @@
  * (section order/count, History slider, image slots, forbidden URLs).
  *
  * Tests the REAL src/app/page.tsx component (dynamically imported),
- * not a rewritten copy -- getFeaturedSignals/getSignals/
- * getObservationStats are substituted via node:test's real
+ * not a rewritten copy -- getFeaturedSignals/getSignals are
+ * substituted via node:test's real
  * mock.module() (--experimental-test-module-mocks), the same
  * established pattern already used for opengraph-image.moduleMock.test.ts.
  *
@@ -36,18 +36,6 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
         getSignals: async () => twoRealObservations(),
       },
     })
-    mock.module('@/modules/observations/queries', {
-      namedExports: {
-        getObservationStats: async () => ({
-          total: 1000,
-          processed: 958,
-          unprocessed: 42,
-          errors: 0,
-          oldestPendingAgeSeconds: null,
-        }),
-      },
-    })
-
     const { default: HomePage } = await import('../page')
     const jsx = await HomePage()
     const { container } = render(jsx)
@@ -56,7 +44,7 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     const sectionIds = Array.from(container.querySelectorAll('section')).map((el) => el.id)
     assert.deepEqual(
       sectionIds,
-      ['hero', 'signals', 'observatory', 'forecasts', 'news', 'memory', 'assistant', 'signal-001'],
+      ['hero', 'signals', 'trajectories', 'forecasts', 'news', 'memory', 'assistant', 'signal-001'],
       'all 8 sections must be present in the exact approved order',
     )
 
@@ -66,7 +54,15 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     // 3. Exactly 2 Observation cards with a full real result.
     assert.equal(container.querySelectorAll('[data-content-slot="observation"]').length, 2)
 
-    // 4. Exactly two History slider-container blocks, each with exactly
+    // 4. Six approved Trajectory records are present, and their unavailable
+    // detail destinations remain disabled instead of inventing routes.
+    assert.equal(container.querySelectorAll('[data-content-slot="trajectory"]').length, 6)
+    assert.equal(container.querySelectorAll('a[href*="/history/"]').length, 0)
+    assert.equal(container.querySelectorAll('[data-component="hero-density-scan"]').length, 1)
+    assert.equal(container.querySelectorAll('[data-section="telemetry"]').length, 0)
+    assert.equal(container.querySelectorAll('.hero-globe-container').length, 0)
+
+    // 5. Exactly two History slider-container blocks, each with exactly
     //    two slider-slide subblocks.
     const sliders = container.querySelectorAll('.slider-container')
     assert.equal(
@@ -82,15 +78,25 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
       )
     })
 
-    // 5. Exactly 14 total image slots (6 Featured + 2 Forecasts + 2
+    // 6. Exactly 14 total image slots (6 Featured + 2 Forecasts + 2
     //    Observations + 4 History slider slides).
     assert.equal(container.querySelectorAll('[data-image-slot="neutral-placeholder"]').length, 14)
 
-    // 6. No Picsum, z-cdn, or literal href="#" anywhere on the real page.
+    // 7. No Picsum, z-cdn, or literal href="#" anywhere on the real page.
     const html = container.innerHTML
     assert.doesNotMatch(html, /picsum/i)
     assert.doesNotMatch(html, /z-cdn/i)
     assert.doesNotMatch(html, /href="#"/)
+  })
+})
+
+describe('removed globe/Three.js contract', () => {
+  test('runtime package metadata no longer contains Three.js', () => {
+    const pkg = JSON.parse(
+      readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8'),
+    ) as { dependencies: Record<string, string>; devDependencies: Record<string, string> }
+    assert.equal(pkg.dependencies.three, undefined)
+    assert.equal(pkg.devDependencies['@types/three'], undefined)
   })
 })
 

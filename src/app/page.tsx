@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
-import { VfinalHeroGlobe } from '@/components/layout/vfinal-hero-globe'
+import { VfinalHeroDensityScan } from '@/components/layout/vfinal-hero-density-scan'
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
 import { VfinalSlider } from '@/components/layout/vfinal-slider'
 import { getFeaturedSignals, getSignals } from '@/modules/signals/queries'
-import { getObservationStats } from '@/modules/observations/queries'
 import type { Signal } from '@/types/database'
 
 export const metadata: Metadata = {
@@ -17,30 +16,66 @@ export const metadata: Metadata = {
 
 export const revalidate = 3600
 
+const TRAJECTORIES = [
+  {
+    name: 'DeepMind',
+    year: '2010',
+    status: 'ACTIVE',
+    description:
+      'Founded as an independent AI research lab, acquired by Google in 2014 and now operating as Google DeepMind.',
+  },
+  {
+    name: 'Cruise',
+    year: '2013',
+    status: 'WOUND DOWN',
+    description:
+      'GM ended Cruise robotaxi development in 2024 and shifted the unit toward driver-assistance work.',
+  },
+  {
+    name: 'OpenAI',
+    year: '2015',
+    status: 'ACTIVE',
+    description:
+      'Founded as a nonprofit AI lab, later restructured to raise capital and develop the GPT and ChatGPT product families.',
+  },
+  {
+    name: 'Stability AI',
+    year: '2019',
+    status: 'RESTRUCTURED',
+    description:
+      'The company behind Stable Diffusion changed leadership and reorganized its business after a period of financial pressure.',
+  },
+  {
+    name: 'Anthropic',
+    year: '2021',
+    status: 'ACTIVE',
+    description:
+      'Founded by former OpenAI researchers around AI safety and interpretability, and developer of the Claude model family.',
+  },
+  {
+    name: 'Inflection AI',
+    year: '2022',
+    status: 'ACQUI-HIRED',
+    description:
+      'After building the Pi assistant, its founders and much of its team joined Microsoft in 2024 while the company continued independently.',
+  },
+] as const
+
 /**
  * AIscentra — vfinal homepage (Frontend Design Foundation, layer 4)
  *
- * Full migration of AIscentra-vfinal-adapt.html's own <main> content,
- * preserving exact section order/count/geometry: Hero -> Featured
- * Signals -> Observatory (telemetry) -> Forecasts -> Observations ->
- * Strategic Memory -> Assistant -> History. VfinalPublicShell supplies
- * the shared header/footer/Lenis/progress/back-to-top; VfinalHeroGlobe
- * and VfinalStrategicMemoryCanvas are the two SSR-safe client
- * components from layer 3.
+ * Final landing composition: Hero Density Scan -> Featured Signals ->
+ * Trajectories -> Forecasts -> Observations -> Strategic Memory ->
+ * Assistant -> Signal 001. VfinalPublicShell supplies the shared
+ * header/footer/Lenis/progress/back-to-top.
  *
  * Real data, no fabricated numbers (task's own explicit requirement):
  * - Featured Signals: getFeaturedSignals() -- the SAME real production
  *   selection function already used elsewhere in this codebase,
  *   genuinely returns up to 6 real signals (FEATURED_TARGET_COUNT).
- * - Observatory telemetry: getObservationStats().unprocessed is the
- *   real, already-publicly-exposed (via /api/health) backlog count.
- *   The HTML's own fake "SMOOTH REALISTIC TELEMETRY EMULATOR"
- *   (setInterval-driven random ops/s, uptime, RPM, tokens/min) is
- *   deliberately NOT ported -- no real equivalent exists for a live,
- *   per-second "current load" or a meaningful "uptime" concept in this
- *   serverless architecture, so those four slots honestly show
- *   UNAVAILABLE instead of an invented number, at the exact original
- *   geometry.
+ * - Hero Density Scan is a filtration metaphor, not an operational metric. Its
+ *   signal count remains explicitly unavailable until a suitable live
+ *   source is approved.
  * - Strategic Memory "NODES SYNCED": no real Knowledge Graph node-count
  *   query exists in this codebase yet -- shows UNAVAILABLE rather than
  *   the HTML's own fabricated "4,716".
@@ -64,9 +99,8 @@ export const revalidate = 3600
  * once the approved photo folder exists (a separate, later task).
  */
 export default async function HomePage(): Promise<React.JSX.Element> {
-  const [featuredSignals, observationStats, widerPool] = await Promise.all([
+  const [featuredSignals, widerPool] = await Promise.all([
     getFeaturedSignals(),
-    getObservationStats(),
     getSignals({ limit: 12 }),
   ])
 
@@ -98,23 +132,9 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       {/* ── 01 — Hero ─────────────────────────────────────────────── */}
       <section id="hero" data-section="hero" className="textured-bg relative px-6 pb-24 pt-40">
         <div className="tech-grid" />
-        <VfinalHeroGlobe />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <div className="mb-12 flex items-end gap-3">
-            <div className="flex flex-col items-center gap-2">
-              <span className="font-caption text-silver-haze">01.SIG</span>
-              <div className="step-bar" />
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <span className="font-caption text-silver-haze">02.OBS</span>
-              <div className="step-bar" />
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <span className="font-caption text-silver-haze">03.MEM</span>
-              <div className="step-bar inactive" />
-            </div>
-          </div>
-          <h1 className="font-display text-[12vw] text-frost md:text-[80px] lg:text-[100px]">
+          <VfinalHeroDensityScan />
+          <h1 className="font-display text-[15vw] text-frost md:text-[120px]">
             Intelligence
             <br />
             Observatory.
@@ -163,169 +183,45 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
       <div className="section-gap" />
 
-      {/* ── 03 — Observatory telemetry (real backlog, honest UNAVAILABLE elsewhere) ── */}
-      <section id="observatory" data-section="telemetry" className="textured-bg px-6 py-24">
+      {/* ── 02 — Trajectories (editorial records; detail routes not yet available) ── */}
+      <section id="trajectories" data-section="trajectories" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">02 — Telemetry</span>
-          <div className="grid items-center gap-12 md:grid-cols-2">
-            <div>
-              <h2 className="font-heading mb-8 text-5xl text-frost md:text-6xl">
-                Observatory load
-                <br />
-                in real-time.
-              </h2>
-              <p className="mb-8 max-w-md text-lg text-silver-haze">
-                Real production pipeline metrics -- the backlog is genuine data from the live
-                observation queue. Metrics without a real, currently-available source are honestly
-                marked UNAVAILABLE rather than simulated.
-              </p>
-              <div className="mt-8 flex items-center gap-4">
-                <div className="h-2 w-2 rounded-full bg-mint-signal" />
-                <span className="font-caption text-silver-haze">SYSTEM: SCANNING</span>
-              </div>
-            </div>
-            <div className="p-8 md:p-12">
-              <div className="mb-10 flex items-end justify-between">
-                <div>
-                  <span className="font-caption mb-2 block text-silver-haze">CURRENT LOAD</span>
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-mono text-[48px] text-silver-haze opacity-40">
-                      UNAVAILABLE
-                    </span>
-                  </div>
+          <span className="font-caption mb-8 block text-silver-haze">02 — Trajectories</span>
+          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
+            Company paths.
+          </h2>
+          <div className="grid gap-px border border-border-subtle bg-deep-obsidian sm:grid-cols-2 lg:grid-cols-3">
+            {TRAJECTORIES.map((trajectory) => (
+              <article
+                key={trajectory.name}
+                className="reveal flex min-h-72 flex-col border-border-subtle bg-surface-tonal p-7"
+                data-content-slot="trajectory"
+              >
+                <div className="mb-8 flex items-start justify-between gap-4">
+                  <h3 className="font-heading text-3xl text-frost">{trajectory.name}</h3>
+                  <span className="trajectory-mark">{trajectory.year}</span>
                 </div>
-                <div className="text-right">
-                  <span className="font-caption mb-2 block text-silver-haze">UPTIME</span>
-                  <span className="font-mono text-2xl text-silver-haze opacity-40">
-                    UNAVAILABLE
-                  </span>
-                </div>
-              </div>
-              <div className="relative mb-8 h-24 w-full">
-                <svg
-                  className="absolute inset-0 h-full w-full"
-                  viewBox="0 0 400 96"
-                  preserveAspectRatio="none"
-                  aria-hidden="true"
+                <span className="font-caption mb-4 text-mint-signal">{trajectory.status}</span>
+                <p className="mb-8 text-sm leading-relaxed text-silver-haze">
+                  {trajectory.description}
+                </p>
+                <span
+                  className="arrow-link mt-auto cursor-not-allowed opacity-40"
+                  title="Coming soon"
+                  aria-disabled="true"
                 >
-                  <path
-                    className="schematic-bg"
-                    d="M 0,48 L 80,48 L 100,20 L 180,20 L 200,48 L 400,48"
-                  />
-                  <path className="schematic-bg" d="M 0,48 L 80,48 L 100,76 L 180,76 L 200,48" />
-                  <path className="schematic-bg" d="M 200,48 L 220,20 L 300,20 L 320,48 L 400,48" />
-                  <path className="schematic-bg" d="M 200,48 L 220,76 L 300,76 L 320,48" />
-                  <path className="schematic-bg" d="M 100,20 L 100,0" />
-                  <path className="schematic-bg" d="M 180,20 L 180,0" />
-                  <path className="schematic-bg" d="M 220,76 L 220,96" />
-                  <path className="schematic-bg" d="M 300,76 L 300,96" />
-                  <path
-                    className="schematic-flow"
-                    d="M 0,48 L 80,48 L 100,20 L 180,20 L 200,48 L 400,48"
-                  />
-                  <path
-                    className="schematic-flow"
-                    style={{ animationDelay: '0.5s' }}
-                    d="M 0,48 L 80,48 L 100,76 L 180,76 L 200,48"
-                  />
-                  <path
-                    className="schematic-flow"
-                    style={{ animationDelay: '1s' }}
-                    d="M 200,48 L 220,20 L 300,20 L 320,48 L 400,48"
-                  />
-                  <path
-                    className="schematic-flow"
-                    style={{ animationDelay: '1.5s', animationDuration: '1s' }}
-                    d="M 200,48 L 220,76 L 300,76 L 320,48"
-                  />
-                  <circle className="schematic-node" cx="100" cy="20" r="3" />
-                  <circle
-                    className="schematic-node"
-                    cx="180"
-                    cy="20"
-                    r="3"
-                    style={{ animationDelay: '0.5s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="100"
-                    cy="76"
-                    r="3"
-                    style={{ animationDelay: '1s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="180"
-                    cy="76"
-                    r="3"
-                    style={{ animationDelay: '1.5s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="220"
-                    cy="20"
-                    r="3"
-                    style={{ animationDelay: '0.2s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="300"
-                    cy="20"
-                    r="3"
-                    style={{ animationDelay: '0.8s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="220"
-                    cy="76"
-                    r="3"
-                    style={{ animationDelay: '1.2s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="300"
-                    cy="76"
-                    r="3"
-                    style={{ animationDelay: '1.8s' }}
-                  />
-                  <circle
-                    className="schematic-node"
-                    cx="200"
-                    cy="48"
-                    r="4"
-                    style={{ animationDelay: '0.1s' }}
-                  />
-                </svg>
-              </div>
-              <div className="grid grid-cols-3 gap-4 border-t border-border-subtle pt-6">
-                <div>
-                  <span className="font-caption mb-1 block text-silver-haze">FETCH/MIN</span>
-                  <span className="font-mono text-lg font-medium text-silver-haze opacity-40">
-                    UNAVAILABLE
-                  </span>
-                </div>
-                <div>
-                  <span className="font-caption mb-1 block text-silver-haze">TOKENS/MIN</span>
-                  <span className="font-mono text-lg font-medium text-silver-haze opacity-40">
-                    UNAVAILABLE
-                  </span>
-                </div>
-                <div>
-                  <span className="font-caption mb-1 block text-silver-haze">BACKLOG</span>
-                  <span className="font-mono text-lg font-medium text-frost">
-                    {observationStats.unprocessed.toLocaleString('en-US')}
-                  </span>
-                </div>
-              </div>
-            </div>
+                  Full trajectory <span>↗</span>
+                </span>
+              </article>
+            ))}
           </div>
         </div>
       </section>
 
       <div className="section-gap" />
 
-      {/* ── 04 — Forecasts (honest IN DEVELOPMENT, unchanged from source) ── */}
+      {/* ── 03 — Forecasts (honest IN DEVELOPMENT, unchanged from source) ── */}
       <section
         id="forecasts"
         data-section="forecasts"
@@ -502,7 +398,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
           <span className="font-caption mb-8 block text-silver-haze">07 — Signal 001</span>
-          <h2 className="font-display reveal mb-12 text-[15vw] text-frost md:text-[120px]">
+          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             The Convergence.
           </h2>
           <p className="reveal mb-12 max-w-2xl text-xl text-silver-haze">

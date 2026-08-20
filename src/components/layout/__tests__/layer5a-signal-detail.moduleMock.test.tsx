@@ -10,7 +10,10 @@ describe('/signals/[slug] — real detail-page functions preserved', () => {
   test('the real /signals/[slug] page renders real signal data with VfinalPublicShell, no forbidden URLs', async (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
-    const signal = makeSignal({ id: 'detail-1', title: 'Real Detail Signal' })
+    const signal = makeSignal({
+      id: '11111111-1111-4111-8111-111111111111',
+      title: 'Real Detail Signal',
+    })
     mock.module('@/modules/signals/queries', {
       namedExports: { getSignalById: async () => signal },
     })
@@ -21,7 +24,9 @@ describe('/signals/[slug] — real detail-page functions preserved', () => {
       namedExports: { getSourceLinksForSignal: async () => [] },
     })
     const { default: SignalPage } = await import('../../../app/signals/[slug]/page')
-    const jsx = await SignalPage({ params: Promise.resolve({ slug: 'detail-1' }) })
+    const jsx = await SignalPage({
+      params: Promise.resolve({ slug: '11111111-1111-4111-8111-111111111111' }),
+    })
     const { container } = render(jsx)
     assert.match(container.innerHTML, /Real Detail Signal/)
     assert.ok(container.querySelector('header#header'))

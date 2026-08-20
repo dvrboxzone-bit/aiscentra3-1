@@ -15,6 +15,12 @@ interface SignalPageProps {
   params: Promise<{ slug: string }>
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+export function isValidSignalSlug(slug: string): boolean {
+  return UUID_PATTERN.test(slug)
+}
+
 // Pre-generate paths for known signals at build time
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
   return []
@@ -22,6 +28,7 @@ export async function generateStaticParams(): Promise<{ slug: string }[]> {
 
 export async function generateMetadata({ params }: SignalPageProps): Promise<Metadata> {
   const { slug } = await params
+  if (!isValidSignalSlug(slug)) return { title: 'Signal Not Found' }
   const signal = await getSignalById(slug)
   if (!signal) return { title: 'Signal Not Found' }
   return {
@@ -47,6 +54,7 @@ export async function generateMetadata({ params }: SignalPageProps): Promise<Met
  */
 export default async function SignalPage({ params }: SignalPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
+  if (!isValidSignalSlug(slug)) notFound()
   const [signal, relatedEvents] = await Promise.all([getSignalById(slug), getEventsBySignal(slug)])
 
   const sourceLinks = signal ? await getSourceLinksForSignal(signal.observation_ids) : []

@@ -108,7 +108,7 @@
   --color-pure-black: #000000;
   --color-frost: #ffffff;
   --color-silver-haze: #e5e7eb;
-  --color-mint-signal: #a3f305;
+  --color-mint-signal: #8b9d83;
   --color-surface-tonal: #0a0a0a;
   --color-border-subtle: #1a1a1a;
   /* REAL BUG FIXED (independent review, build FAILURE): these
@@ -163,6 +163,10 @@
   border-radius: 0;
   background-color: var(--color-frost);
   color: var(--color-deep-obsidian);
+  transition: background-color 0.3s ease;
+}
+.card-sharp:hover {
+  background-color: var(--color-mint-signal);
 }
 .pill {
   border-radius: 9999px;
@@ -230,49 +234,6 @@
    no such media query. Removed to match the reference exactly: the
    reveal transition always runs. */
 
-.schematic-bg {
-  stroke: rgba(229, 231, 235, 0.05);
-  stroke-width: 1;
-  fill: none;
-}
-.schematic-flow {
-  stroke: var(--color-mint-signal);
-  stroke-width: 1.5;
-  fill: none;
-  stroke-dasharray: 15 10;
-  animation: vf-flow 1.5s linear infinite;
-}
-@keyframes vf-flow {
-  from {
-    stroke-dashoffset: 25;
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-.schematic-node {
-  fill: var(--color-mint-signal);
-  animation: vf-nodePulse 2s infinite ease-in-out;
-}
-@keyframes vf-nodePulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
-
-.step-bar {
-  width: 3px;
-  height: 50px;
-  background-color: var(--color-mint-signal);
-}
-.step-bar.inactive {
-  background-color: rgba(229, 231, 235, 0.2);
-}
-
 .img-mono {
   filter: grayscale(100%) contrast(1.1) brightness(0.8);
   transition: filter 0.5s ease;
@@ -283,7 +244,11 @@
   filter: grayscale(0%) contrast(1.05) brightness(1);
 }
 
-#assistant {
+#assistant,
+#epistemic-model,
+#methodology,
+#security-data,
+#roadmap {
   scroll-margin-top: 100px;
 }
 
@@ -337,8 +302,8 @@
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
-  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
   background-size:
     8px 8px,
     8px 8px;
@@ -392,16 +357,131 @@
   color: var(--color-mint-signal);
 }
 
-.hero-globe-container {
-  position: absolute;
-  top: 50%;
-  right: 5%;
-  transform: translateY(-50%);
-  width: 550px;
-  height: 550px;
-  z-index: 1;
-  pointer-events: none;
-  opacity: 0.8;
+.hero-density-wrap {
+  width: min(100%, 520px);
+  margin-bottom: 3rem;
+}
+.hero-density-status,
+.hero-density-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.hero-density-status {
+  margin-bottom: 0.75rem;
+}
+.hero-density-count {
+  margin-top: 0.75rem;
+}
+.hero-density-count .font-mono-vf {
+  font-size: 1.5rem;
+}
+#hero-density-scan {
+  display: block;
+  width: 100%;
+  height: 70px;
+}
+.trajectory-mark {
+  border: 1px solid var(--color-mint-signal);
+  color: var(--color-mint-signal);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 7px 8px;
+}
+
+.hamburger-btn {
+  display: none;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-frost);
+}
+.hamburger-btn span {
+  width: 18px;
+  height: 1px;
+  background: currentColor;
+}
+.mobile-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  border: 0;
+  background: rgba(0, 0, 0, 0.72);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.25s ease,
+    visibility 0.25s ease;
+}
+.mobile-menu-overlay.open {
+  opacity: 1;
+  visibility: visible;
+}
+.mobile-menu-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  width: min(88vw, 420px);
+  background: var(--color-deep-obsidian);
+  border-left: 1px solid var(--color-border-subtle);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform 0.3s ease,
+    visibility 0.3s ease;
+}
+.mobile-menu-panel.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+.mobile-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.mobile-menu-close {
+  width: 42px;
+  height: 42px;
+  color: var(--color-frost);
+  font-size: 30px;
+  line-height: 1;
+}
+.mobile-menu-scroll {
+  display: flex;
+  height: calc(100% - 75px);
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+.mobile-menu-scroll > a:not(.btn-pill) {
+  padding: 0.65rem 0;
+  color: var(--color-frost);
+  font-size: 15px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.mobile-menu-scroll > a:hover {
+  color: var(--color-mint-signal);
+}
+.mobile-menu-group-label {
+  margin-top: 1.5rem;
+  margin-bottom: 0.4rem;
+  color: var(--color-mint-signal);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+.mobile-menu-group-label:first-child {
+  margin-top: 0;
 }
 
 .memory-canvas-container {
@@ -495,19 +575,17 @@
   color: var(--color-mint-signal);
 }
 
-@media (max-width: 1280px) {
-  .hero-globe-container {
-    width: 450px;
-    height: 450px;
-    right: 2%;
-    opacity: 0.5;
-  }
-}
 @media (max-width: 768px) {
   .hide-mobile {
     display: none;
   }
-  .hero-globe-container {
-    display: none;
+  .hamburger-btn {
+    display: flex;
+  }
+  .hero-density-wrap {
+    width: min(100%, 320px);
+  }
+  #hero-density-scan {
+    height: 50px;
   }
 }

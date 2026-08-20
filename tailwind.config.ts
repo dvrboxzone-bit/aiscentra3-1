@@ -35,7 +35,7 @@ const config: Config = {
         // страницы"). Every value here is copied verbatim from
         // AIscentra-vfinal-adapt.html's own :root custom properties and
         // tailwind.config inline script.
-        'mint-signal': '#a3f305',
+        'mint-signal': '#8B9D83',
         'deep-obsidian': '#030303',
         'pure-black': '#000000',
         frost: '#ffffff',

@@ -6,7 +6,7 @@ import { getEventById } from '@/modules/events/queries'
 import { getSignalById } from '@/modules/signals/queries'
 import { formatDate, formatRelativeTime } from '@/lib/utils/format'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
 
 interface EventPageProps {
   params: Promise<{ slug: string }>

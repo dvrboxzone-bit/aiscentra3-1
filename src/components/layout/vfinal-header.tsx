@@ -57,10 +57,9 @@
  * behavior, instead of a native instant jump that would fight Lenis's
  * virtual scroll position.
  */
-'use client'
-
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SignalCategory } from '@/types/database'
 import { getActiveLenisInstance } from './vfinal-lenis-provider'
 
@@ -80,8 +79,65 @@ export function VfinalHeader(): React.JSX.Element {
   const pathname = usePathname()
   const onHomepage = pathname === '/'
   const assistantHref = onHomepage ? '#assistant' : '/#assistant'
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const menuCloseRef = useRef<HTMLButtonElement>(null)
+  const menuPanelRef = useRef<HTMLDivElement>(null)
+
+  const closeMobileMenu = useCallback((restoreFocus = true): void => {
+    setMenuOpen(false)
+    if (restoreFocus) window.setTimeout(() => menuButtonRef.current?.focus(), 0)
+  }, [])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    getActiveLenisInstance()?.stop()
+    menuCloseRef.current?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMobileMenu()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        menuPanelRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ??
+          [],
+      )
+      const first = focusable.at(0)
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    const handleResize = (): void => {
+      if (window.innerWidth > 768) closeMobileMenu(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      getActiveLenisInstance()?.start()
+      document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [closeMobileMenu, menuOpen])
+
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [pathname])
 
   const handleAssistantClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    closeMobileMenu(false)
     if (!onHomepage) return
     const target = document.getElementById('assistant')
     if (!target) return
@@ -131,6 +187,13 @@ export function VfinalHeader(): React.JSX.Element {
             Observations
           </Link>
 
+          <Link
+            href={onHomepage ? '#trajectories' : '/#trajectories'}
+            className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
+          >
+            Trajectories
+          </Link>
+
           <div className="dropdown hide-mobile">
             <Link
               href="/about"
@@ -161,11 +224,111 @@ export function VfinalHeader(): React.JSX.Element {
             Help the project
           </a>
 
-          <Link href="/signals" className="btn-pill magnetic text-sm">
+          <Link href="/signals" className="btn-pill magnetic hide-mobile text-sm">
             Enter ↗
           </Link>
+
+          <button
+            ref={menuButtonRef}
+            type="button"
+            className="hamburger-btn"
+            aria-label="Open navigation menu"
+            aria-expanded={menuOpen}
+            aria-controls="mobile-menu-panel"
+            onClick={() => setMenuOpen(true)}
+          >
+            <span />
+            <span />
+            <span />
+          </button>
         </div>
       </nav>
+
+      <button
+        type="button"
+        className={`mobile-menu-overlay ${menuOpen ? 'open' : ''}`}
+        aria-label="Close menu overlay"
+        tabIndex={menuOpen ? 0 : -1}
+        onClick={() => closeMobileMenu()}
+      />
+      <div
+        ref={menuPanelRef}
+        id="mobile-menu-panel"
+        className={`mobile-menu-panel ${menuOpen ? 'open' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Mobile navigation"
+        aria-hidden={!menuOpen}
+        {...(!menuOpen ? { inert: true } : {})}
+      >
+        <div className="mobile-menu-head">
+          <span className="font-caption text-silver-haze">Navigation</span>
+          <button
+            ref={menuCloseRef}
+            type="button"
+            className="mobile-menu-close"
+            aria-label="Close navigation menu"
+            onClick={() => closeMobileMenu()}
+          >
+            ×
+          </button>
+        </div>
+
+        <nav aria-label="Mobile navigation links" className="mobile-menu-scroll">
+          <span className="mobile-menu-group-label">SIGNALS</span>
+          <Link href="/signals" onClick={() => closeMobileMenu(false)}>
+            All signals
+          </Link>
+          {SIGNAL_CATEGORIES.map((category) => (
+            <Link
+              key={category.value}
+              href={`/signals?category=${category.value}`}
+              onClick={() => closeMobileMenu(false)}
+            >
+              {category.label}
+            </Link>
+          ))}
+
+          <span className="mobile-menu-group-label">EXPLORE</span>
+          <Link href="/observatory" onClick={() => closeMobileMenu(false)}>
+            Observations
+          </Link>
+          <Link
+            href={onHomepage ? '#trajectories' : '/#trajectories'}
+            onClick={() => closeMobileMenu(false)}
+          >
+            Trajectories
+          </Link>
+          <Link href={assistantHref} onClick={handleAssistantClick}>
+            Assistant
+          </Link>
+
+          <span className="mobile-menu-group-label">FRAMEWORK</span>
+          <Link href="/about#epistemic-model" onClick={() => closeMobileMenu(false)}>
+            Epistemic Model
+          </Link>
+          <Link href="/about#methodology" onClick={() => closeMobileMenu(false)}>
+            Methodology
+          </Link>
+          <Link href="/about#security-data" onClick={() => closeMobileMenu(false)}>
+            Security &amp; Data
+          </Link>
+          <Link href="/about#roadmap" onClick={() => closeMobileMenu(false)}>
+            Roadmap
+          </Link>
+
+          <a href="mailto:contact@aiscentra.com" onClick={() => closeMobileMenu(false)}>
+            Help the project
+          </a>
+          <Link
+            href="/signals"
+            className="btn-pill mt-4 justify-center"
+            onClick={() => closeMobileMenu(false)}
+          >
+            Enter ↗
+          </Link>
+        </nav>
+      </div>
     </header>
   )
 }

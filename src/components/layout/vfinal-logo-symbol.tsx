@@ -18,7 +18,7 @@ export function VfinalLogoSymbol(): React.JSX.Element {
         <symbol id="aiscentra-logo" viewBox="0 0 180 180">
           <g transform="translate(90,90)">
             <circle r="55" fill="none" stroke="#e5e7eb" strokeWidth="3" />
-            <circle r="55" fill="none" stroke="#a3f305" strokeWidth="3" strokeDasharray="90 260" />
+            <circle r="55" fill="none" stroke="#8B9D83" strokeWidth="3" strokeDasharray="90 260" />
             <path
               d="M -47.6 27.5 L 0 -55 L 47.6 27.5"
               fill="none"
@@ -27,13 +27,13 @@ export function VfinalLogoSymbol(): React.JSX.Element {
               strokeLinecap="round"
               strokeLinejoin="miter"
             />
-            <circle cx="0" cy="-55" r="7" fill="#a3f305" />
+            <circle cx="0" cy="-55" r="7" fill="#8B9D83" />
             <circle cx="47.6" cy="27.5" r="5" fill="#e5e7eb" />
             <circle cx="-47.6" cy="27.5" r="5" fill="#e5e7eb" />
-            <circle r="14" fill="#a3f305">
+            <circle r="14" fill="#8B9D83">
               <animate
                 attributeName="fill"
-                values="#a3f305;#c3ff66;#a3f305"
+                values="#8B9D83;#b5c3ae;#8B9D83"
                 dur="4s"
                 repeatCount="indefinite"
               />

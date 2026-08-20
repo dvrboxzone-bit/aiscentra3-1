@@ -64,16 +64,9 @@ export function twoRealObservations(): Signal[] {
 }
 
 /**
- * Forces both VfinalHeroGlobe and VfinalStrategicMemoryCanvas into
- * their reduced-motion branch (a single static render, no
- * requestAnimationFrame loop started at all) -- these homepage-level
- * structural tests do not need a running animation loop, and without a
- * real IntersectionObserver signal in this jsdom environment to ever
- * report "offscreen," a genuinely-started loop would run forever via
- * dom-setup.ts's own real-timer requestAnimationFrame stand-in,
- * hanging the test process. Each component's OWN dedicated test file
- * (vfinal-hero-globe.test.ts, vfinal-strategic-memory-canvas.dom.test.tsx)
- * already covers real stop/restart/reduced-motion behavior directly.
+ * Requests reduced motion so Hero Density Scan renders one static frame.
+ * Strategic Memory intentionally keeps its required animation contract;
+ * dom-setup's IntersectionObserver reports it offscreen on the next microtask.
  */
 export function forceReducedMotion(): () => void {
   const original = window.matchMedia

@@ -99,28 +99,20 @@ if (typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserve
   }
 }
 
-// REAL BUG FIXED (independent review): VfinalHeroGlobe and
-// VfinalStrategicMemoryCanvas both unconditionally construct a real
+// VfinalHeroDensityScan and VfinalStrategicMemoryCanvas construct a real
 // `new IntersectionObserver(...)` on mount -- without any
 // IntersectionObserver implementation in this jsdom environment at
 // all, rendering either component crashes with "IntersectionObserver
 // is not defined". Tests that need to control real viewport
 // intersection provide and fire their own explicit fake observer (see
-// vfinal-hero-globe.test.ts and
+// vfinal-hero-density-scan.dom.test.tsx and
 // vfinal-strategic-memory-canvas.dom.test.tsx) -- those override
 // globalThis.IntersectionObserver themselves and are unaffected by
 // this default.
 //
-// REAL BUG FIXED (Preview correction): VfinalHeroGlobe and
-// VfinalStrategicMemoryCanvas now start their requestAnimationFrame
-// loop unconditionally on mount (prefers-reduced-motion no longer
-// gates this, to match the reference HTML exactly -- see each
-// component's own comment). A stub that NEVER fires its callback left
-// that loop running forever via dom-setup's own real-timer
-// requestAnimationFrame stand-in, hanging any homepage-level test that
-// renders the real page tree (previously masked by forcing
-// prefers-reduced-motion in those tests, which is no longer a valid
-// off-switch). This default stub now reports "not intersecting" on the
+// Animated canvases schedule requestAnimationFrame while visible. A stub that
+// never fires its callback can leave a timer loop running forever. This default
+// stub reports "not intersecting" on the
 // next microtask after observe() -- a jsdom environment has no real
 // viewport for anything to genuinely intersect, so this is also the
 // more honest default, and it lets each component's own
@@ -152,8 +144,7 @@ if (
 // REAL BUG FIXED (independent review): jsdom has no real rendering
 // loop, so it does not implement requestAnimationFrame/
 // cancelAnimationFrame at all -- the real `lenis` package's own raf
-// loop (VfinalLenisProvider) and this project's own Hero Globe/
-// Strategic Memory Canvas components all call these directly,
+// loop (VfinalLenisProvider) and this project's canvas components call these directly,
 // crashing with "requestAnimationFrame is not defined" without a real
 // (even if inert) implementation. A timer-based stand-in is sufficient
 // for every test in this project that has needed one so far -- none

@@ -60,6 +60,11 @@ export function VfinalFooter(): React.JSX.Element {
                 </Link>
               </li>
               <li>
+                <Link href="/#trajectories" className="text-frost hover:text-mint-signal">
+                  Trajectories
+                </Link>
+              </li>
+              <li>
                 <span className="text-silver-haze opacity-50" title="In development">
                   Forecasts
                 </span>
