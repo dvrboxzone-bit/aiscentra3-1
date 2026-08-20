@@ -7,6 +7,11 @@
  * current V2 schema and current pipeline architecture (daily Vercel
  * cron + hourly GitHub Actions enrich/batch trigger) rather than the
  * archive's original fictional four-times-daily cron schedule.
+ *
+ * Frontend Design Foundation, layer 6: every real query
+ * (sources/observations/signals/events/reports counts, 24h windows,
+ * unprocessed/error/pendingRetry/severity computations) is completely
+ * UNCHANGED -- only the visual JSX is migrated to vfinal.
  */
 import { createAdminClient } from '@/lib/supabase/server'
 import { getSignalSeverity } from '@/types/database'
@@ -81,18 +86,17 @@ export default async function AdminDashboard(): Promise<React.JSX.Element> {
   return (
     <div>
       <div className="mb-8">
-        <p className="mb-1 font-mono text-xs tracking-wider text-text-muted">ADMIN DASHBOARD</p>
-        <h1 className="text-2xl font-light text-text-primary">Observatory Status</h1>
+        <span className="font-caption mb-1 block text-mint-signal">ADMIN DASHBOARD</span>
+        <h1 className="font-heading text-2xl text-frost">Observatory Status</h1>
       </div>
 
-      {/* Key metrics */}
       <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {metrics.map(({ label, value, alert, highlight }) => (
-          <div key={label} className="border border-observatory-border bg-observatory-surface p-4">
-            <p className="mb-1 font-mono text-xs text-text-muted">{label.toUpperCase()}</p>
+          <div key={label} className="border border-border-subtle bg-surface-tonal p-4">
+            <p className="font-caption mb-1 text-silver-haze">{label.toUpperCase()}</p>
             <p
               className={`font-mono text-2xl tabular-nums ${
-                alert ? 'text-amber-400' : highlight ? 'text-text-primary' : 'text-text-secondary'
+                alert ? 'text-amber-400' : highlight ? 'text-frost' : 'text-silver-haze'
               }`}
             >
               {value}
@@ -105,10 +109,8 @@ export default async function AdminDashboard(): Promise<React.JSX.Element> {
           not a fictional schedule. See docs/ops/MIGRATION_RECONCILIATION_*
           and the GitHub Actions workflow for the authoritative source. */}
       <div>
-        <p className="mb-3 font-mono text-xs tracking-wider text-text-muted">
-          PIPELINE TRIGGERS (UTC)
-        </p>
-        <div className="divide-y divide-observatory-border border border-observatory-border">
+        <span className="font-caption mb-3 block text-silver-haze">PIPELINE TRIGGERS (UTC)</span>
+        <div className="divide-y divide-border-subtle border border-border-subtle bg-surface-tonal">
           {[
             {
               time: 'Daily 10:00',
@@ -123,10 +125,10 @@ export default async function AdminDashboard(): Promise<React.JSX.Element> {
           ].map(({ time, job, endpoint }) => (
             <div key={endpoint} className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-4">
-                <span className="w-28 shrink-0 font-mono text-xs text-text-muted">{time}</span>
-                <span className="text-sm text-text-secondary">{job}</span>
+                <span className="font-caption w-28 shrink-0 text-silver-haze">{time}</span>
+                <span className="text-sm text-silver-haze">{job}</span>
               </div>
-              <span className="font-mono text-xs text-text-muted">{endpoint}</span>
+              <span className="font-caption text-silver-haze">{endpoint}</span>
             </div>
           ))}
         </div>

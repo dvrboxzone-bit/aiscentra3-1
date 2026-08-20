@@ -10,26 +10,33 @@
 @layer base {
   :root {
     /* Observatory color tokens */
-    --color-black:   #0A0A0A;
-    --color-dark:    #111111;
+    --color-black: #0a0a0a;
+    --color-dark: #111111;
     --color-surface: #171717;
-    --color-border:  #242424;
+    --color-border: #242424;
   }
 
   html {
     /* Dark base — no flash of white on load */
-    background-color: #0A0A0A;
+    background-color: #0a0a0a;
     color-scheme: dark;
   }
 
   body {
     @apply bg-observatory-black text-text-secondary antialiased;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-feature-settings:
+      'rlig' 1,
+      'calt' 1;
   }
 
   /* Typography defaults — Modern Technical Editorial */
-  h1, h2, h3, h4, h5, h6 {
-    @apply text-text-primary font-medium tracking-tight;
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-medium tracking-tight text-text-primary;
   }
 
   /* Scrollbar — minimal, observatory aesthetic */
@@ -41,7 +48,7 @@
     @apply bg-observatory-black;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-observatory-border rounded-sm;
+    @apply rounded-sm bg-observatory-border;
   }
   ::-webkit-scrollbar-thumb:hover {
     background-color: #3a3a3a;
@@ -63,23 +70,531 @@
    * "Backgrounds should be subtle...support observation theme, never compete with content" */
   .observatory-grid {
     background-image: var(--tw-gradient-stops);
-    background-image:
-      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
     background-size: 32px 32px;
   }
 
   /* Signal severity badges */
   .severity-critical {
-    @apply text-text-primary border border-text-primary/30 bg-observatory-surface;
+    @apply border border-text-primary/30 bg-observatory-surface text-text-primary;
   }
   .severity-high {
-    @apply text-signal-high border border-signal-high/25 bg-observatory-surface;
+    @apply border border-signal-high/25 bg-observatory-surface text-signal-high;
   }
   .severity-medium {
-    @apply text-signal-medium border border-signal-medium/20 bg-observatory-surface;
+    @apply border border-signal-medium/20 bg-observatory-surface text-signal-medium;
   }
   .severity-low {
-    @apply text-signal-low border border-signal-low/15 bg-observatory-surface;
+    @apply border border-signal-low/15 bg-observatory-surface text-signal-low;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   vfinal Frontend Design Foundation (AIscentra-vfinal-adapt.html)
+   ══════════════════════════════════════════════════════════════════════
+   Additive layer, copied verbatim from the approved HTML source's own
+   <style> block (lines 38-209). Intentionally NOT merged into the
+   existing @layer base/components rules above -- those still govern
+   pages that have not yet been migrated to the new design (see task
+   instructions: migrate layer by layer, never break not-yet-migrated
+   pages). Every class here is scoped by its own distinct name (no
+   collision with Design Foundation v1.0's own class names above), so
+   both systems can coexist during the migration.
+   ══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --color-deep-obsidian: #030303;
+  --color-pure-black: #000000;
+  --color-frost: #ffffff;
+  --color-silver-haze: #e5e7eb;
+  --color-mint-signal: #8b9d83;
+  --color-surface-tonal: #0a0a0a;
+  --color-border-subtle: #1a1a1a;
+  /* REAL BUG FIXED (independent review, build FAILURE): these
+     previously referenced next/font-generated CSS variables
+     (--font-inter/--font-jetbrains-mono) that no longer exist --
+     layout.tsx now imports @fontsource's own @font-face declarations
+     directly (real, locally-bundled woff2 files, no build-time network
+     dependency on fonts.gstatic.com). @fontsource registers the exact
+     same family names ('Inter', 'JetBrains Mono') the HTML source's
+     own Google Fonts <link> requested -- referencing them directly
+     here (matching the HTML's own original :root values) is correct
+     again, with the same generic fallback stack. */
+  --font-pp: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+.font-display {
+  font-family: var(--font-pp);
+  font-weight: 500;
+  letter-spacing: -0.036em;
+  line-height: 1;
+}
+.font-heading {
+  font-family: var(--font-pp);
+  font-weight: 500;
+  letter-spacing: -0.032em;
+  line-height: 1;
+}
+.font-body {
+  font-family: var(--font-pp);
+  font-weight: 400;
+  line-height: 1.62;
+  color: var(--color-silver-haze);
+}
+.font-caption {
+  font-family: var(--font-pp);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 13px;
+}
+.font-mono-vf {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.border-hairline {
+  border: 1px solid var(--color-border-subtle);
+}
+.card-sharp {
+  border-radius: 0;
+  background-color: var(--color-frost);
+  color: var(--color-deep-obsidian);
+  transition: background-color 0.3s ease;
+}
+.card-sharp:hover {
+  background-color: var(--color-mint-signal);
+}
+.pill {
+  border-radius: 9999px;
+}
+
+.magnetic {
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+
+.btn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-frost);
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    background 0.3s,
+    color 0.3s,
+    border-color 0.3s;
+  background-color: transparent;
+  cursor: pointer;
+}
+.btn-pill:hover {
+  background: var(--color-frost);
+  color: var(--color-deep-obsidian);
+  border-color: var(--color-frost);
+}
+
+.arrow-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--color-frost);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.arrow-link span {
+  color: var(--color-mint-signal);
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 0.8s ease,
+    transform 0.8s ease;
+}
+.reveal.in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.card-sharp.reveal {
+  transition:
+    background-color 0.3s ease,
+    opacity 0.8s ease,
+    transform 0.8s ease;
+}
+/* REAL BUG FIXED (Preview correction, root-cause pass against the
+   original AIscentra-vfinal-adapt.html reference): a
+   prefers-reduced-motion override here previously forced .reveal to
+   opacity:1/no-transition immediately, skipping the scroll-triggered
+   fade/slide-in entirely whenever the browser reports reduced motion --
+   not present in the reference HTML's own CSS (lines 90-91), which has
+   no such media query. Removed to match the reference exactly: the
+   reveal transition always runs. */
+
+.img-mono {
+  filter: grayscale(100%) contrast(1.1) brightness(0.8);
+  transition: filter 0.5s ease;
+  will-change: filter, transform;
+  transform: translateZ(0);
+}
+.group:hover .img-mono {
+  filter: grayscale(0%) contrast(1.05) brightness(1);
+}
+
+#assistant,
+#epistemic-model,
+#methodology,
+#security-data,
+#roadmap {
+  scroll-margin-top: 100px;
+}
+
+#progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  background: var(--color-mint-signal);
+  width: 0;
+  z-index: 100;
+}
+
+.observatory-input:focus {
+  outline: none;
+}
+.observatory-input::placeholder {
+  color: rgba(229, 231, 235, 0.3);
+}
+
+.logo-flex {
+  display: inline-flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.section-gap {
+  height: 5rem;
+  background-color: var(--color-deep-obsidian);
+  border-top: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.textured-bg {
+  background-color: #030303;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.textured-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="4" stitchTiles="stitch"/></filter><rect width="100%25" height="100%25" filter="url(%23n)" opacity="0.06"/></svg>');
+}
+
+.tech-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size:
+    8px 8px,
+    8px 8px;
+  background-position:
+    0 0,
+    0 0;
+}
+
+.dropdown {
+  position: relative;
+}
+.dropdown-content {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  background: rgba(10, 10, 10, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 0 0 8.64px 8.64px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transition:
+    opacity 0.3s,
+    transform 0.3s,
+    visibility 0.3s;
+  z-index: 50;
+}
+.dropdown:hover .dropdown-content {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.dropdown-content a {
+  display: block;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-silver-haze);
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+.dropdown-content a:last-child {
+  border-bottom: none;
+}
+.dropdown-content a:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-mint-signal);
+}
+
+.hero-density-scan-wrap {
+  width: 100%;
+  max-width: 520px;
+  margin-bottom: 3rem;
+}
+.hero-density-scan-status {
+  margin-bottom: 6px;
+  opacity: 0.7;
+}
+.hero-density-scan-label {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.hero-density-scan-container {
+  position: relative;
+  width: 100%;
+  height: 70px;
+}
+#hero-density-scan {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.trajectory-mark {
+  border: 1px solid var(--color-mint-signal);
+  color: var(--color-mint-signal);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 7px 8px;
+}
+
+.hamburger-btn {
+  display: none;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-frost);
+}
+.hamburger-btn span {
+  width: 18px;
+  height: 1px;
+  background: currentColor;
+}
+.mobile-menu-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  z-index: 60;
+  border: 0;
+  background: rgba(0, 0, 0, 0.72);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.25s ease,
+    visibility 0.25s ease;
+}
+.mobile-menu-overlay.open {
+  opacity: 1;
+  visibility: visible;
+}
+.mobile-menu-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: 100dvh;
+  z-index: 70;
+  width: min(88vw, 420px);
+  background: var(--color-deep-obsidian);
+  border-left: 1px solid var(--color-border-subtle);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform 0.3s ease,
+    visibility 0.3s ease;
+}
+.mobile-menu-panel.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+.mobile-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.mobile-menu-close {
+  width: 42px;
+  height: 42px;
+  color: var(--color-frost);
+  font-size: 30px;
+  line-height: 1;
+}
+.mobile-menu-scroll {
+  display: flex;
+  height: calc(100% - 75px);
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+.mobile-menu-scroll > a:not(.btn-pill) {
+  padding: 0.65rem 0;
+  color: var(--color-frost);
+  font-size: 15px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.mobile-menu-scroll > a:hover {
+  color: var(--color-mint-signal);
+}
+.mobile-menu-group-label {
+  margin-top: 1.5rem;
+  margin-bottom: 0.4rem;
+  color: var(--color-mint-signal);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+.mobile-menu-group-label:first-child {
+  margin-top: 0;
+}
+
+.memory-canvas-container {
+  position: relative;
+  width: 100%;
+  height: 450px;
+  overflow: hidden;
+}
+
+.slider-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.slider-slide {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  animation: vf-slideFade 10s infinite linear;
+}
+.slider-slide:nth-child(1) {
+  animation-delay: 0s;
+}
+.slider-slide:nth-child(2) {
+  animation-delay: 5s;
+}
+@keyframes vf-slideFade {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 1;
+  }
+  60% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.slider-slide img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+#back-to-top {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  z-index: 50;
+  width: 48px;
+  height: 48px;
+  background-color: rgba(10, 10, 10, 0.8);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8.64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(20px);
+  transition:
+    opacity 0.3s ease,
+    visibility 0.3s ease,
+    transform 0.3s ease,
+    border-color 0.3s ease,
+    background 0.3s ease;
+}
+#back-to-top.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+#back-to-top svg {
+  width: 24px;
+  height: 24px;
+  color: var(--color-silver-haze);
+  transition: color 0.3s ease;
+}
+#back-to-top:hover {
+  border-color: var(--color-mint-signal);
+  background-color: rgba(10, 10, 10, 0.9);
+}
+#back-to-top:hover svg {
+  color: var(--color-mint-signal);
+}
+
+@media (max-width: 768px) {
+  .hide-mobile {
+    display: none;
+  }
+  .hamburger-btn {
+    display: flex;
+  }
+  .hero-density-scan-wrap {
+    max-width: 320px;
+  }
+  .hero-density-scan-container {
+    height: 50px;
   }
 }

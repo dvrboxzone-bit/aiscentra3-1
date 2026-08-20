@@ -1,6 +1,34 @@
 import type { Metadata, Viewport } from 'next'
+import '@fontsource/inter/400.css'
+import '@fontsource/inter/500.css'
+import '@fontsource/inter/700.css'
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/500.css'
 import './globals.css'
 
+// REAL BUG FIXED (independent review, Quality Gate 31938267758
+// FAILURE): next/font/google fetches its own font files from
+// fonts.gstatic.com AT BUILD TIME -- a real, confirmed 404 from that
+// external request broke Turbopack's font module compilation and
+// failed the production build outright. next/font/google is
+// documented as "self-hosted" only in the sense that the SERVED asset
+// is same-origin at runtime; the BUILD ITSELF still depends on a live
+// network fetch to Google's own CDN, which is exactly the kind of
+// external, non-reproducible build dependency the task's own
+// technical-boundaries section forbids ("без обязательного обращения
+// к Google во время build").
+//
+// Fixed with @fontsource/inter and @fontsource/jetbrains-mono (exact
+// pinned versions, see package.json) -- real npm packages that bundle
+// the actual woff2 font files INSIDE the package itself (no network
+// fetch of any kind, at build time or runtime). Same exact families
+// and weights as before: Inter 400/500/700, JetBrains Mono 400/500 --
+// the same weights the HTML source's own Google Fonts <link> requests.
+// globals.css's own --font-pp/--font-mono custom properties already
+// reference these family names directly ('Inter', 'JetBrains Mono'),
+// which @fontsource's own @font-face declarations (imported here)
+// satisfy identically to next/font's generated ones -- no change
+// needed to globals.css itself.
 const FALLBACK_APP_URL = 'https://aiscentra.com'
 
 /**

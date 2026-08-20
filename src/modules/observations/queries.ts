@@ -3,7 +3,12 @@
  * Updated for Signal Engine V2
  */
 import { createAdminClient } from '@/lib/supabase/server'
-import { buildFaviconUrl, filterSafeSourceLinks, type SourceLink } from '@/lib/utils/source-links'
+import {
+  buildFaviconUrl,
+  filterSafeSourceLinks,
+  isSafeSourceUrl,
+  type SourceLink,
+} from '@/lib/utils/source-links'
 
 export interface ObservationRow {
   id: string
@@ -329,4 +334,90 @@ export async function getSourceLinksForSignal(observationIds: string[]): Promise
   // subset, and a caller implementing "no safe links -> do not
   // publish" only needs to check whether the returned array is empty.
   return filterSafeSourceLinks(links)
+}
+
+/**
+ * REAL BUG FIXED (independent audit): a list page rendering N signal
+ * cards previously called getSourceLinksForSignal() once PER signal --
+ * up to 25 separate admin-client database round-trips for one page
+ * render. This batch version fetches every relevant observation row
+ * in ONE query (a single `.in('id', allObservationIds)` across every
+ * signal on the page), then distributes each real returned row back
+ * to the signal(s) whose own observation_ids array contains it.
+ *
+ * Same real safety invariant as getSourceLinksForSignal(): callers
+ * MUST reach this only after each signal has already been confirmed
+ * publicly visible (getSignals()'s own RLS-bound, has_verified_source
+ * publication gate) -- this function performs no additional
+ * visibility check of its own, matching the existing single-signal
+ * function's own documented contract.
+ *
+ * Same real safety filtering (isSafeSourceUrl) and the same real
+ * favicon/text-fallback data shape (SourceLink) as the single-signal
+ * version -- applied once, globally, before splitting per signal
+ * (safe: the filter is a stateless per-link predicate with no
+ * cross-link state, so filtering before or after the per-signal split
+ * is equivalent).
+ */
+export async function getSourceLinksForSignals(
+  signalObservationIds: ReadonlyArray<{ signalId: string; observationIds: readonly string[] }>,
+): Promise<Map<string, SourceLink[]>> {
+  const result = new Map<string, SourceLink[]>(signalObservationIds.map((s) => [s.signalId, []]))
+
+  const allObservationIds = [...new Set(signalObservationIds.flatMap((s) => s.observationIds))]
+  if (allObservationIds.length === 0) return result
+
+  // Reverse lookup: which signal(s) does a given observation id belong
+  // to -- an observation could in principle be referenced by more than
+  // one signal's own observation_ids array, so this is a one-to-many
+  // map, not an assumption of exclusivity.
+  const signalIdsByObservationId = new Map<string, string[]>()
+  for (const { signalId, observationIds } of signalObservationIds) {
+    for (const obsId of observationIds) {
+      const existing = signalIdsByObservationId.get(obsId)
+      if (existing) existing.push(signalId)
+      else signalIdsByObservationId.set(obsId, [signalId])
+    }
+  }
+
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('observations')
+    .select('id, url, source_id, sources(name)')
+    .in('id', allObservationIds)
+
+  if (error) {
+    console.error('[observations/queries] getSourceLinksForSignals error:', error.message)
+    return result
+  }
+
+  const raw = (data ?? []) as Array<{
+    id: string
+    url: string | null
+    source_id: string | null
+    sources: { name: string } | { name: string }[] | null
+  }>
+
+  const allLinksWithObsId: Array<{ observationId: string; link: SourceLink }> = raw
+    .filter((row): row is typeof row & { url: string } => Boolean(row.url))
+    .map((row) => {
+      const sourcesField = row.sources
+      const sourceName = Array.isArray(sourcesField)
+        ? (sourcesField[0]?.name ?? 'Unknown source')
+        : (sourcesField?.name ?? 'Unknown source')
+      return {
+        observationId: row.id,
+        link: { url: row.url, sourceName, faviconUrl: buildFaviconUrl(row.url) },
+      }
+    })
+    .filter((entry) => isSafeSourceUrl(entry.link.url))
+
+  for (const { observationId, link } of allLinksWithObsId) {
+    const signalIds = signalIdsByObservationId.get(observationId) ?? []
+    for (const signalId of signalIds) {
+      result.get(signalId)?.push(link)
+    }
+  }
+
+  return result
 }

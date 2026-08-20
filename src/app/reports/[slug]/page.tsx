@@ -1,11 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
 import { getReportById } from '@/modules/reports/queries'
 import { formatRelativeTime } from '@/lib/utils/format'
 import type { ReportType } from '@/types/database'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
 
 interface ReportPageProps {
   params: Promise<{ slug: string }>
@@ -29,124 +30,122 @@ export async function generateMetadata({ params }: ReportPageProps): Promise<Met
   return { title: report.title, description: report.summary }
 }
 
+/**
+ * AIscentra — vfinal /reports/[slug] page (Frontend Design Foundation,
+ * layer 5B). Real getReportById, paragraph splitting/epistemic-marker
+ * detection logic, generateMetadata, generateStaticParams, notFound()
+ * -- all unchanged. Visual language migrated to vfinal.
+ */
 export default async function ReportPage({ params }: ReportPageProps): Promise<React.JSX.Element> {
   const { slug } = await params
   const report = await getReportById(slug)
   if (!report) notFound()
 
-  // Format content — split into paragraphs for reading layout
   const paragraphs = report.content
     .split(/\n\n+/)
     .map((p) => p.trim())
     .filter(Boolean)
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      {/* Breadcrumb */}
-      <nav className="mb-6 font-mono text-xs text-text-muted">
-        <Link href="/reports" className="hover:text-text-secondary">
-          Reports
-        </Link>
-        <span className="mx-2 text-observatory-border">›</span>
-        <span>{REPORT_TYPE_LABELS[report.report_type]}</span>
-      </nav>
+    <VfinalPublicShell>
+      <div className="textured-bg relative px-6 pb-24 pt-40">
+        <div className="tech-grid" />
+        <div className="relative z-10 mx-auto max-w-3xl">
+          <nav className="font-caption mb-6 text-silver-haze">
+            <Link href="/reports" className="hover:text-mint-signal">
+              Reports
+            </Link>
+            <span className="mx-2">›</span>
+            <span>{REPORT_TYPE_LABELS[report.report_type]}</span>
+          </nav>
 
-      {/* Header */}
-      <header className="mb-8 border-b border-observatory-border pb-8">
-        <div className="mb-4">
-          <span className="border border-observatory-border px-2 py-0.5 font-mono text-xs text-text-muted">
-            {REPORT_TYPE_LABELS[report.report_type]}
-          </span>
-        </div>
-
-        <h1 className="mb-4 text-xl font-medium leading-snug text-text-primary md:text-2xl">
-          {report.title}
-        </h1>
-
-        {/* Summary block */}
-        <div className="mb-4 border-l-2 border-observatory-border pl-4">
-          <p className="text-sm leading-relaxed text-text-secondary">{report.summary}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-4 font-mono text-xs text-text-muted">
-          {report.published_at && (
-            <time dateTime={report.published_at}>
-              Published {formatRelativeTime(report.published_at)}
-            </time>
-          )}
-          <span className="text-observatory-border">·</span>
-          <span>
-            {report.signal_ids.length} signal{report.signal_ids.length !== 1 ? 's' : ''}
-          </span>
-          {report.event_ids.length > 0 && (
-            <>
-              <span className="text-observatory-border">·</span>
-              <span>
-                {report.event_ids.length} event{report.event_ids.length !== 1 ? 's' : ''}
+          <header className="mb-8 border-b border-border-subtle pb-8">
+            <div className="mb-4">
+              <span className="pill border border-border-subtle px-2 py-0.5 text-xs text-silver-haze">
+                {REPORT_TYPE_LABELS[report.report_type]}
               </span>
-            </>
-          )}
-          <span className="text-observatory-border">·</span>
-          <span>REPORT {report.id.slice(0, 8).toUpperCase()}</span>
+            </div>
+
+            <h1 className="font-heading mb-4 text-3xl text-frost md:text-4xl">{report.title}</h1>
+
+            <div className="mb-4 border-l-2 border-mint-signal pl-4">
+              <p className="text-lg leading-relaxed text-silver-haze">{report.summary}</p>
+            </div>
+
+            <div className="font-caption flex flex-wrap items-center gap-4 text-silver-haze">
+              {report.published_at && (
+                <time dateTime={report.published_at}>
+                  Published {formatRelativeTime(report.published_at)}
+                </time>
+              )}
+              <span>·</span>
+              <span>
+                {report.signal_ids.length} signal{report.signal_ids.length !== 1 ? 's' : ''}
+              </span>
+              {report.event_ids.length > 0 && (
+                <>
+                  <span>·</span>
+                  <span>
+                    {report.event_ids.length} event{report.event_ids.length !== 1 ? 's' : ''}
+                  </span>
+                </>
+              )}
+              <span>·</span>
+              <span>REPORT {report.id.slice(0, 8).toUpperCase()}</span>
+            </div>
+          </header>
+
+          <article className="space-y-5">
+            {paragraphs.map((paragraph, index) => {
+              const isForecast =
+                paragraph.includes('[FORECAST]') ||
+                paragraph.startsWith('Expected:') ||
+                paragraph.startsWith('Watch for:')
+
+              return (
+                <p
+                  key={index}
+                  className={`leading-relaxed ${
+                    isForecast
+                      ? 'border-l border-border-subtle pl-4 italic text-silver-haze'
+                      : 'text-silver-haze'
+                  }`}
+                >
+                  {paragraph
+                    .replace('[FACTUAL]', '')
+                    .replace('[INTERPRETIVE]', '')
+                    .replace('[HYPOTHETICAL]', '')
+                    .replace('[FORECAST]', '')
+                    .trim()}
+                </p>
+              )
+            })}
+          </article>
+
+          <footer className="mt-10 border-t border-border-subtle pt-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <p className="font-caption text-silver-haze">
+                AIscentra Intelligence Observatory — {REPORT_TYPE_LABELS[report.report_type]}
+              </p>
+              <Link
+                href="/reports"
+                className="font-caption text-silver-haze transition-colors hover:text-mint-signal"
+              >
+                ← ALL REPORTS
+              </Link>
+            </div>
+
+            <div className="mt-4 border border-border-subtle bg-surface-tonal p-4">
+              <span className="font-caption mb-1 block text-silver-haze">EPISTEMIC NOTE</span>
+              <p className="text-xs leading-relaxed text-silver-haze">
+                This report distinguishes factual observations from interpretive assessments and
+                forecasts. Forecasts are Observatory analytical assessments, not factual claims. All
+                intelligence is generated from verified Observatory signals and events.
+              </p>
+            </div>
+          </footer>
         </div>
-      </header>
-
-      {/* Report content */}
-      <article className="space-y-5">
-        {paragraphs.map((paragraph, index) => {
-          // Detect epistemic markers and style accordingly
-          const isForecast =
-            paragraph.includes('[FORECAST]') ||
-            paragraph.startsWith('Expected:') ||
-            paragraph.startsWith('Watch for:')
-          const isInterpretive = paragraph.includes('[INTERPRETIVE]')
-
-          return (
-            <p
-              key={index}
-              className={`text-sm leading-relaxed ${
-                isForecast
-                  ? 'border-l border-observatory-border pl-4 italic text-text-muted'
-                  : isInterpretive
-                    ? 'text-text-secondary'
-                    : 'text-text-secondary'
-              }`}
-            >
-              {paragraph
-                .replace('[FACTUAL]', '')
-                .replace('[INTERPRETIVE]', '')
-                .replace('[HYPOTHETICAL]', '')
-                .replace('[FORECAST]', '')
-                .trim()}
-            </p>
-          )
-        })}
-      </article>
-
-      {/* Footer */}
-      <footer className="mt-10 border-t border-observatory-border pt-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <p className="font-mono text-xs text-text-muted">
-            AIscentra Intelligence Observatory — {REPORT_TYPE_LABELS[report.report_type]}
-          </p>
-          <Link
-            href="/reports"
-            className="font-mono text-xs tracking-wider text-text-muted transition-colors hover:text-text-secondary"
-          >
-            ← ALL REPORTS
-          </Link>
-        </div>
-
-        {/* Epistemic disclaimer */}
-        <div className="mt-4 border border-observatory-border bg-observatory-surface p-4">
-          <p className="mb-1 font-mono text-xs text-text-muted">EPISTEMIC NOTE</p>
-          <p className="text-xs leading-relaxed text-text-muted">
-            This report distinguishes factual observations from interpretive assessments and
-            forecasts. Forecasts are Observatory analytical assessments, not factual claims. All
-            intelligence is generated from verified Observatory signals and events.
-          </p>
-        </div>
-      </footer>
-    </div>
+      </div>
+    </VfinalPublicShell>
   )
 }
