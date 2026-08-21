@@ -22,6 +22,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const workflowSrc = (): string => readFileSync('.github/workflows/production-release.yml', 'utf8')
+const schemaGateSrc = (): string => readFileSync('scripts/release/schema-check.sql', 'utf8')
 
 /** Extracts the raw text of the `production-release:` job block, up to the
  * next top-level (2-space-indented) job key. */
@@ -75,6 +76,57 @@ describe('production-release.yml — schema-check job has a real checkout before
   test('the protected release job depends on validate, so needs.validate.outputs.commit_sha is genuinely available', () => {
     const job = extractProductionReleaseJob(workflowSrc())
     assert.match(job, /needs:\s*\[[^\]]*\bvalidate\b[^\]]*\]/)
+  })
+})
+
+describe('production schema gate — Signal Quality Foundation dependencies', () => {
+  test('requires the enum, every quality column, and the append-only decision ledger', () => {
+    const gate = schemaGateSrc()
+    assert.match(gate, /\('signal_quality_state'\)/)
+    for (const label of ['PENDING', 'APPROVED', 'QUARANTINED']) {
+      assert.match(gate, new RegExp(`\\('signal_quality_state', '${label}'\\)`))
+    }
+    for (const column of [
+      'quality_state',
+      'quality_reason_codes',
+      'quality_rule_version',
+      'quality_evaluated_at',
+      'quarantined_at',
+    ]) {
+      assert.match(gate, new RegExp(`\\('signals', '${column}'\\)`))
+    }
+    assert.match(gate, /\('signal_quality_decisions'\)/)
+    for (const dependency of [
+      'prevent_signal_quality_decision_mutation',
+      'record_signal_quality_decision',
+      'signal_quality_decisions_no_update_delete',
+      'signal_quality_decisions_no_truncate',
+      'signals_quality_decision_on_insert',
+      'signals_quality_decision_on_state_change',
+    ]) {
+      assert.match(gate, new RegExp(dependency))
+    }
+  })
+
+  test('requires both Signal quality constraints', () => {
+    const gate = schemaGateSrc()
+    assert.match(gate, /signals_quality_state_metadata_check/)
+    assert.match(gate, /signals_quality_approved_v2_invariants_check/)
+  })
+
+  test('requires enabled Event and Report database guard triggers and their functions', () => {
+    const gate = schemaGateSrc()
+    for (const dependency of [
+      'enforce_quality_approved_event_origin',
+      'enforce_quality_approved_report_publication',
+      'events_require_quality_approved_signal_on_insert',
+      'events_require_quality_approved_signal_on_update',
+      'reports_require_quality_approved_evidence_on_insert',
+      'reports_require_quality_approved_evidence_on_update',
+    ]) {
+      assert.match(gate, new RegExp(dependency))
+    }
+    assert.match(gate, /t\.tgenabled <> 'D'/)
   })
 })
 
