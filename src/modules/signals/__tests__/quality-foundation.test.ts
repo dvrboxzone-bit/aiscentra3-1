@@ -172,6 +172,55 @@ describe('Quality Foundation migrations', () => {
     assert.doesNotMatch(foundation, /DROP POLICY|CREATE POLICY|ALTER POLICY/i)
   })
 
+  test('APPROVED rejects NULL in every required evidence, score, and verification field', () => {
+    const approvedConstraint =
+      foundation.match(
+        /ADD CONSTRAINT signals_quality_approved_v2_invariants_check CHECK \([\s\S]*?\n  \);/i,
+      )?.[0] ?? ''
+
+    assert.match(approvedConstraint, /\) IS TRUE/)
+    for (const requiredCondition of [
+      /status IN \('ACTIVE', 'PROMOTED'\)/,
+      /intelligence_type IN \('SIGNAL', 'CRITICAL_SIGNAL'\)/,
+      /has_verified_source = TRUE/,
+      /verification_state IN \('CORROBORATED', 'VERIFIED'\)/,
+      /qualification_score >= 6\.0/,
+      /sis_final >= 6\.0/,
+      /anti_hype_score >= 3\.0/,
+      /cardinality\(validation_flags\) = 0/,
+      /cardinality\(observation_ids\) >= 2/,
+      /quality_rule_version <> ''/,
+    ]) {
+      assert.match(approvedConstraint, requiredCondition)
+    }
+  })
+
+  test('published Report rejects NULL or empty signal_ids', () => {
+    const reportGuard =
+      foundation.match(
+        /CREATE OR REPLACE FUNCTION public\.enforce_quality_approved_report_publication\(\)[\s\S]*?\n\$\$;/i,
+      )?.[0] ?? ''
+
+    assert.match(reportGuard, /COALESCE\(cardinality\(NEW\.signal_ids\), 0\) = 0/)
+    assert.match(reportGuard, /required_signal_id IS NULL/)
+    assert.match(reportGuard, /s\.quality_state IS DISTINCT FROM 'APPROVED'/)
+  })
+
+  test('approved signal-only Report remains allowed while NULL or dangling Event references reject', () => {
+    const reportGuard =
+      foundation.match(
+        /CREATE OR REPLACE FUNCTION public\.enforce_quality_approved_report_publication\(\)[\s\S]*?\n\$\$;/i,
+      )?.[0] ?? ''
+
+    assert.match(reportGuard, /IF NEW\.event_ids IS NULL THEN/)
+    assert.match(reportGuard, /FROM unnest\(NEW\.event_ids\) AS required_event_id/)
+    assert.doesNotMatch(reportGuard, /cardinality\(NEW\.event_ids\)[\s\S]*?RAISE EXCEPTION/)
+    assert.match(reportGuard, /required_event_id IS NULL/)
+    assert.match(reportGuard, /e\.id IS NULL/)
+    assert.match(reportGuard, /s\.id IS NULL/)
+    assert.match(reportGuard, /s\.quality_state IS DISTINCT FROM 'APPROVED'/)
+  })
+
   test('backfill preserves rows/lifecycle and has no automatic APPROVED assignment', () => {
     const updateStatement = backfill.match(/UPDATE public\.signals[\s\S]*?;/i)?.[0] ?? ''
     assert.match(updateStatement, /'QUARANTINED'/)

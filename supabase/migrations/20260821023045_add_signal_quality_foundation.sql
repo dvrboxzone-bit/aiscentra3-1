@@ -69,16 +69,18 @@ ALTER TABLE public.signals
   ADD CONSTRAINT signals_quality_approved_v2_invariants_check CHECK (
     quality_state <> 'APPROVED'
     OR (
-      status IN ('ACTIVE', 'PROMOTED')
-      AND intelligence_type IN ('SIGNAL', 'CRITICAL_SIGNAL')
-      AND has_verified_source = TRUE
-      AND verification_state IN ('CORROBORATED', 'VERIFIED')
-      AND qualification_score >= 6.0
-      AND sis_final >= 6.0
-      AND anti_hype_score >= 3.0
-      AND cardinality(validation_flags) = 0
-      AND cardinality(observation_ids) >= 2
-      AND quality_rule_version <> ''
+      (
+        status IN ('ACTIVE', 'PROMOTED')
+        AND intelligence_type IN ('SIGNAL', 'CRITICAL_SIGNAL')
+        AND has_verified_source = TRUE
+        AND verification_state IN ('CORROBORATED', 'VERIFIED')
+        AND qualification_score >= 6.0
+        AND sis_final >= 6.0
+        AND anti_hype_score >= 3.0
+        AND cardinality(validation_flags) = 0
+        AND cardinality(observation_ids) >= 2
+        AND quality_rule_version <> ''
+      ) IS TRUE
     )
   );
 
@@ -261,7 +263,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF cardinality(NEW.signal_ids) = 0 THEN
+  IF COALESCE(cardinality(NEW.signal_ids), 0) = 0 THEN
     RAISE EXCEPTION 'Report publication requires at least one APPROVED Signal';
   END IF;
 
@@ -269,9 +271,17 @@ BEGIN
     SELECT 1
     FROM unnest(NEW.signal_ids) AS required_signal_id
     LEFT JOIN public.signals s ON s.id = required_signal_id
-    WHERE s.id IS NULL OR s.quality_state <> 'APPROVED'
+    WHERE required_signal_id IS NULL
+      OR s.id IS NULL
+      OR s.quality_state IS DISTINCT FROM 'APPROVED'
   ) THEN
     RAISE EXCEPTION 'Report publication references a missing or non-APPROVED Signal';
+  END IF;
+
+  -- An explicit empty array means a signal-only Report and is valid. NULL is
+  -- malformed evidence metadata and must not be treated as an empty array.
+  IF NEW.event_ids IS NULL THEN
+    RAISE EXCEPTION 'Report publication event references must not be NULL';
   END IF;
 
   IF EXISTS (
@@ -279,7 +289,10 @@ BEGIN
     FROM unnest(NEW.event_ids) AS required_event_id
     LEFT JOIN public.events e ON e.id = required_event_id
     LEFT JOIN public.signals s ON s.id = e.signal_id
-    WHERE e.id IS NULL OR s.id IS NULL OR s.quality_state <> 'APPROVED'
+    WHERE required_event_id IS NULL
+      OR e.id IS NULL
+      OR s.id IS NULL
+      OR s.quality_state IS DISTINCT FROM 'APPROVED'
   ) THEN
     RAISE EXCEPTION 'Report publication references an Event without an APPROVED origin Signal';
   END IF;
