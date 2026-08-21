@@ -11,6 +11,7 @@
 import { agentCompleteJSON } from '@/lib/ai/agent'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { createAdminClient } from '@/lib/supabase/server'
+import { isSignalQualityApproved } from '@/modules/signals/quality'
 import {
   ReportOutputSchema,
   REPORT_SYSTEM_PROMPT,
@@ -34,6 +35,13 @@ export async function generateSignalBrief(
   signal: Signal,
   deadlineAt: number,
 ): Promise<ReportResult> {
+  if (!isSignalQualityApproved(signal)) {
+    return {
+      outcome: 'skipped',
+      reason: `Signal quality_state=${signal.quality_state}; APPROVED is required`,
+    }
+  }
+
   const supabase = createAdminClient()
 
   // Check if brief already exists for this signal
@@ -79,8 +87,11 @@ export async function generateSignalBrief(
       report_type: 'SIGNAL_BRIEF',
       signal_ids: [signal.id],
       event_ids: [],
-      published_at: new Date().toISOString(),
+      // Phase 1: generation creates an internal draft only. A separate,
+      // future quality-controlled publication step must set published_at.
+      published_at: null,
       metadata: {
+        publication_state: 'PENDING_QUALITY_REVIEW',
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
         generated_at: new Date().toISOString(),
       },
@@ -125,6 +136,13 @@ export async function generateEventAnalysis(
     .single()
   const signal = signalData as Signal | null
 
+  if (!signal || !isSignalQualityApproved(signal)) {
+    return {
+      outcome: 'skipped',
+      reason: 'Event origin Signal is not quality APPROVED',
+    }
+  }
+
   let output
   try {
     output = await agentCompleteJSON(
@@ -155,8 +173,9 @@ export async function generateEventAnalysis(
       report_type: 'EVENT_ANALYSIS',
       signal_ids: signal ? [signal.id] : [],
       event_ids: [event.id],
-      published_at: new Date().toISOString(),
+      published_at: null,
       metadata: {
+        publication_state: 'PENDING_QUALITY_REVIEW',
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
         generated_at: new Date().toISOString(),
       },
@@ -198,13 +217,15 @@ export async function generateWeeklyReview(deadlineAt: number): Promise<ReportRe
   const [eventsRes, signalsRes] = await Promise.all([
     supabase
       .from('events')
-      .select('*')
+      .select('*, signals!inner(quality_state)')
+      .eq('signals.quality_state', 'APPROVED')
       .gte('created_at', weekStart.toISOString())
       .order('impact_score', { ascending: false })
       .limit(10),
     supabase
       .from('signals')
       .select('*')
+      .eq('quality_state', 'APPROVED')
       .eq('status', 'ACTIVE')
       .gte('created_at', weekStart.toISOString())
       .order('signal_score', { ascending: false })
@@ -252,8 +273,9 @@ export async function generateWeeklyReview(deadlineAt: number): Promise<ReportRe
       report_type: 'WEEKLY_REVIEW',
       signal_ids: signals.map((s) => s.id),
       event_ids: events.map((e) => e.id),
-      published_at: new Date().toISOString(),
+      published_at: null,
       metadata: {
+        publication_state: 'PENDING_QUALITY_REVIEW',
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
         generated_at: new Date().toISOString(),
         week_start: weekStartStr,
@@ -303,6 +325,7 @@ export async function generateTrendReport(
   const { data: signalsData } = await (supabase as any)
     .from('signals')
     .select('*')
+    .eq('quality_state', 'APPROVED')
     .eq('category', category)
     .in('status', ['ACTIVE', 'PROMOTED', 'EXPIRED'])
     .gte('created_at', since30d)
@@ -348,8 +371,9 @@ export async function generateTrendReport(
       report_type: 'TREND_REPORT',
       signal_ids: signals.map((s) => s.id),
       event_ids: [],
-      published_at: new Date().toISOString(),
+      published_at: null,
       metadata: {
+        publication_state: 'PENDING_QUALITY_REVIEW',
         generation_model: process.env['OPENROUTER_MODEL'] ?? 'anthropic/claude-haiku-4-5',
         generated_at: new Date().toISOString(),
         category,

@@ -37,6 +37,7 @@ import {
 import { computeAllScores, computeMomentumScore, validateFactors } from './scoring'
 import { validateSignal } from './validation'
 import { checkDuplicate, checkCorroboration, getRecentSignalTitles } from './deduplication'
+import { SIGNAL_QUALITY_RULE_VERSION } from './quality'
 import type { ObservationRow } from '@/modules/observations/queries'
 import type { SignalCategory, QualificationResult } from '@/types/database'
 
@@ -757,7 +758,11 @@ export async function processObservation(
   // full-strength Signal.
   const isWeakSignal = isWeakSignalDecision(sisResult?.decision, signal_score)
 
-  const signalStatus = isWeakSignal ? 'WEAK' : 'ACTIVE'
+  // Phase 1 Quality Foundation: a newly-qualified strong Signal is still an
+  // internal DRAFT until an explicit future quality review atomically moves
+  // it to APPROVED + ACTIVE. This prevents the unchanged public feed/RLS from
+  // surfacing PENDING rows once their source URL is verified.
+  const signalStatus = isWeakSignal ? 'WEAK' : 'DRAFT'
   const intelligenceType = isWeakSignal ? 'WEAK_SIGNAL' : 'SIGNAL'
 
   // ── Entity resolution + upsert ────────────────────────────────────────────
@@ -798,6 +803,14 @@ export async function processObservation(
 
       // V2: intelligence classification
       intelligence_type: intelligenceType,
+
+      // Phase 1 Quality Foundation: creation is always internal/PENDING.
+      // Approval is a separate explicit review; the engine never self-approves.
+      quality_state: 'PENDING',
+      quality_reason_codes: ['AWAITING_QUALITY_REVIEW'],
+      quality_rule_version: SIGNAL_QUALITY_RULE_VERSION,
+      quality_evaluated_at: null,
+      quarantined_at: null,
 
       // V2: SIS dimensions
       sis_novelty: sisResult?.sis.novelty ?? null,

@@ -70,49 +70,35 @@ export async function retrieveContext(userQuery: string): Promise<RetrievedConte
     }
   }
 
-  // ── Total signal count for context metadata ───────────────────────────────
+  // ── Total APPROVED signal count for context metadata ─────────────────────
   const { count: totalSignals } = await supabase
     .from('signals')
     .select('id', { count: 'exact', head: true })
-    .eq('status', 'ACTIVE')
+    .eq('quality_state', 'APPROVED')
+    .in('status', ['ACTIVE', 'PROMOTED'])
 
   // ── FTS: description search, category-aware, limit 15 ────────────────────
   const sigBaseQuery = supabase
     .from('signals')
     .select('id, title, description, category, signal_score, confidence_score, created_at')
-    .eq('status', 'ACTIVE')
+    .eq('quality_state', 'APPROVED')
+    .in('status', ['ACTIVE', 'PROMOTED'])
   const sigBase = categoryFilter ? sigBaseQuery.eq('category', categoryFilter) : sigBaseQuery
 
-  const [signalsFTS, eventsResult, reportsResult] = await Promise.all([
-    sigBase
-      .textSearch('description', query, { type: 'websearch', config: 'english' })
-      .order('signal_score', { ascending: false })
-      .limit(15),
-    supabase
-      .from('events')
-      .select('id, title, summary, impact_summary, forecast, event_type, timeline_date')
-      .textSearch('title', query, { type: 'websearch', config: 'english' })
-      .order('impact_score', { ascending: false })
-      .limit(5),
-    supabase
-      .from('reports')
-      .select('id, title, summary, content, report_type, published_at')
-      .not('published_at', 'is', null)
-      .textSearch('title', query, { type: 'websearch', config: 'english' })
-      .order('published_at', { ascending: false })
-      .limit(3),
-  ])
+  const signalsFTS = await sigBase
+    .textSearch('description', query, { type: 'websearch', config: 'english' })
+    .order('signal_score', { ascending: false })
+    .limit(15)
 
   let signals = (signalsFTS.data ?? []) as RetrievedContext['signals']
-  const events = (eventsResult.data ?? []) as RetrievedContext['events']
-  const reports = (reportsResult.data ?? []) as RetrievedContext['reports']
 
-  // ── Fallback: category-aware top signals by score ─────────────────────────
+  // ── Fallback: category-aware top APPROVED signals by score ────────────────
   if (signals.length === 0) {
     const fallbackQuery = supabase
       .from('signals')
       .select('id, title, description, category, signal_score, confidence_score, created_at')
-      .eq('status', 'ACTIVE')
+      .eq('quality_state', 'APPROVED')
+      .in('status', ['ACTIVE', 'PROMOTED'])
       .order('signal_score', { ascending: false })
       .limit(10)
     const fallback = categoryFilter ? fallbackQuery.eq('category', categoryFilter) : fallbackQuery
@@ -121,11 +107,46 @@ export async function retrieveContext(userQuery: string): Promise<RetrievedConte
   }
 
   const total = totalSignals ?? 0
+
+  // Fail closed. Events, Reports and their Forecast text are derivative
+  // evidence; without at least one APPROVED origin Signal, none of them may
+  // enter the Assistant context and there is no fallback to legacy ACTIVE.
+  if (signals.length === 0) {
+    return {
+      signals: [],
+      events: [],
+      reports: [],
+      hasContext: false,
+      contextSummary: `No quality-approved Observatory evidence found. Observatory contains ${total} approved signals.`,
+    }
+  }
+
+  const approvedSignalIds = signals.map((signal) => signal.id)
+  const [eventsResult, reportsResult] = await Promise.all([
+    supabase
+      .from('events')
+      .select('id, title, summary, impact_summary, forecast, event_type, timeline_date')
+      .in('signal_id', approvedSignalIds)
+      .textSearch('title', query, { type: 'websearch', config: 'english' })
+      .order('impact_score', { ascending: false })
+      .limit(5),
+    supabase
+      .from('reports')
+      .select('id, title, summary, content, report_type, published_at')
+      .overlaps('signal_ids', approvedSignalIds)
+      .not('published_at', 'is', null)
+      .textSearch('title', query, { type: 'websearch', config: 'english' })
+      .order('published_at', { ascending: false })
+      .limit(3),
+  ])
+
+  const events = (eventsResult.data ?? []) as RetrievedContext['events']
+  const reports = (reportsResult.data ?? []) as RetrievedContext['reports']
   const hasContext = signals.length > 0 || events.length > 0 || reports.length > 0
 
   const contextSummary = hasContext
-    ? `Retrieved ${signals.length} signal(s) from ${total} total in Observatory. Events: ${events.length}. Reports: ${reports.length}.${categoryFilter ? ` Category filter: ${categoryFilter}.` : ''}`
-    : `No relevant Observatory intelligence found. Observatory contains ${total} total signals.`
+    ? `Retrieved ${signals.length} quality-approved signal(s) from ${total} approved in Observatory. Events: ${events.length}. Reports: ${reports.length}.${categoryFilter ? ` Category filter: ${categoryFilter}.` : ''}`
+    : `No quality-approved Observatory evidence found. Observatory contains ${total} approved signals.`
 
   return { signals, events, reports, hasContext, contextSummary }
 }
@@ -134,7 +155,7 @@ export async function retrieveContext(userQuery: string): Promise<RetrievedConte
 
 export function formatContextForPrompt(ctx: RetrievedContext): string {
   if (!ctx.hasContext) {
-    return 'No relevant Observatory intelligence found.'
+    return ctx.contextSummary
   }
 
   const parts: string[] = []

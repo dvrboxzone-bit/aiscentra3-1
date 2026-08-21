@@ -53,6 +53,8 @@ METRICS_EXTEND_MIGRATION="supabase/migrations/20260809130000_extend_pipeline_met
 [[ -f "$METRICS_MIGRATION" ]] || { echo "FATAL: $METRICS_MIGRATION not found (run from repo root)"; exit 1; }
 METRICS_REJECTED_RETRIED_MIGRATION="supabase/migrations/20260811130000_extend_pipeline_metrics_rejected_retried.sql"
 [[ -f "$METRICS_REJECTED_RETRIED_MIGRATION" ]] || { echo "FATAL: $METRICS_REJECTED_RETRIED_MIGRATION not found (run from repo root)"; exit 1; }
+QUALITY_FOUNDATION_MIGRATION="supabase/migrations/20260821023045_add_signal_quality_foundation.sql"
+[[ -f "$QUALITY_FOUNDATION_MIGRATION" ]] || { echo "FATAL: $QUALITY_FOUNDATION_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -125,7 +127,12 @@ CREATE TABLE public.signals (
   qualification_score NUMERIC,
   momentum_score INT NOT NULL DEFAULT 0,
   momentum_last_calculated TIMESTAMPTZ,
-  status TEXT NOT NULL DEFAULT 'ACTIVE'
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  intelligence_type TEXT,
+  sis_final NUMERIC,
+  anti_hype_score NUMERIC,
+  validation_flags TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE public.observations (
   id UUID PRIMARY KEY,
@@ -170,6 +177,20 @@ $PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
 
 echo "Applying the pipeline-metrics rejected/retried extension migration..."
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
+
+echo "Creating minimal Event/Report fixture tables for quality publication guards..."
+$PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE public.events (
+  id UUID PRIMARY KEY,
+  signal_id UUID NOT NULL
+);
+CREATE TABLE public.reports (
+  id UUID PRIMARY KEY,
+  signal_ids UUID[] NOT NULL DEFAULT '{}',
+  event_ids UUID[] NOT NULL DEFAULT '{}',
+  published_at TIMESTAMPTZ
+);
+SQL
 
 fail=0
 check() { # name expected actual
@@ -507,9 +528,48 @@ $PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
 echo "TEST 17 — production schema gate (scripts/release/schema-check.sql): real pass/fail against a real schema"
-echo "  -- against the FULL PR #45 schema (already applied earlier in this script) -- must return ZERO rows --"
+echo "  -- applying Phase 1 after earlier mutation tests, then checking the full current schema --"
+$PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
+
+echo "  -- simulating Phase 1 not applied: remove every gated quality object -- must block release with every exact gap --"
+$PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+DROP TRIGGER signals_quality_decision_on_insert ON public.signals;
+DROP TRIGGER signals_quality_decision_on_state_change ON public.signals;
+DROP TRIGGER events_require_quality_approved_signal_on_insert ON public.events;
+DROP TRIGGER events_require_quality_approved_signal_on_update ON public.events;
+DROP TRIGGER reports_require_quality_approved_evidence_on_insert ON public.reports;
+DROP TRIGGER reports_require_quality_approved_evidence_on_update ON public.reports;
+DROP TABLE public.signal_quality_decisions;
+DROP FUNCTION public.prevent_signal_quality_decision_mutation();
+DROP FUNCTION public.record_signal_quality_decision();
+DROP FUNCTION public.enforce_quality_approved_event_origin();
+DROP FUNCTION public.enforce_quality_approved_report_publication();
+ALTER TABLE public.signals
+  DROP CONSTRAINT signals_quality_state_metadata_check,
+  DROP CONSTRAINT signals_quality_approved_v2_invariants_check,
+  DROP COLUMN quality_state,
+  DROP COLUMN quality_reason_codes,
+  DROP COLUMN quality_rule_version,
+  DROP COLUMN quality_evaluated_at,
+  DROP COLUMN quarantined_at;
+DROP TYPE public.signal_quality_state;
+SQL
+
+PHASE1_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
+PHASE1_SCHEMA_MISSING_COUNT="$(echo "$PHASE1_SCHEMA_MISSING" | grep -c '^MISSING' || true)"
+check "a schema without Phase 1 produces exactly 24 quality missing-object rows" "24" "$PHASE1_SCHEMA_MISSING_COUNT"
+check "the missing quality enum is named" "1" \
+  "$(echo "$PHASE1_SCHEMA_MISSING" | grep -c 'MISSING TYPE: public.signal_quality_state')"
+check "the missing quality ledger is named" "1" \
+  "$(echo "$PHASE1_SCHEMA_MISSING" | grep -c 'MISSING TABLE: public.signal_quality_decisions')"
+check "the missing APPROVED invariant is named" "1" \
+  "$(echo "$PHASE1_SCHEMA_MISSING" | grep -c 'MISSING CONSTRAINT: public.signals.signals_quality_approved_v2_invariants_check')"
+check "the missing Event guard trigger is named" "1" \
+  "$(echo "$PHASE1_SCHEMA_MISSING" | grep -c 'MISSING OR DISABLED TRIGGER: public.events.events_require_quality_approved_signal_on_insert')"
+check "the missing Report guard trigger is named" "1" \
+  "$(echo "$PHASE1_SCHEMA_MISSING" | grep -c 'MISSING OR DISABLED TRIGGER: public.reports.reports_require_quality_approved_evidence_on_insert')"
 
 echo "  -- simulating the REAL incident: the exact PR #44 schema (PR #45's objects removed) -- must correctly identify EVERY gap --"
 $PG -c "ALTER TABLE public.signals DROP COLUMN IF EXISTS verification_state;" >/dev/null
@@ -532,7 +592,7 @@ OLD_SCHEMA_MISSING_COUNT="$(echo "$OLD_SCHEMA_MISSING" | grep -c '^MISSING' || t
 # = 13. (An earlier version of this test asserted 9, undercounting the
 # pipeline_metrics column cascade -- caught by running this exact test
 # and correcting the expectation, not the query.)
-check "the real PR #44 schema (incomplete) produces exactly 15 missing-object rows (4 columns + 1 table + 6 cascade-missing table columns [4 original + items_rejected + items_retried, added by the enrichment-throughput fix] + 4 functions)" "15" "$OLD_SCHEMA_MISSING_COUNT"
+check "the real PR #44 schema (incomplete) produces exactly 39 missing-object rows (15 PR #45 gaps + 24 Phase 1 gaps)" "39" "$OLD_SCHEMA_MISSING_COUNT"
 check "the specific incident-causing gap (has_verified_source) is named in the output" "1" \
   "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING COLUMN: signals.has_verified_source')"
 check "the missing pipeline_metrics table is named" "1" \
@@ -540,15 +600,13 @@ check "the missing pipeline_metrics table is named" "1" \
 check "a missing function (apply_signal_corroboration) is named" "1" \
   "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING FUNCTION: public.apply_signal_corroboration')"
 
-echo "  -- restoring the full schema (TEST 17 above intentionally dropped these objects to simulate the incident) so later tests see the complete PR #45 schema --"
+echo "  -- restoring the pre-Phase-1 schema; quality restore is deferred until after the remaining mutation test --"
 $PG -v ON_ERROR_STOP=1 -f "$VERIFICATION_STATE_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$PUBLICATION_GATE_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$CORROBORATION_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
-POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
-check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
 
 echo ""
 echo "TEST 18 — verify-urls backfill: real deterministic pagination, priority, resumability, idempotent re-run"
@@ -635,6 +693,11 @@ check "items_retried's real column comment states it IS included in items_attemp
   "$(echo "$ITEMS_RETRIED_COMMENT" | grep -c 'IS *one of the four addends')"
 check "items_retried's real column comment does NOT contain the old, contradictory 'excluded from' claim" "0" \
   "$(echo "$ITEMS_RETRIED_COMMENT" | grep -c 'excluded from items_attempted')"
+
+echo "  -- final restore: apply Phase 1 after all tests that intentionally mutate Signals --"
+$PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
+POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
+check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then
