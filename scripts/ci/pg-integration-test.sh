@@ -131,7 +131,8 @@ CREATE TABLE public.signals (
   intelligence_type TEXT,
   sis_final NUMERIC,
   anti_hype_score NUMERIC,
-  validation_flags TEXT[] NOT NULL DEFAULT '{}'
+  validation_flags TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE public.observations (
   id UUID PRIMARY KEY,
