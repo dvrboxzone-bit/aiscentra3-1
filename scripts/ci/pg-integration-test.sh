@@ -182,7 +182,7 @@ echo "Creating minimal Event/Report fixture tables for quality publication guard
 $PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE TABLE public.events (
   id UUID PRIMARY KEY,
-  signal_id UUID NOT NULL REFERENCES public.signals(id)
+  signal_id UUID NOT NULL
 );
 CREATE TABLE public.reports (
   id UUID PRIMARY KEY,
@@ -191,9 +191,6 @@ CREATE TABLE public.reports (
   published_at TIMESTAMPTZ
 );
 SQL
-
-echo "Applying the Signal Quality Foundation migration..."
-$PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 
 fail=0
 check() { # name expected actual
@@ -531,7 +528,8 @@ $PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
 echo "TEST 17 — production schema gate (scripts/release/schema-check.sql): real pass/fail against a real schema"
-echo "  -- against the full current schema (already applied earlier in this script) -- must return ZERO rows --"
+echo "  -- applying Phase 1 after earlier mutation tests, then checking the full current schema --"
+$PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
 
@@ -602,16 +600,13 @@ check "the missing pipeline_metrics table is named" "1" \
 check "a missing function (apply_signal_corroboration) is named" "1" \
   "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING FUNCTION: public.apply_signal_corroboration')"
 
-echo "  -- restoring the full schema (TEST 17 above intentionally dropped these objects to simulate the incident) so later tests see the complete PR #45 schema --"
+echo "  -- restoring the pre-Phase-1 schema; quality restore is deferred until after the remaining mutation test --"
 $PG -v ON_ERROR_STOP=1 -f "$VERIFICATION_STATE_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$PUBLICATION_GATE_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$CORROBORATION_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_EXTEND_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
-$PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
-POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
-check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
 
 echo ""
 echo "TEST 18 — verify-urls backfill: real deterministic pagination, priority, resumability, idempotent re-run"
@@ -698,6 +693,11 @@ check "items_retried's real column comment states it IS included in items_attemp
   "$(echo "$ITEMS_RETRIED_COMMENT" | grep -c 'IS *one of the four addends')"
 check "items_retried's real column comment does NOT contain the old, contradictory 'excluded from' claim" "0" \
   "$(echo "$ITEMS_RETRIED_COMMENT" | grep -c 'excluded from items_attempted')"
+
+echo "  -- final restore: apply Phase 1 after all tests that intentionally mutate Signals --"
+$PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
+POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
+check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then
