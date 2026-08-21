@@ -14,15 +14,16 @@
  * Rate limits: max 20 per category per 24h, max 60 total per 24h.
  */
 import { createAdminClient } from '@/lib/supabase/server'
+import { isSignalQualityApproved } from '@/modules/signals/quality'
 import type { Signal } from '@/types/database'
 
 export const PROMOTION_THRESHOLDS = {
-  SIGNAL_SCORE:     70,
+  SIGNAL_SCORE: 70,
   CONFIDENCE_SCORE: 65,
-  MAX_AGE_DAYS:      7,
-  MIN_DELAY_HOURS:   4,
+  MAX_AGE_DAYS: 7,
+  MIN_DELAY_HOURS: 4,
   MAX_PER_CATEGORY: 20,
-  MAX_TOTAL:        60,
+  MAX_TOTAL: 60,
 } as const
 
 export interface PromotionCandidate {
@@ -38,6 +39,13 @@ export interface PromotionCheck {
 // ── Eligibility Check ─────────────────────────────────────────────────────────
 
 export function checkPromotionEligibility(signal: Signal): PromotionCheck {
+  if (!isSignalQualityApproved(signal)) {
+    return {
+      eligible: false,
+      reason: `quality_state is ${signal.quality_state}, not APPROVED`,
+    }
+  }
+
   if (signal.status !== 'ACTIVE') {
     return { eligible: false, reason: `status is ${signal.status}, not ACTIVE` }
   }
@@ -63,8 +71,8 @@ export function checkPromotionEligibility(signal: Signal): PromotionCheck {
     }
   }
 
-  const ageMs   = Date.now() - new Date(signal.created_at).getTime()
-  const ageDays  = ageMs / (1000 * 60 * 60 * 24)
+  const ageMs = Date.now() - new Date(signal.created_at).getTime()
+  const ageDays = ageMs / (1000 * 60 * 60 * 24)
   const ageHours = ageMs / (1000 * 60 * 60)
 
   if (ageDays > PROMOTION_THRESHOLDS.MAX_AGE_DAYS) {
@@ -94,18 +102,17 @@ export async function checkRateLimits(_category: string): Promise<{
   categoryCount: number
   totalCount: number
 }> {
-  const supabase  = createAdminClient()
-  const since24h  = new Date(Date.now() - 86400000).toISOString()
+  const supabase = createAdminClient()
+  const since24h = new Date(Date.now() - 86400000).toISOString()
 
   const [categoryResult, totalResult] = await Promise.all([
     supabase
       .from('events')
       .select('id', { count: 'exact', head: true })
       .eq('manual_override', false)
-      .gte('created_at', since24h)
-      // Join via signal category — simplified: count events from signals of this category
-      // Full implementation uses a join; for MVP we approximate with total limit only
-    ,
+      .gte('created_at', since24h),
+    // Join via signal category — simplified: count events from signals of this category
+    // Full implementation uses a join; for MVP we approximate with total limit only
     supabase
       .from('events')
       .select('id', { count: 'exact', head: true })
@@ -114,11 +121,11 @@ export async function checkRateLimits(_category: string): Promise<{
   ])
 
   const categoryCount = categoryResult.count ?? 0
-  const totalCount    = totalResult.count    ?? 0
+  const totalCount = totalResult.count ?? 0
 
   const allowed =
     categoryCount < PROMOTION_THRESHOLDS.MAX_PER_CATEGORY &&
-    totalCount    < PROMOTION_THRESHOLDS.MAX_TOTAL
+    totalCount < PROMOTION_THRESHOLDS.MAX_TOTAL
 
   return { allowed, categoryCount, totalCount }
 }
@@ -126,19 +133,22 @@ export async function checkRateLimits(_category: string): Promise<{
 // ── Fetch Eligible Signals ────────────────────────────────────────────────────
 
 export async function fetchEligibleSignals(limit = 10): Promise<Signal[]> {
-  const supabase  = createAdminClient()
-  const cutoff    = new Date(Date.now() - PROMOTION_THRESHOLDS.MAX_AGE_DAYS * 86400000).toISOString()
-  const minDelay  = new Date(Date.now() - PROMOTION_THRESHOLDS.MIN_DELAY_HOURS * 3600000).toISOString()
+  const supabase = createAdminClient()
+  const cutoff = new Date(Date.now() - PROMOTION_THRESHOLDS.MAX_AGE_DAYS * 86400000).toISOString()
+  const minDelay = new Date(
+    Date.now() - PROMOTION_THRESHOLDS.MIN_DELAY_HOURS * 3600000,
+  ).toISOString()
 
   const { data, error } = await supabase
     .from('signals')
     .select('*')
+    .eq('quality_state', 'APPROVED')
     .eq('status', 'ACTIVE')
     .gte('signal_score', PROMOTION_THRESHOLDS.SIGNAL_SCORE)
     .gte('confidence_score', PROMOTION_THRESHOLDS.CONFIDENCE_SCORE)
-    .gte('created_at', cutoff)           // Not older than 7 days
-    .lte('created_at', minDelay)         // At least 4 hours old
-    .eq('validation_flags', '{}')        // No open flags
+    .gte('created_at', cutoff) // Not older than 7 days
+    .lte('created_at', minDelay) // At least 4 hours old
+    .eq('validation_flags', '{}') // No open flags
     .order('signal_score', { ascending: false })
     .limit(limit)
 
@@ -152,18 +162,16 @@ export async function fetchEligibleSignals(limit = 10): Promise<Signal[]> {
 
 // ── Mark Signal as Promoted ───────────────────────────────────────────────────
 
-export async function markSignalPromoted(
-  signalId: string,
-  _eventId: string,
-): Promise<void> {
+export async function markSignalPromoted(signalId: string, _eventId: string): Promise<void> {
   const supabase = createAdminClient()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabase as any)
     .from('signals')
     .update({
-      status:     'PROMOTED',
+      status: 'PROMOTED',
       updated_at: new Date().toISOString(),
     })
     .eq('id', signalId)
+    .eq('quality_state', 'APPROVED')
 }

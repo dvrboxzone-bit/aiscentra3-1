@@ -21,19 +21,22 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const appUrl     = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
+  const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
   const cronSecret = process.env['CRON_SECRET'] ?? ''
-  const supabase   = createAdminClient()
+  const supabase = createAdminClient()
 
   const triggered: string[] = []
 
   const post = (body: object): void => {
     fetch(`${appUrl}/api/reports/generate`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-cron-secret': cronSecret },
-      body:    JSON.stringify(body),
+      body: JSON.stringify(body),
     }).catch((err: unknown) => {
-      console.error('[cron/reports] Request failed:', err instanceof Error ? err.message : String(err))
+      console.error(
+        '[cron/reports] Request failed:',
+        err instanceof Error ? err.message : String(err),
+      )
     })
   }
 
@@ -42,7 +45,8 @@ export async function GET(request: Request): Promise<NextResponse> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: events } = await (supabase as any)
     .from('events')
-    .select('id')
+    .select('id, signals!inner(quality_state)')
+    .eq('signals.quality_state', 'APPROVED')
     .gte('created_at', since48h)
     .limit(5)
 
@@ -59,8 +63,15 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   // 3. Trend Report: rotate through categories by day of month
   const TREND_CATEGORIES = [
-    'MODELS', 'RESEARCH', 'COMPANIES', 'FUNDING',
-    'AGENTS', 'REGULATION', 'INFRASTRUCTURE', 'OPEN_SOURCE', 'HARDWARE',
+    'MODELS',
+    'RESEARCH',
+    'COMPANIES',
+    'FUNDING',
+    'AGENTS',
+    'REGULATION',
+    'INFRASTRUCTURE',
+    'OPEN_SOURCE',
+    'HARDWARE',
   ]
   const todayIndex = new Date().getDate() % TREND_CATEGORIES.length
   const trendCategory = TREND_CATEGORIES[todayIndex]

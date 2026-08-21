@@ -51,7 +51,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (!body.signalId) {
         return NextResponse.json({ error: 'signalId required' }, { status: 400 })
       }
-      const { data } = await supabase.from('signals').select('*').eq('id', body.signalId).single()
+      const { data } = await supabase
+        .from('signals')
+        .select('*')
+        .eq('id', body.signalId)
+        .eq('quality_state', 'APPROVED')
+        .single()
       if (!data) return NextResponse.json({ error: 'Signal not found' }, { status: 404 })
       const result = await generateSignalBrief(data as Signal, deadlineAt)
       return NextResponse.json(result)

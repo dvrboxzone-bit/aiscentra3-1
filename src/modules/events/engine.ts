@@ -16,6 +16,7 @@ import {
   buildEventPrompt,
 } from './event-prompt'
 import { markSignalPromoted } from './promotion'
+import { isSignalQualityApproved } from '@/modules/signals/quality'
 import type { Signal } from '@/types/database'
 
 export interface EventEngineResult {
@@ -29,6 +30,17 @@ export async function processSignalIntoEvent(
   signal: Signal,
   deadlineAt: number,
 ): Promise<EventEngineResult> {
+  // Direct callers cannot bypass fetchEligibleSignals(). Pending or
+  // quarantined Signals must not spend AI budget or create a public
+  // Event/Forecast row.
+  if (!isSignalQualityApproved(signal)) {
+    return {
+      signalId: signal.id,
+      outcome: 'error',
+      reason: `Signal quality_state=${signal.quality_state}; APPROVED is required`,
+    }
+  }
+
   const supabase = createAdminClient()
 
   // ── Guard: check for existing event on this signal ────────────────────────

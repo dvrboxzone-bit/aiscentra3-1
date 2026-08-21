@@ -55,6 +55,15 @@ export type SignalCategory =
 
 export type SignalSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
 
+export type SignalQualityState = 'PENDING' | 'APPROVED' | 'QUARANTINED'
+
+export type SignalQualityReasonCode =
+  | 'AWAITING_QUALITY_REVIEW'
+  | 'LEGACY_STATUS_WEAK'
+  | 'LEGACY_STATUS_DORMANT'
+  | 'LEGACY_STATUS_EXPIRED'
+  | 'LEGACY_STATUS_REJECTED'
+
 export type EventType =
   | 'LAUNCH'
   | 'PARTNERSHIP'
@@ -368,6 +377,13 @@ export interface Signal {
   lifecycle_state: string
   dormant_reason: string | null
   reactivate_after: string | null
+
+  // Quality-First foundation (Phase 1)
+  quality_state: SignalQualityState
+  quality_reason_codes: SignalQualityReasonCode[]
+  quality_rule_version: string
+  quality_evaluated_at: string | null
+  quarantined_at: string | null
 
   // V1: Lifecycle
   validation_flags: string[]
