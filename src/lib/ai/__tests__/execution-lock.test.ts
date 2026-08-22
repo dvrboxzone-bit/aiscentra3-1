@@ -22,16 +22,32 @@ import {
 describe('budget is reserved per PROVIDER ATTEMPT, not per model', () => {
   const originalFetch = globalThis.fetch
   const originalKey = process.env['GROQ_API_KEY']
+  const originalCfToken = process.env['CLOUDFLARE_API_TOKEN']
+  const originalCfAccount = process.env['CLOUDFLARE_ACCOUNT_ID']
   let restore: (() => void) | undefined
 
   beforeEach(() => {
     process.env['GROQ_API_KEY'] = 'test-key-not-real'
+    // REAL ARCHITECTURE CHANGE (independent audit): the real fallback
+    // chain now includes a third provider (Cloudflare). Without a real
+    // (even if fake) CLOUDFLARE_API_TOKEN/ACCOUNT_ID, callProvider()
+    // genuinely fails FAST for that one attempt (missing-config error,
+    // before any fetch) rather than retrying like the other two real
+    // 503s -- correct behavior, but it breaks this describe block's
+    // own 1:1 calls==reservations invariant unless all three providers
+    // are given the SAME uniform treatment.
+    process.env['CLOUDFLARE_API_TOKEN'] = 'test-key-not-real'
+    process.env['CLOUDFLARE_ACCOUNT_ID'] = 'test-account-not-real'
   })
   afterEach(() => {
     restore?.()
     globalThis.fetch = originalFetch
     if (originalKey === undefined) delete process.env['GROQ_API_KEY']
     else process.env['GROQ_API_KEY'] = originalKey
+    if (originalCfToken === undefined) delete process.env['CLOUDFLARE_API_TOKEN']
+    else process.env['CLOUDFLARE_API_TOKEN'] = originalCfToken
+    if (originalCfAccount === undefined) delete process.env['CLOUDFLARE_ACCOUNT_ID']
+    else process.env['CLOUDFLARE_ACCOUNT_ID'] = originalCfAccount
   })
 
   test('four provider attempts produce four reservations', async () => {
@@ -53,7 +69,10 @@ describe('budget is reserved per PROVIDER ATTEMPT, not per model', () => {
       agentComplete('parser', [{ role: 'user', content: 'hi' }], {}, Date.now() + 120_000),
     )
 
-    assert.ok(calls >= 4, `expected >=4 provider calls, got ${calls}`)
+    // REAL ARCHITECTURE CHANGE: the real fallback chain now has 3
+    // models (was 2), each retrying MAX_RETRIES(3)+1=4 times on a
+    // uniformly-retryable 503 -- 3*4=12, not the old 2*4=8.
+    assert.ok(calls >= 12, `expected >=12 provider calls, got ${calls}`)
     assert.equal(
       reservations.length,
       calls,
@@ -115,17 +134,18 @@ describe('budget is reserved per PROVIDER ATTEMPT, not per model', () => {
     const { agentComplete } = await import('../agent')
     await agentComplete('classifier', [{ role: 'user', content: 'hi' }], {}, Date.now() + 120_000)
 
-    // classifier's chain is [8b primary, 70b fallback]. Reserving on the
-    // role's declared primary would charge the escalation to 8b; keying
-    // on ref.model charges it to the 70b budget it actually spends.
+    // classifier's chain is [MINI primary, PRIMARY fallback, CLOUDFLARE
+    // fallback]. Reserving on the role's declared primary would charge
+    // the escalation to MINI; keying on ref.model charges it to the
+    // PRIMARY (120b) budget it actually spends.
     assert.ok(reservedModels.length >= 2, 'both chain entries must reserve')
     assert.ok(
       new Set(reservedModels).size >= 2,
       `reservations must name distinct models, got ${JSON.stringify(reservedModels)}`,
     )
     assert.ok(
-      reservedModels.some((m) => m.includes('70b')),
-      'the 70b fallback must be charged to the 70b budget',
+      reservedModels.some((m) => m.includes('120b')),
+      'the 120b (primary) fallback must be charged to the 120b budget',
     )
   })
 })
