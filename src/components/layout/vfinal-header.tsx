@@ -223,7 +223,7 @@ export function VfinalHeader(): React.JSX.Element {
             </Link>
 
             <a
-              href="mailto:contact@aiscentra.com"
+              href="mailto:aiscentra@gmail.com"
               className="hide-mobile text-sm font-medium text-mint-signal underline-offset-4 hover:underline"
             >
               Help the project
@@ -323,7 +323,7 @@ export function VfinalHeader(): React.JSX.Element {
             Roadmap
           </Link>
 
-          <a href="mailto:contact@aiscentra.com" onClick={() => closeMobileMenu(false)}>
+          <a href="mailto:aiscentra@gmail.com" onClick={() => closeMobileMenu(false)}>
             Help the project
           </a>
           <Link
