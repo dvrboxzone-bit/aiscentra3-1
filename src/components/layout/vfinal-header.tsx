@@ -193,7 +193,7 @@ export function VfinalHeader(): React.JSX.Element {
             </Link>
 
             <Link
-              href={onHomepage ? '#trajectories' : '/#trajectories'}
+              href="/trajectories"
               className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
             >
               Trajectories
@@ -299,10 +299,7 @@ export function VfinalHeader(): React.JSX.Element {
           <Link href="/observatory" onClick={() => closeMobileMenu(false)}>
             Observations
           </Link>
-          <Link
-            href={onHomepage ? '#trajectories' : '/#trajectories'}
-            onClick={() => closeMobileMenu(false)}
-          >
+          <Link href="/trajectories" onClick={() => closeMobileMenu(false)}>
             Trajectories
           </Link>
           <Link href={assistantHref} onClick={handleAssistantClick}>

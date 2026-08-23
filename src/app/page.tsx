@@ -23,50 +23,8 @@ export const metadata: Metadata = {
 
 export const revalidate = 3600
 
-const TRAJECTORIES = [
-  {
-    name: 'DeepMind',
-    year: '2010',
-    status: 'ACTIVE',
-    description:
-      'Founded as an independent AI research lab, acquired by Google in 2014 and now operating as Google DeepMind.',
-  },
-  {
-    name: 'Cruise',
-    year: '2013',
-    status: 'WOUND DOWN',
-    description:
-      'GM ended Cruise robotaxi development in 2024 and shifted the unit toward driver-assistance work.',
-  },
-  {
-    name: 'OpenAI',
-    year: '2015',
-    status: 'ACTIVE',
-    description:
-      'Founded as a nonprofit AI lab, later restructured to raise capital and develop the GPT and ChatGPT product families.',
-  },
-  {
-    name: 'Stability AI',
-    year: '2019',
-    status: 'RESTRUCTURED',
-    description:
-      'The company behind Stable Diffusion changed leadership and reorganized its business after a period of financial pressure.',
-  },
-  {
-    name: 'Anthropic',
-    year: '2021',
-    status: 'ACTIVE',
-    description:
-      'Founded by former OpenAI researchers around AI safety and interpretability, and developer of the Claude model family.',
-  },
-  {
-    name: 'Inflection AI',
-    year: '2022',
-    status: 'ACQUI-HIRED',
-    description:
-      'After building the Pi assistant, its founders and much of its team joined Microsoft in 2024 while the company continued independently.',
-  },
-] as const
+// TRAJECTORIES data moved to src/lib/trajectories.ts -- the section
+// itself moved from this homepage to its own /trajectories page.
 
 /**
  * AIscentra — vfinal homepage (Frontend Design Foundation, layer 4)
@@ -187,45 +145,10 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
       <div className="section-gap" />
 
-      {/* ── 02 — Trajectories (editorial records; detail routes not yet available) ── */}
-      <section id="trajectories" data-section="trajectories" className="textured-bg px-6 py-24">
-        <div className="tech-grid" />
-        <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">02 — Trajectories</span>
-          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
-            Company paths.
-          </h2>
-          <div className="grid gap-px border border-border-subtle bg-deep-obsidian sm:grid-cols-2 lg:grid-cols-3">
-            {TRAJECTORIES.map((trajectory) => (
-              <article
-                key={trajectory.name}
-                className="reveal flex min-h-72 flex-col border-border-subtle bg-surface-tonal p-7"
-                data-content-slot="trajectory"
-              >
-                <div className="mb-8 flex items-start justify-between gap-4">
-                  <h3 className="font-heading text-3xl text-frost">{trajectory.name}</h3>
-                  <span className="trajectory-mark">{trajectory.year}</span>
-                </div>
-                <span className="font-caption mb-4 text-mint-signal">{trajectory.status}</span>
-                <p className="mb-8 text-sm leading-relaxed text-silver-haze">
-                  {trajectory.description}
-                </p>
-                <span
-                  className="arrow-link mt-auto cursor-not-allowed opacity-40"
-                  title="Coming soon"
-                  aria-disabled="true"
-                >
-                  Full trajectory <span>↗</span>
-                </span>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <div className="section-gap" />
-
-      {/* ── 03 — Forecasts (honest IN DEVELOPMENT, unchanged from source) ── */}
+      {/* ── 02 — Forecasts (honest IN DEVELOPMENT, unchanged from source;
+          renumbered from 03 after Trajectories moved to its own
+          /trajectories page -- independent-review correction, explicit
+          owner instruction) ── */}
       <section
         id="forecasts"
         data-section="forecasts"
@@ -234,7 +157,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       >
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">03 — Forecasts</span>
+          <span className="font-caption mb-8 block text-silver-haze">02 — Forecasts</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             Forecasts.
           </h2>
@@ -293,7 +216,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="news" data-section="observations" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">04 — Observations</span>
+          <span className="font-caption mb-8 block text-silver-haze">03 — Observations</span>
           <div className="mb-12 flex flex-col gap-8 md:flex-row md:items-end">
             <h2 className="font-display reveal flex-1 text-[12vw] text-frost md:text-[100px]">
               Observations.
