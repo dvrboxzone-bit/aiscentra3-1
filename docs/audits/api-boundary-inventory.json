@@ -457,7 +457,7 @@
       "rawErrorExposureRisk": "no -- catch blocks return a fixed, generic user-facing message; the real error/response body is only logged server-side via console.error, never returned to the caller",
       "productionState": "enabled, public, no restriction",
       "risk": "P3",
-      "notes": "Sends a real email via Resend's REST API using the site's own verified aiscentra.com domain. Real, honest known gap: no rate limiting or CAPTCHA (Cloudflare Turnstile) yet -- a malicious actor could script repeated submissions to exhaust the Resend account's own sending quota. Documented as a deliberate, small-scope v1 (task was explicitly \"a contact form,\" not \"a moderation system\") -- Turnstile is a planned, separate follow-up once real Turnstile credentials are obtained.",
+      "notes": "Sends a real email via Resend REST API using the site own verified aiscentra.com domain. Real Cloudflare Turnstile bot verification added: the client token is independently re-verified server-side against Cloudflare siteverify before any email is sent -- graceful no-op if TURNSTILE_SECRET_KEY is unset, matching the client widget own graceful degradation. Known, deliberate remaining gap: no app-level rate limiting yet beyond what Turnstile itself provides against scripted abuse.",
       "aiCallMode": "none",
       "weakSharedSecret": false,
       "hasCallerFacingRateLimit": false

@@ -2,7 +2,7 @@
  * AIscentra — Contact Form API
  *
  * POST /api/contact
- * Body: { name: string, email: string, message: string }
+ * Body: { name: string, email: string, message: string, turnstileToken: string | null }
  *
  * Sends a real email via Resend's REST API (no SDK dependency --
  * plain fetch, matching this project's own generic-HTTP-client
@@ -11,9 +11,23 @@
  * Resend as of 2026-08-03: domain added, DNS verified, status "ready
  * to send").
  *
- * Strict Zod validation on all three fields before any network call.
- * RESEND_API_KEY is read from env at request time (not at module load)
- * so a missing key fails this one request, not the whole build.
+ * Cloudflare Turnstile: the REAL trust boundary is here, not the
+ * client widget -- a client-side check alone can always be bypassed
+ * by a direct POST to this route, so the token is independently
+ * re-verified against Cloudflare's own siteverify API
+ * (https://challenges.cloudflare.com/turnstile/v0/siteverify) before
+ * any email is sent. If TURNSTILE_SECRET_KEY is genuinely unset (not
+ * yet configured), Turnstile enforcement is skipped entirely rather
+ * than either fabricating a pass or hard-failing every submission --
+ * matches the client's own graceful degradation (see contact-form.tsx's
+ * docstring) so the form remains usable while Turnstile is being
+ * rolled out, without ever silently pretending a real check happened
+ * when it didn't.
+ *
+ * Strict Zod validation on all form fields before any network call.
+ * Both RESEND_API_KEY and TURNSTILE_SECRET_KEY are read from env at
+ * request time (not at module load) so a missing key fails this one
+ * request, not the whole build.
  */
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
@@ -25,6 +39,7 @@ const ContactSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
   email: z.string().trim().email('A valid email is required').max(320),
   message: z.string().trim().min(1, 'Message is required').max(5000),
+  turnstileToken: z.string().nullable(),
 })
 
 function escapeHtml(value: string): string {
@@ -34,6 +49,26 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+interface TurnstileVerifyResponse {
+  success: boolean
+  'error-codes'?: string[]
+}
+
+async function verifyTurnstileToken(token: string, secretKey: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret: secretKey, response: token }),
+    })
+    const data = (await response.json()) as TurnstileVerifyResponse
+    return data.success === true
+  } catch (error) {
+    console.error('[api/contact] Turnstile siteverify request failed:', error)
+    return false
+  }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -50,7 +85,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: firstIssue?.message ?? 'Invalid input.' }, { status: 400 })
   }
 
-  const { name, email, message } = parsed.data
+  const { name, email, message, turnstileToken } = parsed.data
+
+  const turnstileSecret = process.env['TURNSTILE_SECRET_KEY']
+  if (turnstileSecret) {
+    if (!turnstileToken) {
+      return NextResponse.json(
+        { error: 'Please complete the verification check before sending.' },
+        { status: 400 },
+      )
+    }
+    const isHuman = await verifyTurnstileToken(turnstileToken, turnstileSecret)
+    if (!isHuman) {
+      return NextResponse.json({ error: 'Verification failed. Please try again.' }, { status: 400 })
+    }
+  }
 
   const apiKey = process.env['RESEND_API_KEY']
   if (!apiKey) {
