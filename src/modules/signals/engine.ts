@@ -657,7 +657,48 @@ export async function processObservation(
   }
 
   // Reject marketing
+  // REAL BUG FIXED (independent-review diagnosis, 2026-08-23): this
+  // path previously returned without ever updating the observation row
+  // or writing a signal_decision_log entry -- unlike every other
+  // rejection path in this function. A genuinely successful AI
+  // enrichment call classifying content as marketing left ZERO trace
+  // anywhere in the database: not in signal_decision_log, not in the
+  // observation's own qualification_result/rejection_code/
+  // rejection_reason. Combined with the real, matching gap on
+  // is_duplicate immediately below, this made it impossible to
+  // distinguish "the pipeline is genuinely rejecting content
+  // correctly" from "something is silently broken" -- exactly the
+  // diagnostic dead-end this fix closes. New code R-14 (first use):
+  // enrichment-stage AI-flagged marketing, distinct from the
+  // pre-filter's own zero-cost R-01–R-13 range, since this rejection
+  // only occurs AFTER a real, successful AI call, not before one.
   if (enriched.is_marketing) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'DISCARD',
+        rejection_code: 'R-14',
+        rejection_reason: 'marketing_content_detected',
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
+
+    await writeDecisionLog({
+      supabase,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'DISCARD',
+      rejection_code: 'R-14',
+      rejection_reason: 'marketing_content_detected',
+      engine_justification: 'Enrichment stage flagged content as marketing (is_marketing=true).',
+      sis_novelty: sisResult?.sis.novelty ?? null,
+      sis_importance: sisResult?.sis.importance ?? null,
+      sis_urgency: sisResult?.sis.urgency ?? null,
+      sis_confidence: sisResult?.sis.confidence ?? null,
+      sis_final: sisResult?.sis.final ?? null,
+    })
+
     return {
       observationId: observation.id,
       outcome: 'rejected_marketing',
@@ -666,11 +707,48 @@ export async function processObservation(
   }
 
   // Reject duplicate flagged by agent
+  // REAL BUG FIXED (independent-review diagnosis, 2026-08-23): same
+  // real gap as is_marketing above -- this is a DIFFERENT, LATER
+  // duplicate check than checkDuplicate() further up this function
+  // (which already correctly logs via R-11). Reusing R-11 here is
+  // intentional, not a new code: classifyOutcome() already buckets
+  // both under the identical 'rejected_duplicate' outcome, so the two
+  // real detection mechanisms (early title/category similarity vs.
+  // this later AI-judged duplicate) should share one rejection code,
+  // distinguished by their own real, different engine_justification
+  // text and decided_at timing rather than by a separate code.
   if (enriched.is_duplicate) {
+    const reason = `duplicate_flagged_by_agent: ${enriched.duplicate_note ?? ''}`
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'DISCARD',
+        rejection_code: 'R-11',
+        rejection_reason: reason,
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
+
+    await writeDecisionLog({
+      supabase,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'DISCARD',
+      rejection_code: 'R-11',
+      rejection_reason: reason,
+      engine_justification: `Enrichment stage flagged content as a duplicate (is_duplicate=true): ${enriched.duplicate_note ?? 'no note provided'}`,
+      sis_novelty: sisResult?.sis.novelty ?? null,
+      sis_importance: sisResult?.sis.importance ?? null,
+      sis_urgency: sisResult?.sis.urgency ?? null,
+      sis_confidence: sisResult?.sis.confidence ?? null,
+      sis_final: sisResult?.sis.final ?? null,
+    })
+
     return {
       observationId: observation.id,
       outcome: 'rejected_duplicate',
-      reason: `duplicate_flagged_by_agent: ${enriched.duplicate_note ?? ''}`,
+      reason,
     }
   }
 
@@ -728,7 +806,42 @@ export async function processObservation(
   })
 
   if (!validation.valid) {
+    // REAL BUG FIXED (independent-review diagnosis, 2026-08-23): same
+    // real silent-discard gap as is_marketing/is_duplicate above --
+    // validation.rejectionReason already carries a specific, real
+    // VAL-01..VAL-07 code and human-readable detail (see validation.ts)
+    // but this path threw it away without ever persisting it anywhere.
+    // New code R-15 (first use): enrichment-stage post-scoring
+    // validation failure -- the real VAL-XX detail is preserved in
+    // rejection_reason/engine_justification rather than replaced by it,
+    // so no existing information is lost, only newly persisted.
     const outcome = validation.canRetry ? 'rejected_validation' : 'rejected_low_score'
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from('observations')
+      .update({
+        qualification_result: 'DISCARD',
+        rejection_code: 'R-15',
+        rejection_reason: validation.rejectionReason,
+        engine_version: ENGINE_VERSION,
+      })
+      .eq('id', observation.id)
+
+    await writeDecisionLog({
+      supabase,
+      signal_id: null,
+      observation_id: observation.id,
+      decision: 'DISCARD',
+      rejection_code: 'R-15',
+      rejection_reason: validation.rejectionReason,
+      engine_justification: `Post-enrichment signal validation failed: ${validation.rejectionReason}`,
+      sis_novelty: sisResult?.sis.novelty ?? null,
+      sis_importance: sisResult?.sis.importance ?? null,
+      sis_urgency: sisResult?.sis.urgency ?? null,
+      sis_confidence: sisResult?.sis.confidence ?? null,
+      sis_final: sisResult?.sis.final ?? null,
+    })
+
     return { observationId: observation.id, outcome, reason: validation.rejectionReason }
   }
 
