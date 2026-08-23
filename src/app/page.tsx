@@ -270,67 +270,15 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
       <div className="section-gap" />
 
-      {/* ── 07 — Assistant ────────────────────────────────────────────── */}
-      <section id="assistant" data-section="assistant" className="textured-bg px-6 py-24">
-        <div className="tech-grid" />
-        <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">06 — Assistant</span>
-          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
-            Ask the
-            <br />
-            Observatory.
-          </h2>
-          <div className="grid items-start gap-16 md:grid-cols-2">
-            <div>
-              <span className="font-caption mb-4 block text-silver-haze">
-                OBSERVATORY ASSISTANT
-              </span>
-              <p className="mb-8 max-w-[60ch] text-lg text-silver-haze">
-                Query signals, events and intelligence using natural language.
-              </p>
-              <form
-                action="/assistant"
-                method="GET"
-                className="flex max-w-xl items-center gap-2 border border-border-subtle bg-surface-tonal p-2"
-              >
-                <input
-                  type="text"
-                  name="q"
-                  aria-label="Ask the Observatory"
-                  placeholder="What changed in the AI ecosystem today?"
-                  className="observatory-input font-body flex-1 border-none bg-transparent px-4 py-3 text-lg text-frost"
-                />
-                <button type="submit" className="btn-pill magnetic text-sm">
-                  Submit ↗
-                </button>
-              </form>
-            </div>
-            <div className="flex flex-col gap-4">
-              {[
-                'Summarize recent frontier model releases',
-                'What are the latest EU AI Act signals?',
-                'Track GPU supply chain changes',
-              ].map((suggestion) => (
-                <Link
-                  key={suggestion}
-                  href={`/assistant?q=${encodeURIComponent(suggestion)}`}
-                  className="flex items-center gap-4 border border-border-subtle bg-surface-tonal p-5 text-base text-silver-haze transition-colors hover:border-mint-signal hover:text-mint-signal"
-                >
-                  <span className="text-mint-signal">→</span> {suggestion}
-                </Link>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <div className="section-gap" />
-
-      {/* ── 08 — History ("Signal 001" — genuine static editorial content) ── */}
+      {/* ── 04 — History ("Signal 001" — genuine static editorial content).
+          Renumbered from 07 after the Assistant section moved to the
+          real sliding side panel (VfinalAssistantPanel, triggered from
+          the header's own "Assistant" button on every page) --
+          independent-review correction, explicit owner instruction. ── */}
       <section id="signal-001" data-section="history" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">07 — Signal 001</span>
+          <span className="font-caption mb-8 block text-silver-haze">04 — Signal 001</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             The Convergence.
           </h2>

@@ -40,14 +40,15 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     const jsx = await HomePage()
     const { container } = render(jsx)
 
-    // 1. Exact section order (7 sections, approved sequence after
-    // Trajectories moved to its own /trajectories page --
-    // independent-review correction, explicit owner instruction).
+    // 1. Exact section order (6 sections, approved sequence after
+    // Trajectories moved to /trajectories AND Assistant moved to the
+    // real sliding side panel -- both independent-review corrections,
+    // explicit owner instruction).
     const sectionIds = Array.from(container.querySelectorAll('section')).map((el) => el.id)
     assert.deepEqual(
       sectionIds,
-      ['hero', 'signals', 'forecasts', 'news', 'memory', 'assistant', 'signal-001'],
-      'all 7 sections must be present in the exact approved order',
+      ['hero', 'signals', 'forecasts', 'news', 'memory', 'signal-001'],
+      'all 6 sections must be present in the exact approved order',
     )
 
     // 2. Exactly 6 Featured Signal cards with a full real result.

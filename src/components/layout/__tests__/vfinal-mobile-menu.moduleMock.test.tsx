@@ -3,6 +3,7 @@ import '../../../lib/test-utils/dom-setup'
 import { describe, mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fireEvent, render } from '@testing-library/react'
+import { VfinalAssistantPanelProvider } from '../vfinal-assistant-context'
 
 describe('VfinalHeader mobile off-canvas menu', () => {
   test('supports dialog semantics, focus management, Escape and scroll lock', async (t) => {
@@ -11,7 +12,11 @@ describe('VfinalHeader mobile off-canvas menu', () => {
     })
     t.after(() => navigationMock.restore())
     const { VfinalHeader } = await import(`../vfinal-header?mobile=${Date.now()}`)
-    const { getByRole, unmount } = render(<VfinalHeader />)
+    const { getByRole, unmount } = render(
+      <VfinalAssistantPanelProvider>
+        <VfinalHeader />
+      </VfinalAssistantPanelProvider>,
+    )
     t.after(unmount)
 
     const openButton = getByRole('button', { name: 'Open navigation menu' })
@@ -44,7 +49,11 @@ describe('VfinalHeader mobile off-canvas menu', () => {
     })
     t.after(() => navigationMock.restore())
     const { VfinalHeader } = await import(`../vfinal-header?mobile=${Date.now()}-links`)
-    const { getByRole, getAllByRole, unmount } = render(<VfinalHeader />)
+    const { getByRole, getAllByRole, unmount } = render(
+      <VfinalAssistantPanelProvider>
+        <VfinalHeader />
+      </VfinalAssistantPanelProvider>,
+    )
     t.after(unmount)
     const openButton = getByRole('button', { name: 'Open navigation menu' })
 
