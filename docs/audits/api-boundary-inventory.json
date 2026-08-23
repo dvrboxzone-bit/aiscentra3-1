@@ -6,7 +6,10 @@
     {
       "path": "/api/admin/simulate-engine-v2",
       "file": "src/app/api/admin/simulate-engine-v2/route.ts",
-      "methods": ["GET", "POST"],
+      "methods": [
+        "GET",
+        "POST"
+      ],
       "category": "admin",
       "guard": "checkAdminAccess",
       "authMechanism": "bearer-token-constant-time",
@@ -33,7 +36,10 @@
     {
       "path": "/api/agent",
       "file": "src/app/api/agent/route.ts",
-      "methods": ["GET", "POST"],
+      "methods": [
+        "GET",
+        "POST"
+      ],
       "category": "internal-machine",
       "guard": "checkInternalAccess",
       "authMechanism": "bearer-token-constant-time",
@@ -60,7 +66,9 @@
     {
       "path": "/api/assistant",
       "file": "src/app/api/assistant/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "public-read",
       "guard": "checkPublicAssistantAccess",
       "authMechanism": "none (coarse kill-switch, not per-caller auth)",
@@ -87,7 +95,9 @@
     {
       "path": "/api/collect",
       "file": "src/app/api/collect/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "cron",
       "guard": "local isAuthorized() function (not the shared src/lib/security/api-access.ts module)",
       "authMechanism": "shared-secret-non-constant-time (=== comparison against CRON_SECRET)",
@@ -114,7 +124,9 @@
     {
       "path": "/api/cron/collect",
       "file": "src/app/api/cron/collect/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "cron",
       "guard": "inline check (authHeader !== `Bearer ${CRON_SECRET}`)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -141,7 +153,9 @@
     {
       "path": "/api/cron/verify-urls",
       "file": "src/app/api/cron/verify-urls/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "cron",
       "guard": "centralized isAuthorizedCronRequest (cron-guard.ts, crypto.timingSafeEqual)",
       "authMechanism": "shared-secret-constant-time",
@@ -168,7 +182,9 @@
     {
       "path": "/api/cron/enrich",
       "file": "src/app/api/cron/enrich/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "cron",
       "guard": "inline check (authHeader !== `Bearer ${CRON_SECRET}`)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -195,7 +211,9 @@
     {
       "path": "/api/cron/events",
       "file": "src/app/api/cron/events/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "cron",
       "guard": "inline check (authHeader !== `Bearer ${CRON_SECRET}`)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -222,7 +240,9 @@
     {
       "path": "/api/cron/momentum",
       "file": "src/app/api/cron/momentum/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "cron",
       "guard": "inline check (authHeader !== `Bearer ${CRON_SECRET}`)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -249,7 +269,9 @@
     {
       "path": "/api/cron/pipeline",
       "file": "src/app/api/cron/pipeline/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "cron",
       "guard": "inline check, explicitly fail-closed on missing secret (returns 503 if CRON_SECRET unset, THEN compares)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -276,7 +298,9 @@
     {
       "path": "/api/cron/reports",
       "file": "src/app/api/cron/reports/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "cron",
       "guard": "inline check (authHeader !== `Bearer ${CRON_SECRET}`)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -303,7 +327,9 @@
     {
       "path": "/api/enrich/batch",
       "file": "src/app/api/enrich/batch/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "cron",
       "guard": "local isAuthorized() function (duplicated, not shared module)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -330,7 +356,9 @@
     {
       "path": "/api/enrich",
       "file": "src/app/api/enrich/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "cron",
       "guard": "local isAuthorized() function (duplicated, not shared module)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -357,7 +385,9 @@
     {
       "path": "/api/events/promote",
       "file": "src/app/api/events/promote/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "cron",
       "guard": "local isAuthorized() function (duplicated, not shared module)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -384,7 +414,9 @@
     {
       "path": "/api/health",
       "file": "src/app/api/health/route.ts",
-      "methods": ["GET"],
+      "methods": [
+        "GET"
+      ],
       "category": "public-read",
       "guard": "none (intentional -- public health check endpoint)",
       "authMechanism": "none",
@@ -411,7 +443,9 @@
     {
       "path": "/api/reports/generate",
       "file": "src/app/api/reports/generate/route.ts",
-      "methods": ["POST"],
+      "methods": [
+        "POST"
+      ],
       "category": "cron",
       "guard": "local isAuthorized() function (duplicated, not shared module)",
       "authMechanism": "shared-secret-non-constant-time",
@@ -434,12 +468,41 @@
       "aiCallMode": "direct",
       "weakSharedSecret": true,
       "hasCallerFacingRateLimit": false
+    },
+    {
+      "path": "/api/contact",
+      "file": "src/app/api/contact/route.ts",
+      "methods": [
+        "POST"
+      ],
+      "category": "public-read",
+      "guard": "none -- public contact form, intentionally open to any visitor",
+      "authMechanism": "none",
+      "authzMechanism": "none",
+      "featureFlag": "none",
+      "inputValidation": "strict Zod schema (name/email/message, each with real length/format bounds) before any network call",
+      "aiCall": false,
+      "serviceRole": false,
+      "databaseRead": false,
+      "databaseWrite": false,
+      "externalNetworkCall": true,
+      "costSensitive": false,
+      "rateLimit": "missing",
+      "budgetGuard": "n/a -- Resend's own account-level sending limits are the only real ceiling; no app-level rate limit implemented yet",
+      "publicResponseDto": "{ ok: true } on success, { error: string } on failure -- no internal state, no stack traces returned to the caller",
+      "rawErrorExposureRisk": "no -- catch blocks return a fixed, generic user-facing message; the real error/response body is only logged server-side via console.error, never returned to the caller",
+      "productionState": "enabled, public, no restriction",
+      "risk": "P3",
+      "notes": "Sends a real email via Resend's REST API using the site's own verified aiscentra.com domain. Real, honest known gap: no rate limiting or CAPTCHA (Cloudflare Turnstile) yet -- a malicious actor could script repeated submissions to exhaust the Resend account's own sending quota. Documented as a deliberate, small-scope v1 (task was explicitly \"a contact form,\" not \"a moderation system\") -- Turnstile is a planned, separate follow-up once real Turnstile credentials are obtained.",
+      "aiCallMode": "none",
+      "weakSharedSecret": false,
+      "hasCallerFacingRateLimit": false
     }
   ],
   "summary": {
-    "totalRoutes": 16,
+    "totalRoutes": 17,
     "categoryCounts": {
-      "public-read": 2,
+      "public-read": 3,
       "authenticated-user": 0,
       "admin": 1,
       "cron": 12,
@@ -451,18 +514,18 @@
     "serviceRoleRoutes": 13,
     "databaseReadRoutes": 15,
     "databaseWriteRoutes": 8,
-    "rateLimitMissingLiteralCount": 14,
-    "routesWithoutRealCallerFacingRateLimit": 16,
+    "rateLimitMissingLiteralCount": 15,
+    "routesWithoutRealCallerFacingRateLimit": 17,
     "budgetGuardMissingLiteralCount": 15,
     "costSensitiveRoutes": 11,
-    "externalNetworkRoutes": 14,
+    "externalNetworkRoutes": 15,
     "weakSharedSecretRoutes": 11,
     "confirmedRawErrorRoutes": 5,
     "riskCounts": {
       "P0": 0,
       "P1": 13,
       "P2": 2,
-      "P3": 1
+      "P3": 2
     }
   }
 }

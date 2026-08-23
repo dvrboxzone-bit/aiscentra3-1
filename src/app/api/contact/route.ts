@@ -6,12 +6,10 @@
  *
  * Sends a real email via Resend's REST API (no SDK dependency --
  * plain fetch, matching this project's own generic-HTTP-client
- * convention used elsewhere for AI providers). Uses Resend's own
- * shared, no-domain-verification-required sender
- * (onboarding@resend.dev) -- the owner's own domain has not been
- * verified in Resend yet; this can be swapped to a
- * @aiscentra.com sender once that verification is completed,
- * without any other code change.
+ * convention used elsewhere for AI providers). Sent from the site's
+ * own real, verified domain (aiscentra.com -- confirmed verified in
+ * Resend as of 2026-08-03: domain added, DNS verified, status "ready
+ * to send").
  *
  * Strict Zod validation on all three fields before any network call.
  * RESEND_API_KEY is read from env at request time (not at module load)
@@ -74,7 +72,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'AIscentra Contact Form <onboarding@resend.dev>',
+        from: 'AIscentra Contact Form <contact@aiscentra.com>',
         to: 'aiscentra@gmail.com',
         reply_to: email,
         subject: `New contact form message from ${name}`,
