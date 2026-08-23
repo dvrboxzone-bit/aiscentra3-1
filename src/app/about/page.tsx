@@ -126,6 +126,18 @@ export default function AboutPage(): React.JSX.Element {
                 intelligence.
               </p>
             </div>
+
+            <div id="team">
+              <span className="font-caption mb-6 block text-silver-haze">TEAM</span>
+              <div className="border border-border-subtle bg-surface-tonal p-6">
+                <p className="text-xl text-frost">Denis Dan</p>
+                <p className="font-caption mb-3 text-mint-signal">Founder &amp; Creator</p>
+                <p className="text-base text-silver-haze">
+                  AIscentra is an independent project. Its principles, editorial standards, and
+                  direction are set and maintained by its founder.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
