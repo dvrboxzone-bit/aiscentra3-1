@@ -144,9 +144,9 @@ export function VfinalFooter(): React.JSX.Element {
             <Link href="/terms" className="hover:text-mint-signal">
               Terms
             </Link>
-            <a href="mailto:aiscentra@gmail.com" className="hover:text-mint-signal">
+            <Link href="/contact" className="hover:text-mint-signal">
               Contact
-            </a>
+            </Link>
           </div>
         </div>
       </div>
