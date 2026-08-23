@@ -67,8 +67,8 @@ claim to.
 
 | Metric                                              | Value |
 | --------------------------------------------------- | ----: |
-| Total routes                                        |    16 |
-| Category: `public-read`                             |     2 |
+| Total routes                                        |    17 |
+| Category: `public-read`                             |     3 |
 | Category: `authenticated-user`                      |     0 |
 | Category: `admin`                                   |     1 |
 | Category: `cron`                                    |    12 |
@@ -79,17 +79,17 @@ claim to.
 | Service-role routes                                 |    13 |
 | Database-read routes                                |    15 |
 | Database-write routes                               |     8 |
-| Literal rateLimit="missing" count                   |    14 |
-| Routes without a real caller-facing HTTP rate limit |    16 |
+| Literal rateLimit="missing" count                   |    15 |
+| Routes without a real caller-facing HTTP rate limit |    17 |
 | Literal budgetGuard="missing" count                 |    15 |
 | Cost-sensitive routes                               |    11 |
-| External-network-call routes                        |    14 |
+| External-network-call routes                        |    15 |
 | Weak shared-secret (non-constant-time) routes       |    11 |
 | Confirmed raw-error-exposure routes                 |     5 |
 | Risk: P0                                            |     0 |
 | Risk: P1                                            |    13 |
 | Risk: P2                                            |     2 |
-| Risk: P3                                            |     1 |
+| Risk: P3                                            |     2 |
 
 <!-- API_INVENTORY_SUMMARY_END -->
 

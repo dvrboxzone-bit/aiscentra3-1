@@ -434,12 +434,39 @@
       "aiCallMode": "direct",
       "weakSharedSecret": true,
       "hasCallerFacingRateLimit": false
+    },
+    {
+      "path": "/api/contact",
+      "file": "src/app/api/contact/route.ts",
+      "methods": ["POST"],
+      "category": "public-read",
+      "guard": "none -- public contact form, intentionally open to any visitor",
+      "authMechanism": "none",
+      "authzMechanism": "none",
+      "featureFlag": "none",
+      "inputValidation": "strict Zod schema (name/email/message, each with real length/format bounds) before any network call",
+      "aiCall": false,
+      "serviceRole": false,
+      "databaseRead": false,
+      "databaseWrite": false,
+      "externalNetworkCall": true,
+      "costSensitive": false,
+      "rateLimit": "missing",
+      "budgetGuard": "n/a -- Resend's own account-level sending limits are the only real ceiling; no app-level rate limit implemented yet",
+      "publicResponseDto": "{ ok: true } on success, { error: string } on failure -- no internal state, no stack traces returned to the caller",
+      "rawErrorExposureRisk": "no -- catch blocks return a fixed, generic user-facing message; the real error/response body is only logged server-side via console.error, never returned to the caller",
+      "productionState": "enabled, public, no restriction",
+      "risk": "P3",
+      "notes": "Sends a real email via Resend REST API using the site own verified aiscentra.com domain. Real Cloudflare Turnstile bot verification added: the client token is independently re-verified server-side against Cloudflare siteverify before any email is sent -- graceful no-op if TURNSTILE_SECRET_KEY is unset, matching the client widget own graceful degradation. Known, deliberate remaining gap: no app-level rate limiting yet beyond what Turnstile itself provides against scripted abuse.",
+      "aiCallMode": "none",
+      "weakSharedSecret": false,
+      "hasCallerFacingRateLimit": false
     }
   ],
   "summary": {
-    "totalRoutes": 16,
+    "totalRoutes": 17,
     "categoryCounts": {
-      "public-read": 2,
+      "public-read": 3,
       "authenticated-user": 0,
       "admin": 1,
       "cron": 12,
@@ -451,18 +478,18 @@
     "serviceRoleRoutes": 13,
     "databaseReadRoutes": 15,
     "databaseWriteRoutes": 8,
-    "rateLimitMissingLiteralCount": 14,
-    "routesWithoutRealCallerFacingRateLimit": 16,
+    "rateLimitMissingLiteralCount": 15,
+    "routesWithoutRealCallerFacingRateLimit": 17,
     "budgetGuardMissingLiteralCount": 15,
     "costSensitiveRoutes": 11,
-    "externalNetworkRoutes": 14,
+    "externalNetworkRoutes": 15,
     "weakSharedSecretRoutes": 11,
     "confirmedRawErrorRoutes": 5,
     "riskCounts": {
       "P0": 0,
       "P1": 13,
       "P2": 2,
-      "P3": 1
+      "P3": 2
     }
   }
 }

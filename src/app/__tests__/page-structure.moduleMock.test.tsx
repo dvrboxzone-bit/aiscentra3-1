@@ -40,12 +40,15 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     const jsx = await HomePage()
     const { container } = render(jsx)
 
-    // 1. Exact section order (8 sections, approved sequence).
+    // 1. Exact section order (6 sections, approved sequence after
+    // Trajectories moved to /trajectories AND Assistant moved to the
+    // real sliding side panel -- both independent-review corrections,
+    // explicit owner instruction).
     const sectionIds = Array.from(container.querySelectorAll('section')).map((el) => el.id)
     assert.deepEqual(
       sectionIds,
-      ['hero', 'signals', 'trajectories', 'forecasts', 'news', 'memory', 'assistant', 'signal-001'],
-      'all 8 sections must be present in the exact approved order',
+      ['hero', 'signals', 'forecasts', 'news', 'memory', 'signal-001'],
+      'all 6 sections must be present in the exact approved order',
     )
 
     // 2. Exactly 6 Featured Signal cards with a full real result.
@@ -54,9 +57,10 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     // 3. Exactly 2 Observation cards with a full real result.
     assert.equal(container.querySelectorAll('[data-content-slot="observation"]').length, 2)
 
-    // 4. Six approved Trajectory records are present, and their unavailable
-    // detail destinations remain disabled instead of inventing routes.
-    assert.equal(container.querySelectorAll('[data-content-slot="trajectory"]').length, 6)
+    // 4. Trajectory records moved to their own /trajectories page --
+    // independent-review correction, explicit owner instruction. No
+    // longer present on the homepage at all.
+    assert.equal(container.querySelectorAll('[data-content-slot="trajectory"]').length, 0)
     assert.equal(container.querySelectorAll('a[href*="/history/"]').length, 0)
     assert.equal(container.querySelectorAll('[data-component="hero-density-scan"]').length, 1)
     assert.equal(container.querySelectorAll('[data-section="telemetry"]').length, 0)

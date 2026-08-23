@@ -62,6 +62,7 @@ import { usePathname } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SignalCategory } from '@/types/database'
 import { getActiveLenisInstance } from './vfinal-lenis-provider'
+import { useAssistantPanel } from './vfinal-assistant-context'
 
 const SIGNAL_CATEGORIES: ReadonlyArray<{ value: SignalCategory; label: string }> = [
   { value: 'RESEARCH', label: 'Research' },
@@ -77,8 +78,7 @@ const SIGNAL_CATEGORIES: ReadonlyArray<{ value: SignalCategory; label: string }>
 
 export function VfinalHeader(): React.JSX.Element {
   const pathname = usePathname()
-  const onHomepage = pathname === '/'
-  const assistantHref = onHomepage ? '#assistant' : '/#assistant'
+  const { open: openAssistant } = useAssistantPanel()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   const menuCloseRef = useRef<HTMLButtonElement>(null)
@@ -140,15 +140,10 @@ export function VfinalHeader(): React.JSX.Element {
     setMenuOpen(false)
   }, [pathname])
 
-  const handleAssistantClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
-    closeMobileMenu(false)
-    if (!onHomepage) return
-    const target = document.getElementById('assistant')
-    if (!target) return
+  const handleAssistantClick = (e: React.MouseEvent): void => {
     e.preventDefault()
-    const lenis = getActiveLenisInstance()
-    if (lenis) lenis.scrollTo(target, { offset: -100 })
-    else target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    closeMobileMenu(false)
+    openAssistant()
   }
 
   return (
@@ -170,13 +165,15 @@ export function VfinalHeader(): React.JSX.Element {
 
           <div className="flex items-center gap-8">
             <div className="dropdown hide-mobile">
-              <Link
-                href="/signals"
+              <button
+                type="button"
                 className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+                aria-haspopup="true"
               >
                 Signals <span className="text-xs">▼</span>
-              </Link>
+              </button>
               <div className="dropdown-content">
+                <Link href="/signals">ALL</Link>
                 {SIGNAL_CATEGORIES.map((cat) => (
                   <Link key={cat.value} href={`/signals?category=${cat.value}`}>
                     {cat.label}
@@ -193,11 +190,26 @@ export function VfinalHeader(): React.JSX.Element {
             </Link>
 
             <Link
-              href={onHomepage ? '#trajectories' : '/#trajectories'}
+              href="/trajectories"
               className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
             >
               Trajectories
             </Link>
+
+            <div className="dropdown hide-mobile">
+              <button
+                type="button"
+                className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+                aria-haspopup="true"
+              >
+                Observatory <span className="text-xs">▼</span>
+              </button>
+              <div className="dropdown-content">
+                <Link href="/about">About</Link>
+                <Link href="/about#team">Team</Link>
+                <Link href="/contact">Contact</Link>
+              </div>
+            </div>
 
             <div className="dropdown hide-mobile">
               <Link
@@ -214,16 +226,16 @@ export function VfinalHeader(): React.JSX.Element {
               </div>
             </div>
 
-            <Link
-              href={assistantHref}
+            <button
+              type="button"
               onClick={handleAssistantClick}
               className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
             >
               Assistant
-            </Link>
+            </button>
 
             <a
-              href="mailto:contact@aiscentra.com"
+              href="mailto:aiscentra@gmail.com"
               className="hide-mobile text-sm font-medium text-mint-signal underline-offset-4 hover:underline"
             >
               Help the project
@@ -299,15 +311,12 @@ export function VfinalHeader(): React.JSX.Element {
           <Link href="/observatory" onClick={() => closeMobileMenu(false)}>
             Observations
           </Link>
-          <Link
-            href={onHomepage ? '#trajectories' : '/#trajectories'}
-            onClick={() => closeMobileMenu(false)}
-          >
+          <Link href="/trajectories" onClick={() => closeMobileMenu(false)}>
             Trajectories
           </Link>
-          <Link href={assistantHref} onClick={handleAssistantClick}>
+          <button type="button" onClick={handleAssistantClick}>
             Assistant
-          </Link>
+          </button>
 
           <span className="mobile-menu-group-label">FRAMEWORK</span>
           <Link href="/about#epistemic-model" onClick={() => closeMobileMenu(false)}>
@@ -323,7 +332,7 @@ export function VfinalHeader(): React.JSX.Element {
             Roadmap
           </Link>
 
-          <a href="mailto:contact@aiscentra.com" onClick={() => closeMobileMenu(false)}>
+          <a href="mailto:aiscentra@gmail.com" onClick={() => closeMobileMenu(false)}>
             Help the project
           </a>
           <Link

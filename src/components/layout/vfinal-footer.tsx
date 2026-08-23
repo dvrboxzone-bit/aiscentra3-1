@@ -110,30 +110,18 @@ export function VfinalFooter(): React.JSX.Element {
               </li>
             </ul>
           </div>
-
           <div>
             <span className="font-caption mb-4 block text-silver-haze opacity-50">Connect</span>
             <ul className="space-y-3 text-sm">
               <li>
-                <a
-                  href="mailto:contact@aiscentra.com"
-                  className="text-frost hover:text-mint-signal"
-                >
+                <a href="mailto:aiscentra@gmail.com" className="text-frost hover:text-mint-signal">
                   Help the project
                 </a>
               </li>
               <li>
-                <a
-                  href="mailto:contact@aiscentra.com"
-                  className="text-frost hover:text-mint-signal"
-                >
-                  contact@aiscentra.com
+                <a href="mailto:aiscentra@gmail.com" className="text-frost hover:text-mint-signal">
+                  aiscentra@gmail.com
                 </a>
-              </li>
-              <li>
-                <span className="text-silver-haze opacity-50" title="Not yet available">
-                  X / Twitter
-                </span>
               </li>
               <li>
                 <span className="text-silver-haze opacity-50" title="Not yet available">
@@ -145,11 +133,20 @@ export function VfinalFooter(): React.JSX.Element {
         </div>
 
         <div className="flex flex-col items-center justify-between gap-4 border-t border-border-subtle pt-8 text-xs text-silver-haze opacity-60 md:flex-row">
-          <span>© 2026 AIscentra. Intelligence Observatory.</span>
+          <span>© 2026 AIscentra · Independent AI Intelligence Observatory</span>
           <div className="flex gap-6">
-            <span title="Not yet available">Privacy</span>
-            <span title="Not yet available">Data Retention</span>
-            <span title="Not yet available">Security Disclosure</span>
+            <Link href="/methodology" className="hover:text-mint-signal">
+              Methodology
+            </Link>
+            <Link href="/privacy" className="hover:text-mint-signal">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-mint-signal">
+              Terms
+            </Link>
+            <Link href="/contact" className="hover:text-mint-signal">
+              Contact
+            </Link>
           </div>
         </div>
       </div>
