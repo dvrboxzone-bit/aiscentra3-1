@@ -159,8 +159,8 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         <div className="flex-1 overflow-y-auto p-4">
           {messages.length === 0 ? (
             <p className="text-sm leading-relaxed text-silver-haze">
-              Welcome. I can help you explore signals, events and analysis across the AI
-              ecosystem — ask a question, or choose a quick action below.
+              Welcome. I can help you explore signals, events and analysis across the AI ecosystem —
+              ask a question, or choose a quick action below.
             </p>
           ) : (
             <div className="space-y-3">

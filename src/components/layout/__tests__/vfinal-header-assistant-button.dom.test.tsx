@@ -41,7 +41,9 @@ describe('VfinalHeader — Assistant button opens the real sliding panel', () =>
       assert.equal(btn.getAttribute('type'), 'button', 'must be a real button, not a submit')
     }
     assert.equal(
-      Array.from(container.querySelectorAll('a')).some((a) => a.textContent?.trim() === 'Assistant'),
+      Array.from(container.querySelectorAll('a')).some(
+        (a) => a.textContent?.trim() === 'Assistant',
+      ),
       false,
       'no <a> element may still be labeled Assistant -- it is genuinely no longer a navigable link',
     )
