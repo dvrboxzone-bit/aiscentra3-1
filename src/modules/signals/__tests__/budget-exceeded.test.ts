@@ -27,7 +27,7 @@
  * reservation at all. Fixed: a genuinely schema-valid SIS fixture
  * (verified via SISOutputSchema.safeParse before trusting it), and the
  * budget reserver mock now refuses based on the REAL `model` argument
- * reserveBudgetForCall receives (llama-3.3-70b-versatile, the
+ * reserveBudgetForCall receives (openai/gpt-oss-120b, the
  * enrichment/parser stage's own primary model) rather than a raw call
  * counter that can't distinguish which STAGE is actually being
  * charged.
@@ -182,7 +182,7 @@ describe('processObservation propagates AITokenBudgetExceededError (not swallowe
       // Refuse specifically the ENRICHMENT/parser stage's own primary
       // model (70b) -- SIS's own primary model (8b) must be let
       // through so SIS genuinely completes first.
-      if (params.model === 'llama-3.3-70b-versatile') {
+      if (params.model === 'openai/gpt-oss-120b') {
         throw budgetRefusal(params.model)
       }
     })
@@ -248,11 +248,11 @@ describe('processObservation propagates AITokenBudgetExceededError (not swallowe
     )
     assert.equal(
       reservations[0]?.model,
-      'llama-3.1-8b-instant',
+      'openai/gpt-oss-20b',
       "the FIRST reservation must be for SIS's own primary model (8b)",
     )
     assert.equal(reservations[0]?.consumer, 'signal_engine')
-    const enrichmentReservation = reservations.find((r) => r.model === 'llama-3.3-70b-versatile')
+    const enrichmentReservation = reservations.find((r) => r.model === 'openai/gpt-oss-120b')
     assert.ok(
       enrichmentReservation,
       "a reservation for the enrichment stage's own model (70b) must have been attempted",

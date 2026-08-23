@@ -4,9 +4,15 @@
  * Prevents 429 rate_limit_exceeded by tracking token consumption
  * and enforcing per-minute budget before each LLM request.
  *
- * Groq limits (Free Tier):
- *   llama-3.1-8b-instant:   6,000 TPM
- *   llama-3.3-70b-versatile: 12,000 TPM
+ * Groq limits (Free Tier, confirmed 2026-08-22 directly against
+ * console.groq.com/docs/rate-limits — the canonical Free Plan table,
+ * distinct from that same page's separate, larger "Developer Plan"
+ * table):
+ *   openai/gpt-oss-20b:  8,000 TPM, 200,000 TPD
+ *   openai/gpt-oss-120b: 8,000 TPM, 200,000 TPD
+ * (superseding the two models Groq itself deprecated on 2026-08-16:
+ * llama-3.1-8b-instant [6,000 TPM] and llama-3.3-70b-versatile
+ * [12,000 TPM] -- both began returning HTTP 404 model_not_found)
  *
  * Architecture:
  * - Token window: rolling 60-second window per model
@@ -53,6 +59,28 @@ export class AIRequestTooLargeError extends Error {
 // ── TPM limits per model ──────────────────────────────────────────────────────
 
 const TPM_LIMITS: Record<string, number> = {
+  'openai/gpt-oss-20b': 8_000,
+  'openai/gpt-oss-120b': 8_000,
+  // Cloudflare Workers AI has no published TPM ceiling of its own (it
+  // meters in Neurons/day, not tokens/minute) -- a generous, clearly
+  // conservative placeholder is used here so this project's own
+  // existing per-minute pacing mechanism still applies something
+  // sane, without falsely implying Cloudflare publishes an exact TPM
+  // figure the way Groq does.
+  '@cf/zai-org/glm-4.7-flash': 50_000,
+  // The two entries below are the REAL historical TPM ceilings for the
+  // models Groq deprecated on 2026-08-16 (llama-3.1-8b-instant,
+  // llama-3.3-70b-versatile -- both now return HTTP 404
+  // model_not_found). Kept here deliberately, not deleted: several
+  // existing regression tests (deadline-contour.test.ts,
+  // merge-blockers.test.ts, budget-exceeded.test.ts) use these exact
+  // model-name strings as generic fixtures to exercise this module's
+  // OWN budget-math behavior (safety margins, per-model ceilings,
+  // fallback-chain TPM mismatches) -- they do not assert that these
+  // models are actually called in production, and no current
+  // DEFAULT_MODELS/ROLE_CONFIG entry references either name anymore
+  // (see config.ts, models.ts). Removing these two lines would break
+  // otherwise-unrelated tests for no functional gain.
   'llama-3.1-8b-instant': 6_000,
   'llama-3.3-70b-versatile': 12_000,
   default: 6_000, // conservative fallback

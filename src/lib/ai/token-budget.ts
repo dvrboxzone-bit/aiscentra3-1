@@ -51,8 +51,13 @@
  * overrunning it and taking 429s.
  */
 
-/** Groq's free-tier TPD for llama-3.3-70b-versatile at time of writing. */
-const DEFAULT_TPD_LIMIT = 100_000
+/** Groq's free-tier TPD, confirmed 2026-08-22 directly against
+ * console.groq.com/docs/rate-limits for openai/gpt-oss-120b (the
+ * official replacement for the deprecated llama-3.3-70b-versatile,
+ * which had a DIFFERENT real TPD of 100,000 -- this is a genuinely
+ * new, larger ceiling for the new model, not a copy-paste of the old
+ * number). */
+const DEFAULT_TPD_LIMIT = 200_000
 
 /** Signal Engine's guaranteed share (owner decision: minimum 90%). */
 const DEFAULT_SIGNAL_ENGINE_RESERVE = 0.9

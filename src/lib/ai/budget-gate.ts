@@ -16,9 +16,9 @@
  * 1. src/lib/ai/agent.ts, INSIDE the per-model fallback loop. Not in
  *    client.ts and not once per logical request, because a single
  *    agentComplete() call may try several models in sequence: roles
- *    like `classifier` run on llama-3.1-8b-instant but declare
- *    llama-3.3-70b-versatile as their FALLBACK (see models.ts). A
- *    cheap 8b role that escalates is spending the scarce 70b budget,
+ *    like `classifier` run on openai/gpt-oss-20b but declare
+ *    openai/gpt-oss-120b as their FALLBACK (see models.ts). A
+ *    cheap mini role that escalates is spending the scarce 120b budget,
  *    and gating once up-front with the primary model's name would
  *    miss exactly that. Gating per attempt, keyed on `ref.model`,
  *    charges each attempt to the model it actually uses.

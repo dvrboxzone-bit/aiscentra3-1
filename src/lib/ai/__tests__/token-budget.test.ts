@@ -79,8 +79,8 @@ describe('token budget configuration', () => {
     process.env = { ...saved }
   })
 
-  test('defaults to Groq free-tier 100,000 TPD when unset', () => {
-    assert.equal(getTpdLimit(), 100_000)
+  test('defaults to Groq free-tier 200,000 TPD when unset', () => {
+    assert.equal(getTpdLimit(), 200_000)
   })
 
   test('limit is configurable, not hardcoded', () => {
@@ -90,9 +90,9 @@ describe('token budget configuration', () => {
 
   test('ignores a non-numeric or non-positive limit rather than trusting it', () => {
     process.env['GROQ_TPD_LIMIT'] = 'not-a-number'
-    assert.equal(getTpdLimit(), 100_000)
+    assert.equal(getTpdLimit(), 200_000)
     process.env['GROQ_TPD_LIMIT'] = '0'
-    assert.equal(getTpdLimit(), 100_000)
+    assert.equal(getTpdLimit(), 200_000)
   })
 
   test('Signal Engine reserve defaults to the owner-mandated 90% minimum', () => {
@@ -121,11 +121,11 @@ describe('consumeTokenBudget — Signal Engine priority', () => {
       tokens: 3_000,
     })
     assert.equal(d.allowed, true)
-    assert.equal(d.ceilingTokens, 100_000)
+    assert.equal(d.ceilingTokens, 200_000)
   })
 
   test('Assistant is refused once the non-reserved remainder is gone, while the engine still runs', async () => {
-    const { client } = makeLedger({ startUsed: 10_000 }) // == Assistant ceiling
+    const { client } = makeLedger({ startUsed: 20_000 }) // == Assistant ceiling
     const assistant = await consumeTokenBudget(client, {
       model: MODEL,
       consumer: 'assistant',
@@ -133,7 +133,7 @@ describe('consumeTokenBudget — Signal Engine priority', () => {
     })
     assert.equal(assistant.allowed, false)
     assert.equal(assistant.reason, 'reserve_exhausted')
-    assert.equal(assistant.ceilingTokens, 10_000)
+    assert.equal(assistant.ceilingTokens, 20_000)
 
     const engine = await consumeTokenBudget(client, {
       model: MODEL,
@@ -154,7 +154,7 @@ describe('consumeTokenBudget — Signal Engine priority', () => {
   })
 
   test('Signal Engine is refused only at the true daily limit', async () => {
-    const { client } = makeLedger({ startUsed: 99_000 })
+    const { client } = makeLedger({ startUsed: 199_000 })
     const d = await consumeTokenBudget(client, {
       model: MODEL,
       consumer: 'signal_engine',
@@ -167,8 +167,8 @@ describe('consumeTokenBudget — Signal Engine priority', () => {
 describe('consumeTokenBudget — concurrency', () => {
   test('concurrent Assistant requests cannot both consume the same headroom', async () => {
     // Room for exactly ONE more 3,000-token Assistant call
-    // (ceiling 10,000, used 7,000 -> 7,000+3,000 == 10,000 fits exactly).
-    const ledger = makeLedger({ startUsed: 7_000 })
+    // (ceiling 20,000, used 17,000 -> 17,000+3,000 == 20,000 fits exactly).
+    const ledger = makeLedger({ startUsed: 17_000 })
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
         consumeTokenBudget(ledger.client, {
@@ -181,7 +181,7 @@ describe('consumeTokenBudget — concurrency', () => {
     const allowed = results.filter((r) => r.allowed).length
     assert.equal(allowed, 1, `exactly one of 5 concurrent requests may pass, got ${allowed}`)
     assert.ok(
-      ledger.usedNow() <= 10_000,
+      ledger.usedNow() <= 20_000,
       `ledger must never exceed the ceiling, got ${ledger.usedNow()}`,
     )
   })

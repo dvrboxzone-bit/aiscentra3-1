@@ -122,15 +122,21 @@ export function checkHardRejection(
 // ── Deterministic pre-filter (zero AI cost) ────────────────────────────────────
 //
 // Real problem this closes, measured directly from this project's own
-// Groq request logs (7-day export, 461 real requests): a real
-// enrichment (parser/70b) call costs ~2,527 tokens (2,352 input + 175
-// output average). Against Groq's real 100,000 TPD limit for
-// llama-3.3-70b-versatile, that caps Signal Engine at ~39.6
-// observations/day, no matter how well request pacing (RPM) or the
-// per-cycle time budget are tuned -- those only affect how FAST a
-// cycle can go, not the hard DAILY token ceiling. Real intake is
-// ~400/day. TPD is therefore ~10x too small to give every observation
-// the full 2-AI-call (SIS + enrichment) treatment.
+// Groq request logs (7-day export, 461 real requests, against the
+// NOW-DEPRECATED llama-3.3-70b-versatile): a real enrichment
+// (parser/70b) call cost ~2,527 tokens (2,352 input + 175 output
+// average). Against that model's real 100,000 TPD limit, that capped
+// Signal Engine at ~39.6 observations/day. The replacement model
+// (openai/gpt-oss-120b, confirmed 2026-08-22 against
+// console.groq.com/docs/rate-limits) has a real 200,000 TPD -- roughly
+// double -- but the per-call token cost has not been independently
+// re-measured against production Groq logs for the new model, so the
+// pre-filter's own value here remains a documented, honest estimate,
+// not a re-verified new measurement. RPM/pacing tuning still only
+// affects how FAST a cycle can go, not the hard DAILY token ceiling.
+// Real intake is ~350-950/day (2026-08-22 production snapshot), so the
+// daily token ceiling can still bind well below full coverage even
+// with the new model's larger budget.
 //
 // checkHardRejection above already provides FREE rejection for clearly
 // disqualified content (promotional, stale, category-default-reject).
