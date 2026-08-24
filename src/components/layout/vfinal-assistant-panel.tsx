@@ -24,6 +24,29 @@ const SERVICE_COMMANDS: Array<{ label: string; note: string }> = [
 /**
  * AIscentra — real sliding Assistant panel.
  *
+ * Visual correction (independent-review, explicit owner instruction,
+ * 2026-08-23): the panel used to conditionally render (`if (!isOpen)
+ * return null`), which meant it had NO real transition at all --
+ * it simply popped into existence at its final position, clashing
+ * with the rest of the site's own smooth Lenis-based motion language.
+ * Now always mounted; open/close is a real CSS transform+visibility
+ * transition (.assistant-panel/.assistant-panel-overlay in
+ * globals.css), the exact same established pattern already used for
+ * the mobile off-canvas menu (.mobile-menu-panel) -- both entry and
+ * exit are now genuinely smooth, not merely the entry.
+ *
+ * Background correction: the panel body (excluding the header bar and
+ * the input form, both kept solid per explicit owner instruction) now
+ * uses the site's own real textured-bg + tech-grid pattern, the same
+ * one used throughout the rest of the site for its large content
+ * blocks -- not a new visual language, reused verbatim.
+ *
+ * Logo correction: the real AIscentra logo symbol (VfinalLogoSymbol's
+ * #aiscentra-logo, already used identically in the header/footer) now
+ * renders centered above the welcome text, sized larger (56x56) than
+ * the header's own 48x48 use so it reads clearly as a focal point in
+ * this narrower panel, not a fabricated new icon.
+ *
  * Real, honest architecture: the 3 content quick-commands genuinely
  * POST to /api/assistant (the real, existing endpoint) and render
  * whatever real response comes back -- including a real, honest
@@ -133,16 +156,16 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
     }
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end">
-      <div className="absolute inset-0 bg-black/60" onClick={close} />
+    <div
+      className={`assistant-panel-overlay fixed inset-0 flex justify-end ${isOpen ? 'open' : ''}`}
+    >
+      <div className="absolute inset-0" onClick={close} />
 
       <aside
         role="dialog"
         aria-label="Observatory Assistant"
-        className="relative flex h-full w-full max-w-md flex-col border-l border-border-subtle bg-deep-obsidian"
+        className={`assistant-panel relative flex flex-col ${isOpen ? 'open' : ''}`}
       >
         <div className="flex items-center justify-between border-b border-border-subtle p-4">
           <span className="font-caption text-mint-signal">ASK THE OBSERVATORY</span>
@@ -156,54 +179,62 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
-          {messages.length === 0 ? (
-            <p className="text-sm leading-relaxed text-silver-haze">
-              Welcome. I can help you explore signals, events and analysis across the AI ecosystem —
-              ask a question, or choose a quick action below.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={
-                    m.role === 'user'
-                      ? 'ml-auto max-w-[85%] border border-border-subtle bg-surface-tonal p-3 text-sm text-frost'
-                      : 'max-w-[85%] text-sm leading-relaxed text-silver-haze'
-                  }
+        <div className="textured-bg relative flex-1 overflow-y-auto p-4">
+          <div className="tech-grid" />
+          <div className="relative z-10">
+            {messages.length === 0 ? (
+              <>
+                <svg width="56" height="56" className="mx-auto mb-6 block">
+                  <use href="#aiscentra-logo" />
+                </svg>
+                <p className="text-sm leading-relaxed text-silver-haze">
+                  Welcome. I can help you explore signals, events and analysis across the AI
+                  ecosystem — ask a question, or choose a quick action below.
+                </p>
+              </>
+            ) : (
+              <div className="space-y-3">
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={
+                      m.role === 'user'
+                        ? 'ml-auto max-w-[85%] border border-border-subtle bg-surface-tonal p-3 text-sm text-frost'
+                        : 'max-w-[85%] text-sm leading-relaxed text-silver-haze'
+                    }
+                  >
+                    {m.text}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-6 space-y-2">
+              <span className="font-caption block text-silver-haze">QUICK ACTIONS</span>
+              {CONTENT_COMMANDS.map((cmd) => (
+                <button
+                  key={cmd}
+                  type="button"
+                  onClick={() => {
+                    void sendQuery(cmd)
+                  }}
+                  className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
                 >
-                  {m.text}
-                </div>
+                  {cmd}
+                </button>
+              ))}
+              {SERVICE_COMMANDS.map(({ label, note }) => (
+                <Link
+                  key={label}
+                  href="/contact"
+                  onClick={close}
+                  title={note}
+                  className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
+                >
+                  {label}
+                </Link>
               ))}
             </div>
-          )}
-
-          <div className="mt-6 space-y-2">
-            <span className="font-caption block text-silver-haze">QUICK ACTIONS</span>
-            {CONTENT_COMMANDS.map((cmd) => (
-              <button
-                key={cmd}
-                type="button"
-                onClick={() => {
-                  void sendQuery(cmd)
-                }}
-                className="block w-full border border-border-subtle p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
-              >
-                {cmd}
-              </button>
-            ))}
-            {SERVICE_COMMANDS.map(({ label, note }) => (
-              <Link
-                key={label}
-                href="/contact"
-                onClick={close}
-                title={note}
-                className="block w-full border border-border-subtle p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
-              >
-                {label}
-              </Link>
-            ))}
           </div>
         </div>
 
@@ -212,7 +243,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             e.preventDefault()
             void sendQuery(input)
           }}
-          className="flex items-center gap-2 border-t border-border-subtle p-4"
+          className="flex items-center gap-2 border-t border-border-subtle bg-deep-obsidian p-4"
         >
           <input
             type="text"

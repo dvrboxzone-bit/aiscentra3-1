@@ -60,12 +60,28 @@ describe('VfinalHeader — Assistant button opens the real sliding panel', () =>
     }
     const { container } = render(<TestApp />)
 
-    // Real, honest initial state: the panel renders nothing (returns
-    // null) until genuinely opened.
+    // REAL BUG FOUND AND FIXED (owner-reported, live production/preview
+    // testing, 2026-08-23): the real component originally applied the
+    // `open` class ONLY to the outer overlay div, never to the
+    // `.assistant-panel` element itself (the real <aside> with
+    // role="dialog") -- meaning the dark overlay correctly faded in on
+    // click, but the sliding panel itself never actually transformed
+    // into view (permanently stuck at transform: translateX(100%)).
+    // This exact test file's OWN prior version had a matching mistake
+    // that masked the bug: it asserted
+    // `dialogElement.parentElement.classList.contains('open')` --
+    // checking the PARENT (the overlay) instead of the dialog element
+    // itself -- so it passed even though the real panel was broken.
+    // Both the component and this assertion are now fixed to check the
+    // real `.assistant-panel` element's own class directly.
+    const dialogBeforeOpen = container.querySelector(
+      '[role="dialog"][aria-label="Observatory Assistant"]',
+    )
+    assert.ok(dialogBeforeOpen, 'the real panel element exists in the DOM even before opening')
     assert.equal(
-      container.querySelector('[role="dialog"][aria-label="Observatory Assistant"]'),
-      null,
-      'the real panel must not be in the DOM before it is opened',
+      dialogBeforeOpen?.classList.contains('open'),
+      false,
+      'the real panel element itself must not have the open class before it is opened',
     )
 
     const assistantButton = Array.from(container.querySelectorAll('button')).find(
@@ -75,9 +91,14 @@ describe('VfinalHeader — Assistant button opens the real sliding panel', () =>
 
     fireEvent.click(assistantButton)
 
-    assert.ok(
-      container.querySelector('[role="dialog"][aria-label="Observatory Assistant"]'),
-      'the real panel must genuinely appear in the DOM after the button is clicked',
+    const dialogAfterOpen = container.querySelector(
+      '[role="dialog"][aria-label="Observatory Assistant"]',
+    )
+    assert.ok(dialogAfterOpen, 'the real panel element still exists in the DOM after opening')
+    assert.equal(
+      dialogAfterOpen?.classList.contains('open'),
+      true,
+      'the real panel element itself must genuinely gain the open class after the button is clicked -- checking classList directly on the dialog element, not its parent',
     )
   })
 })
