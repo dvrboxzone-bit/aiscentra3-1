@@ -192,3 +192,72 @@ describe('targeted SIS replay', () => {
     })
   })
 })
+
+describe('targeted SIS replay workflow contract', () => {
+  const workflowPath = '.github/workflows/targeted-sis-replay.yml'
+  const workflow = (): string => readFileSync(workflowPath, 'utf8')
+
+  test('is manual-only, has no inputs, and requires the single production approval boundary', () => {
+    const source = workflow()
+    const triggerBlock = /^on:\r?\n([\s\S]*?)^permissions:/m.exec(source)?.[1] ?? ''
+
+    assert.match(triggerBlock, /^ {2}workflow_dispatch:\s*$/m)
+    assert.doesNotMatch(
+      triggerBlock,
+      /^ {2}(schedule|push|pull_request|repository_dispatch|workflow_call):/m,
+    )
+    assert.doesNotMatch(triggerBlock, /^ {4}inputs:/m)
+    assert.equal((source.match(/^ {4}environment:\s*production\s*$/gm) ?? []).length, 1)
+  })
+
+  test('uses the existing secret without printing it and calls only the exact internal endpoint once', () => {
+    const source = workflow()
+
+    assert.match(source, /CRON_SECRET:\s*\$\{\{ secrets\.CRON_SECRET \}\}/)
+    assert.match(source, /--header "x-cron-secret: \$\{CRON_SECRET\}"/)
+    assert.equal(
+      (source.match(/https:\/\/aiscentra\.com\/api\/internal\/sis-replay/g) ?? []).length,
+      1,
+    )
+    assert.equal((source.match(/\bcurl\b/g) ?? []).length, 1)
+    assert.match(source, /--retry 0/)
+    assert.doesNotMatch(source, /\/api\/enrich\/batch|\/api\/cron\/|\/api\/pipeline/)
+    assert.doesNotMatch(source, /\bcat\s+|set\s+-x|echo[^\n]*\$\{CRON_SECRET\}/)
+  })
+
+  test('sends exactly the nine server-side allowlisted IDs and no request fields besides observationIds', () => {
+    const source = workflow()
+    const bodyMatch = /--data-binary '([^']+)'/.exec(source)
+    assert.ok(bodyMatch, 'workflow must send one literal JSON body')
+
+    const body = JSON.parse(bodyMatch[1] ?? '') as Record<string, unknown>
+    assert.deepEqual(Object.keys(body), ['observationIds'])
+    assert.deepEqual(body['observationIds'], TARGETED_SIS_REPLAY_ALLOWLIST)
+  })
+
+  test('shares enrich-batch concurrency, disables cancellation, emits count-only output, and fails closed', () => {
+    const source = workflow()
+
+    assert.match(
+      source,
+      /concurrency:\r?\n {2}group:\s*enrich-batch\r?\n {2}cancel-in-progress:\s*false/,
+    )
+    for (const field of [
+      'requested',
+      'eligible',
+      'attempted',
+      'valid',
+      'rejected',
+      'retried',
+      'failed',
+      'diagnostic_counts',
+      'complete',
+    ]) {
+      assert.match(source, new RegExp(`\\b${field}\\b`))
+    }
+    assert.doesNotMatch(source, /raw[_ -]?output|raw[_ -]?content|response body/i)
+    assert.match(source, /if \[\[ "\$HTTP_STATUS" != "200" \]\]/)
+    assert.match(source, /jq -r '\.complete'/)
+    assert.match(source, /exit 1/)
+  })
+})
