@@ -165,7 +165,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
       <aside
         role="dialog"
         aria-label="Observatory Assistant"
-        className="assistant-panel relative flex flex-col"
+        className={`assistant-panel relative flex flex-col ${isOpen ? 'open' : ''}`}
       >
         <div className="flex items-center justify-between border-b border-border-subtle p-4">
           <span className="font-caption text-mint-signal">ASK THE OBSERVATORY</span>

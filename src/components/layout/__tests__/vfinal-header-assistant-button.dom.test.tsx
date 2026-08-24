@@ -60,33 +60,28 @@ describe('VfinalHeader — Assistant button opens the real sliding panel', () =>
     }
     const { container } = render(<TestApp />)
 
-    // REAL ARCHITECTURE CHANGE (independent-review visual correction,
-    // explicit owner instruction): the panel is now ALWAYS mounted
-    // (real CSS transform/visibility transition, matching the
-    // established .mobile-menu-panel slide pattern) so both entry AND
-    // exit are genuinely smooth -- unlike the prior `if (!isOpen)
-    // return null` version, the dialog element itself now genuinely
-    // exists in the DOM even while closed, just visually
-    // transformed off-screen via the .assistant-panel CSS class
-    // (no `.open` class yet). Real openness is therefore asserted via
-    // the real `.open` class, not DOM presence.
-    //
-    // Also note: comparing a real DOM Element directly against `null`
-    // via assert.equal (rather than a boolean .ok()/.equal(x, true)
-    // check) is itself a real footgun -- Node's own assertion-error
-    // formatter must serialize the full DOM node (with its circular
-    // parentNode/childNodes graph) to build a diff message on
-    // failure, which can take a very long time and looks exactly like
-    // a hang rather than a clean failure. Using .ok()/boolean checks
-    // throughout avoids ever constructing that diff.
+    // REAL BUG FOUND AND FIXED (owner-reported, live production/preview
+    // testing, 2026-08-23): the real component originally applied the
+    // `open` class ONLY to the outer overlay div, never to the
+    // `.assistant-panel` element itself (the real <aside> with
+    // role="dialog") -- meaning the dark overlay correctly faded in on
+    // click, but the sliding panel itself never actually transformed
+    // into view (permanently stuck at transform: translateX(100%)).
+    // This exact test file's OWN prior version had a matching mistake
+    // that masked the bug: it asserted
+    // `dialogElement.parentElement.classList.contains('open')` --
+    // checking the PARENT (the overlay) instead of the dialog element
+    // itself -- so it passed even though the real panel was broken.
+    // Both the component and this assertion are now fixed to check the
+    // real `.assistant-panel` element's own class directly.
     const dialogBeforeOpen = container.querySelector(
       '[role="dialog"][aria-label="Observatory Assistant"]',
     )
     assert.ok(dialogBeforeOpen, 'the real panel element exists in the DOM even before opening')
     assert.equal(
-      dialogBeforeOpen?.parentElement?.classList.contains('open'),
+      dialogBeforeOpen?.classList.contains('open'),
       false,
-      'the real panel must not have the open class before it is opened',
+      'the real panel element itself must not have the open class before it is opened',
     )
 
     const assistantButton = Array.from(container.querySelectorAll('button')).find(
@@ -101,9 +96,9 @@ describe('VfinalHeader — Assistant button opens the real sliding panel', () =>
     )
     assert.ok(dialogAfterOpen, 'the real panel element still exists in the DOM after opening')
     assert.equal(
-      dialogAfterOpen?.parentElement?.classList.contains('open'),
+      dialogAfterOpen?.classList.contains('open'),
       true,
-      'the real panel must genuinely gain the open class after the button is clicked',
+      'the real panel element itself must genuinely gain the open class after the button is clicked -- checking classList directly on the dialog element, not its parent',
     )
   })
 })
