@@ -16,6 +16,7 @@ import {
   AIRequestTooLargeError,
 } from './tpm-manager'
 import { ensureTimeLeft, msUntilDeadline, AIDeadlineExceededError } from './deadline'
+import { AIStructuredOutputError } from './structured-output'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -31,6 +32,8 @@ export type AIOptions = {
 
 export type AIResult = {
   content: string
+  finishReason: string | null
+  contentLength: number
   tokensUsed: number
   provider: ProviderName
   model: string
@@ -314,6 +317,8 @@ export async function callProvider(
 
   return {
     content,
+    finishReason: parsed.data.choices[0]?.finish_reason ?? null,
+    contentLength: content.length,
     tokensUsed,
     provider: ref.provider,
     model: ref.model,
@@ -331,6 +336,16 @@ export async function callProviderJSON<T>(
 ): Promise<T> {
   const result = await callProvider(ref, messages, options, deadlineAt)
 
+  if (result.finishReason === 'length') {
+    throw new AIStructuredOutputError({
+      provider: result.provider,
+      model: result.model,
+      failureType: 'output_truncated',
+      finishReason: result.finishReason,
+      contentLength: result.contentLength,
+    })
+  }
+
   const cleaned = result.content
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '')
@@ -340,20 +355,24 @@ export async function callProviderJSON<T>(
   try {
     parsed = JSON.parse(cleaned)
   } catch {
-    throw new AIProviderError(
-      `Response was not valid JSON:\n${result.content.slice(0, 200)}`,
-      ref.provider,
-      0,
-    )
+    throw new AIStructuredOutputError({
+      provider: result.provider,
+      model: result.model,
+      failureType: 'json_parse',
+      finishReason: result.finishReason,
+      contentLength: result.contentLength,
+    })
   }
 
   const validated = schema.safeParse(parsed)
   if (!validated.success) {
-    throw new AIProviderError(
-      `Response failed schema validation: ${validated.error.message}`,
-      ref.provider,
-      0,
-    )
+    throw new AIStructuredOutputError({
+      provider: result.provider,
+      model: result.model,
+      failureType: 'schema_validation',
+      finishReason: result.finishReason,
+      contentLength: result.contentLength,
+    })
   }
 
   return validated.data

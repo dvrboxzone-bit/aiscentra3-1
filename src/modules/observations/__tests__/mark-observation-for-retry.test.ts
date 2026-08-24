@@ -86,6 +86,27 @@ describe('markObservationForRetry', () => {
     assert.equal(capturedUpdate.values?.['processing_error'], null)
   })
 
+  test('successful requeue merges typed retry audit metadata without allowing retry_after override', async () => {
+    const { client, capturedUpdate } = makeMockClient({
+      readData: { metadata: { feed_url: 'https://example.com/feed.xml' } },
+      updateData: [{ id: 'obs-audit' }],
+    })
+
+    await markObservationForRetry('obs-audit', 60_000, client, {
+      structured_output_attempt: 2,
+      structured_output_last_failure: { failure_type: 'output_truncated' },
+      retry_after: 'unsafe-caller-value',
+    })
+
+    const metadata = capturedUpdate.values?.['metadata'] as Record<string, unknown>
+    assert.equal(metadata['structured_output_attempt'], 2)
+    assert.deepEqual(metadata['structured_output_last_failure'], {
+      failure_type: 'output_truncated',
+    })
+    assert.equal(metadata['feed_url'], 'https://example.com/feed.xml')
+    assert.notEqual(metadata['retry_after'], 'unsafe-caller-value')
+  })
+
   test('handles a null (never-set) existing metadata column without throwing', async () => {
     const { client, capturedUpdate } = makeMockClient({
       readData: { metadata: null },

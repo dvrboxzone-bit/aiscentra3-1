@@ -16,7 +16,7 @@
  * Every decision is logged in signal_decision_log.
  * Every Signal carries engine_version for retrospective analysis.
  */
-import { agentCompleteJSON } from '@/lib/ai/agent'
+import { agentCompleteJSON, AIStructuredOutputChainError } from '@/lib/ai/agent'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
@@ -38,6 +38,11 @@ import { computeAllScores, computeMomentumScore, validateFactors } from './scori
 import { validateSignal } from './validation'
 import { checkDuplicate, checkCorroboration, getRecentSignalTitles } from './deduplication'
 import { SIGNAL_QUALITY_RULE_VERSION } from './quality'
+import {
+  STRUCTURED_OUTPUT_MAX_ATTEMPTS,
+  diagnosticsForAudit,
+  getStructuredOutputAttempt,
+} from '@/lib/ai/structured-output'
 import type { ObservationRow } from '@/modules/observations/queries'
 import type { SignalCategory, QualificationResult } from '@/types/database'
 
@@ -181,6 +186,60 @@ async function writeDecisionLog(params: {
   } catch (err) {
     console.error('[engine] decision_log write failed:', err)
     // Non-blocking — never fail Signal creation due to log write failure
+  }
+}
+
+async function recordStructuredOutputTerminalFailure(params: {
+  supabase: ReturnType<typeof createAdminClient>
+  observation: ObservationRow
+  error: AIStructuredOutputChainError
+  stage: 'sis' | 'enrichment'
+}): Promise<SignalEngineResult> {
+  const { supabase, observation, error, stage } = params
+  const attempt = getStructuredOutputAttempt(observation.metadata)
+  const diagnosticAudit = diagnosticsForAudit(error.diagnostics)
+  const rejectionReason = error.retryable
+    ? `${stage.toUpperCase()} structured output remained truncated after ${attempt} attempts`
+    : `${stage.toUpperCase()} structured output failed terminal ${error.failureType} validation`
+
+  // This is an execution failure, not a content-quality judgment. Only
+  // typed metadata is persisted; raw model content is intentionally absent.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
+    .from('observations')
+    .update({
+      qualification_result: 'ERROR',
+      rejection_code: 'R-16',
+      rejection_reason: rejectionReason,
+      rejection_detail: {
+        stage,
+        failure_type: error.failureType,
+        attempt,
+        diagnostics: diagnosticAudit,
+      },
+      engine_version: ENGINE_VERSION,
+    })
+    .eq('id', observation.id)
+
+  await writeDecisionLog({
+    supabase,
+    signal_id: null,
+    observation_id: observation.id,
+    decision: 'ERROR',
+    rejection_code: 'R-16',
+    rejection_reason: rejectionReason,
+    engine_justification: JSON.stringify({
+      stage,
+      failure_type: error.failureType,
+      attempt,
+      diagnostics: diagnosticAudit,
+    }),
+  })
+
+  return {
+    observationId: observation.id,
+    outcome: 'error',
+    reason: `${stage.toUpperCase()} structured output: ${error.failureType}; attempt=${attempt}`,
   }
 }
 
@@ -507,6 +566,19 @@ export async function processObservation(
       observation.content,
     )
   } catch (err) {
+    if (err instanceof AIStructuredOutputChainError) {
+      const attempt = getStructuredOutputAttempt(observation.metadata)
+      if (err.retryable && attempt < STRUCTURED_OUTPUT_MAX_ATTEMPTS) {
+        throw err
+      }
+      return recordStructuredOutputTerminalFailure({
+        supabase,
+        observation,
+        error: err,
+        stage: 'sis',
+      })
+    }
+
     // Re-throw rate limit — batch handler will retry
     if (err instanceof AIProviderError && err.statusCode === 429) throw err
     // Re-throw deadline exceeded — batch handler must requeue this
@@ -627,6 +699,18 @@ export async function processObservation(
       deadlineAt,
     )
   } catch (err) {
+    if (err instanceof AIStructuredOutputChainError) {
+      const attempt = getStructuredOutputAttempt(observation.metadata)
+      if (err.retryable && attempt < STRUCTURED_OUTPUT_MAX_ATTEMPTS) {
+        throw err
+      }
+      return recordStructuredOutputTerminalFailure({
+        supabase,
+        observation,
+        error: err,
+        stage: 'enrichment',
+      })
+    }
     if (err instanceof AIProviderError && err.statusCode === 429) throw err
     // Re-throw deadline exceeded — must never be recorded as a
     // permanent processing_error (see the identical comment on the SIS

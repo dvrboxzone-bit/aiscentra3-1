@@ -41,6 +41,9 @@ export type RejectionCode =
   | 'R-11' // DUPLICATE_SIGNAL
   | 'R-12' // CATEGORY_DEFAULT_REJECT
   | 'R-13' // DETERMINISTIC_PREFILTER (zero-AI-cost score below PRE_FILTER_MIN)
+  | 'R-14' // ENRICHMENT_MARKETING
+  | 'R-15' // POST_ENRICHMENT_VALIDATION
+  | 'R-16' // TERMINAL_STRUCTURED_OUTPUT_FAILURE
 
 export type SignalCategory =
   | 'RESEARCH'

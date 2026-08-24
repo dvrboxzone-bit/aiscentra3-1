@@ -79,6 +79,13 @@ import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError, msUntilDeadline } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
 import { AIRequestTooLargeError } from '@/lib/ai/tpm-manager'
+import {
+  AIStructuredOutputChainError,
+  STRUCTURED_OUTPUT_MAX_ATTEMPTS,
+  diagnosticsForAudit,
+  getStructuredOutputAttempt,
+  structuredOutputRetryDelayMs,
+} from '@/lib/ai/structured-output'
 import { recordCycleMetrics } from '@/lib/metrics'
 import {
   acquireEnrichmentLock,
@@ -202,6 +209,7 @@ export interface BatchStats {
     | 'source_read_failed'
     | 'queue_read_failed'
     | 'write_failed'
+    | 'structured_output_retry'
   error_breakdown: {
     rate_limit: number
     server_error: number
@@ -219,6 +227,7 @@ export interface BatchStats {
      * controlled requeue rather than ever reaching Groq as a doomed
      * call that would return a real 429. */
     request_too_large: number
+    output_truncated: number
     unknown: number
   }
 }
@@ -289,6 +298,7 @@ function freshStats(): BatchStats {
       validation: 0,
       database: 0,
       request_too_large: 0,
+      output_truncated: 0,
       unknown: 0,
     },
   }
@@ -471,6 +481,44 @@ export async function processBatchOfObservations(
         await sleep(INTER_REQUEST_MS)
       }
     } catch (err) {
+      if (err instanceof AIStructuredOutputChainError && err.retryable) {
+        const currentAttempt = getStructuredOutputAttempt(observation.metadata)
+        // processObservation terminalizes attempt MAX itself and writes
+        // R-16. This guard is defensive: never create an unbounded retry
+        // if a future caller throws after the configured ceiling.
+        if (currentAttempt < STRUCTURED_OUTPUT_MAX_ATTEMPTS) {
+          const nextAttempt = currentAttempt + 1
+          const retryDelayMs = structuredOutputRetryDelayMs(currentAttempt)
+          stats.attempted++
+          stats.error_breakdown.output_truncated++
+          try {
+            await deps.markObservationForRetry(observation.id, retryDelayMs, undefined, {
+              structured_output_attempt: nextAttempt,
+              structured_output_last_failure: {
+                stage: err.role === 'classifier' ? 'sis' : err.role,
+                failure_type: err.failureType,
+                attempt: currentAttempt,
+                diagnostics: diagnosticsForAudit(err.diagnostics),
+                recorded_at: new Date().toISOString(),
+              },
+            })
+            stats.retried++
+            stats.stopped_reason = 'structured_output_retry'
+            console.warn(
+              `[enrich/batch] output_truncated — ${observation.id} queued for bounded retry attempt ${nextAttempt}/${STRUCTURED_OUTPUT_MAX_ATTEMPTS} in ${retryDelayMs}ms`,
+            )
+          } catch (requeueErr) {
+            stats.failed++
+            stats.error_breakdown.requeue_failed++
+            stats.stopped_reason = 'requeue_failed'
+            console.error(
+              `[enrich/batch] requeue_failed after output_truncated for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+            )
+          }
+          break
+        }
+      }
+
       // AI_REQUEST_TOO_LARGE: the request is physically too large for
       // every model in the chain's own TPM budget (see
       // AIRequestTooLargeError's own docstring in tpm-manager.ts).
