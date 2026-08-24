@@ -15,8 +15,8 @@ import { forceReducedMotion } from './homepage-fixtures'
  * (buildFaviconUrl), so it can be tested as a plain, real,
  * unconditional render.
  */
-describe('/trajectories — 6 real companies, real favicons, no dark per-card fill, no fabricated links', () => {
-  test('renders exactly 6 real trajectory cards with real favicon URLs, zero dark per-card background, and disabled "Coming soon" detail links (no fabricated destinations)', async (t) => {
+describe('/trajectories — 6 real companies, real favicons, subtle per-card surface, no fabricated links', () => {
+  test('renders exactly 6 real trajectory cards with real favicon URLs, the same real subtle surface fill used elsewhere on the site, and disabled "Coming soon" detail links (no fabricated destinations)', async (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
 
@@ -32,12 +32,19 @@ describe('/trajectories — 6 real companies, real favicons, no dark per-card fi
       'exactly 6 real trajectory cards must render',
     )
 
-    // Real, visual correction: no per-card dark fill anywhere on this
-    // page -- text sits directly over the single shared tech-grid.
+    // REAL DESIGN DECISION REVERSED (explicit owner instruction,
+    // 2026-08-24): the owner reviewed the no-fill version live and
+    // asked for the per-card subtle dark surface to come back,
+    // matching the exact same real pattern already used by
+    // Observatory's own sub-blocks (bg-surface-tonal, #0A0A0A --
+    // confirmed identical to src/app/observatory/page.tsx's own
+    // section elements). Each of the 6 real cards must carry this
+    // class -- not the old "text directly over the shared tech-grid,
+    // zero per-card fill" decision from the prior commit.
     assert.equal(
-      container.querySelectorAll('.bg-surface-tonal').length,
-      0,
-      'no per-card dark background fill may remain -- text must sit directly over the shared tech-grid',
+      container.querySelectorAll('[data-content-slot="trajectory"].bg-surface-tonal').length,
+      6,
+      "all 6 real trajectory cards must have the real bg-surface-tonal subtle dark fill, matching Observatory's own established sub-block pattern",
     )
 
     // Real company favicons: each of the 6 real, current company

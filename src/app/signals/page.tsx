@@ -2,7 +2,6 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
-import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
 import { SourceFaviconStrip } from '@/components/signals/source-favicon-strip'
 import { getSignals, getSignalsCount } from '@/modules/signals/queries'
 import { getSourceLinksForSignals } from '@/modules/observations/queries'
@@ -284,20 +283,22 @@ function VfinalCatalogCard({
   sourceLinks: SourceLink[]
 }): React.JSX.Element {
   return (
-    <div
-      className="card-sharp group p-5"
+    <article
+      className="flex min-h-72 flex-col border border-border-subtle bg-surface-tonal p-7"
       data-content-slot="signal"
       data-category={signal.category}
     >
-      <VfinalImageSlot className="mb-5 h-40 border-0" />
       <div className="mb-4 flex items-center justify-between">
-        <span className="font-caption text-deep-obsidian">{signal.status}</span>
-        <time className="text-xs font-medium text-gray-500" dateTime={signal.created_at}>
+        <span className="font-caption text-mint-signal">{signal.status}</span>
+        <time
+          className="font-mono text-[10px] uppercase tracking-widest text-silver-haze"
+          dateTime={signal.created_at}
+        >
           {formatDate(signal.created_at)}
         </time>
       </div>
-      <h3 className="mb-3 text-xl font-medium leading-tight">{signal.title}</h3>
-      <p className="mb-4 text-sm text-gray-700">{signal.description}</p>
+      <h3 className="mb-3 text-xl font-medium leading-tight text-frost">{signal.title}</h3>
+      <p className="mb-4 text-sm leading-relaxed text-silver-haze">{signal.description}</p>
 
       {/* Real source: verified favicon (via SourceFaviconStrip) when
           available, else the real source name as plain text -- never
@@ -308,17 +309,17 @@ function VfinalCatalogCard({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between border-t border-gray-200 pt-4">
-        <span className="font-mono text-[10px] uppercase tracking-widest text-gray-500">
+      <div className="mt-auto flex items-center justify-between border-t border-border-subtle pt-4">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-silver-haze">
           CONFIDENCE {signal.confidence_score}%
         </span>
         <Link
           href={`/signals/${signal.id}`}
-          className="magnetic text-sm font-medium text-deep-obsidian underline"
+          className="magnetic text-sm font-medium text-mint-signal underline"
         >
-          Trace <span className="text-mint-signal">↗</span>
+          Trace <span>↗</span>
         </Link>
       </div>
-    </div>
+    </article>
   )
 }
