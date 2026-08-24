@@ -323,8 +323,8 @@ export async function agentCompleteJSON<T>(
         err instanceof AIStructuredOutputError
           ? `${err.diagnostic.provider}/${err.diagnostic.model}: ${err.diagnostic.failureType} finish_reason=${err.diagnostic.finishReason ?? 'null'} content_length=${err.diagnostic.contentLength}`
           : err instanceof AIProviderError
-          ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
-          : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
+            ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
+            : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
       errors.push(`[${kind}] ${msg}`)
       console.warn(`[agent:${role}] ✗ JSON ${ref.provider}/${ref.model} (${kind})`)
     }

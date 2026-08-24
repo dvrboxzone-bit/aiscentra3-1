@@ -1,9 +1,6 @@
 import type { ProviderName } from './config'
 
-export type StructuredOutputFailureType =
-  | 'json_parse'
-  | 'schema_validation'
-  | 'output_truncated'
+export type StructuredOutputFailureType = 'json_parse' | 'schema_validation' | 'output_truncated'
 
 export interface StructuredOutputDiagnostic {
   provider: ProviderName

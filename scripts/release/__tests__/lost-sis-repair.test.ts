@@ -23,9 +23,9 @@ describe('lost SIS observation repair SQL', () => {
     const targetBlock = /with repair_targets\(id\) as \((.*?)\), repaired as/is.exec(sql)?.[1]
     assert.ok(targetBlock, 'repair_targets CTE must exist')
     const ids = new Set(
-      [...targetBlock.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)].map(
-        ([id]) => id.toLowerCase(),
-      ),
+      [
+        ...targetBlock.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi),
+      ].map(([id]) => id.toLowerCase()),
     )
     assert.deepEqual(ids, expectedIds)
     assert.equal(ids.size, 9)

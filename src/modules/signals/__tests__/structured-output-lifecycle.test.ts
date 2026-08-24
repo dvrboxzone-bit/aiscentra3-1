@@ -37,7 +37,10 @@ function observation(metadata: Record<string, unknown> = {}): ObservationRow {
   } as unknown as ObservationRow
 }
 
-function installProviderHarness(responseContent: string, finishReason: string): {
+function installProviderHarness(
+  responseContent: string,
+  finishReason: string,
+): {
   signalWrites: string[]
   decisionWrites: Array<Record<string, unknown>>
   observationWrites: Array<Record<string, unknown>>
@@ -90,28 +93,24 @@ describe('SIS structured-output lifecycle', () => {
       metadata: Record<string, unknown>
     }> = []
 
-    const stats = await processBatchOfObservations(
-      [observation()],
-      Date.now() + 120_000,
-      {
-        fetchSourceInfo: async () => ({
-          ok: true,
-          trustScore: 0.8,
-          sourceName: 'Fixture Source',
-        }),
-        fetchObservationsPage: async () => ({ rows: [], error: null, pool: 'fresh' }),
-        processObservation,
-        markObservationProcessed: async (id) => {
-          processedWrites.push({ id })
-          return { ok: true }
-        },
-        markObservationForRetry: async (id, delay, _client, metadata) => {
-          retryWrites.push({ id, delay: delay ?? 0, metadata: metadata ?? {} })
-          return id
-        },
-        sleep: async () => undefined,
+    const stats = await processBatchOfObservations([observation()], Date.now() + 120_000, {
+      fetchSourceInfo: async () => ({
+        ok: true,
+        trustScore: 0.8,
+        sourceName: 'Fixture Source',
+      }),
+      fetchObservationsPage: async () => ({ rows: [], error: null, pool: 'fresh' }),
+      processObservation,
+      markObservationProcessed: async (id) => {
+        processedWrites.push({ id })
+        return { ok: true }
       },
-    )
+      markObservationForRetry: async (id, delay, _client, metadata) => {
+        retryWrites.push({ id, delay: delay ?? 0, metadata: metadata ?? {} })
+        return id
+      },
+      sleep: async () => undefined,
+    })
 
     assert.equal(stats.attempted, 1)
     assert.equal(stats.retried, 1)
@@ -181,10 +180,7 @@ describe('SIS structured-output lifecycle', () => {
     assert.equal(harness.decisionWrites.length, 1)
     assert.equal(harness.decisionWrites[0]?.['decision'], 'ERROR')
     assert.equal(harness.decisionWrites[0]?.['rejection_code'], 'R-16')
-    assert.match(
-      String(harness.decisionWrites[0]?.['engine_justification']),
-      /schema_validation/,
-    )
+    assert.match(String(harness.decisionWrites[0]?.['engine_justification']), /schema_validation/)
     assert.ok(
       harness.observationWrites.some(
         (write) => write['rejection_code'] === 'R-16' && write['qualification_result'] === 'ERROR',
