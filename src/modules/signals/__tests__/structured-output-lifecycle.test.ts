@@ -83,6 +83,92 @@ function installProviderHarness(
 }
 
 describe('SIS structured-output lifecycle', () => {
+  test('mixed invalid-envelope/truncation chain is retryable and never terminalizes the observation', async () => {
+    process.env['GROQ_API_KEY'] = 'test-key-not-real'
+    process.env['CLOUDFLARE_API_TOKEN'] = 'test-token-not-real'
+    process.env['CLOUDFLARE_ACCOUNT_ID'] = 'test-account-not-real'
+    const providerCalls: string[] = []
+    const signalWrites: string[] = []
+    const decisionWrites: Array<Record<string, unknown>> = []
+    const processedWrites: Array<{ id: string }> = []
+    const retryWrites: Array<{ id: string; metadata: Record<string, unknown> }> = []
+    const privateEnvelopeFragment = 'private-envelope-content-must-not-leak'
+
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlText = typeof url === 'string' ? url : url.toString()
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (urlText.includes('supabase.co') || urlText.includes('placeholder.supabase')) {
+        const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {}
+        if (urlText.includes('/signals') && (method === 'POST' || method === 'PATCH')) {
+          signalWrites.push(method)
+        }
+        if (urlText.includes('/signal_decision_log') && method === 'POST') {
+          decisionWrites.push(body)
+        }
+        return new Response('[]', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      const requestBody = JSON.parse(String(init?.body ?? '{}')) as { model?: string }
+      const requestedModel = requestBody.model ?? 'unknown'
+      providerCalls.push(requestedModel)
+      if (requestedModel === 'openai/gpt-oss-120b') {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"truncated":' }, finish_reason: 'length' }],
+            usage: { total_tokens: 400 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(JSON.stringify({ privateEnvelopeFragment }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const stats = await processBatchOfObservations([observation()], Date.now() + 120_000, {
+      fetchSourceInfo: async () => ({
+        ok: true,
+        trustScore: 0.8,
+        sourceName: 'Fixture Source',
+      }),
+      fetchObservationsPage: async () => ({ rows: [], error: null, pool: 'fresh' }),
+      processObservation,
+      markObservationProcessed: async (id) => {
+        processedWrites.push({ id })
+        return { ok: true }
+      },
+      markObservationForRetry: async (id, _delay, _client, metadata) => {
+        retryWrites.push({ id, metadata: metadata ?? {} })
+        return id
+      },
+      sleep: async () => undefined,
+    })
+
+    assert.deepEqual(providerCalls, [
+      'openai/gpt-oss-20b',
+      'openai/gpt-oss-120b',
+      '@cf/zai-org/glm-4.7-flash',
+    ])
+    assert.equal(stats.attempted, 1)
+    assert.equal(stats.retried, 1)
+    assert.equal(stats.failed, 0)
+    assert.equal(stats.stopped_reason, 'structured_output_retry')
+    assert.equal(processedWrites.length, 0)
+    assert.equal(signalWrites.length, 0)
+    assert.equal(decisionWrites.length, 0)
+    assert.equal(retryWrites.length, 1)
+    assert.equal(retryWrites[0]?.metadata['structured_output_attempt'], 2)
+    const audit = JSON.stringify(retryWrites[0]?.metadata)
+    assert.match(audit, /output_truncated/)
+    assert.match(audit, /invalid_response_envelope/)
+    assert.match(audit, /"http_status":200/)
+    assert.doesNotMatch(audit, new RegExp(privateEnvelopeFragment))
+  })
+
   test('HTTP 200 + finish_reason=length is typed, bounded-retried, remains unprocessed, and writes no Signal/decision', async () => {
     const rawFragmentThatMustNotLeak = '{"secret_raw_fragment":'
     const harness = installProviderHarness(rawFragmentThatMustNotLeak, 'length')

@@ -2,7 +2,7 @@ import { afterEach, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { z } from 'zod'
 
-import { callProviderJSON } from '../client'
+import { AIInvalidResponseEnvelopeError, callProvider, callProviderJSON } from '../client'
 import { AIStructuredOutputError } from '../structured-output'
 
 const originalFetch = globalThis.fetch
@@ -54,6 +54,7 @@ describe('structured AI diagnostics', () => {
       provider: 'groq',
       model: 'openai/gpt-oss-20b',
       failureType: 'output_truncated',
+      httpStatus: 200,
       finishReason: 'length',
       contentLength: raw.length,
     })
@@ -92,5 +93,34 @@ describe('structured AI diagnostics', () => {
     )
 
     assert.deepEqual(result, { ok: true })
+  })
+
+  test('invalid provider envelope reports safe typed metadata and never retains raw content', async () => {
+    process.env['GROQ_API_KEY'] = 'test-key-not-real'
+    const privateRaw = JSON.stringify({ private_response_fragment: 'must-not-leak' })
+    globalThis.fetch = async () =>
+      new Response(privateRaw, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+
+    await assert.rejects(
+      callProvider(model, [{ role: 'user', content: 'return JSON' }], {}, Date.now() + 30_000),
+      (error: unknown) => {
+        assert.ok(error instanceof AIInvalidResponseEnvelopeError)
+        assert.equal(error.statusCode, 0)
+        assert.deepEqual(error.diagnostic, {
+          provider: 'groq',
+          model: 'openai/gpt-oss-20b',
+          failureType: 'invalid_response_envelope',
+          httpStatus: 200,
+          finishReason: null,
+          contentLength: privateRaw.length,
+        })
+        assert.doesNotMatch(error.message, /must-not-leak|private_response_fragment/)
+        assert.doesNotMatch(JSON.stringify(error.diagnostic), /must-not-leak/)
+        return true
+      },
+    )
   })
 })

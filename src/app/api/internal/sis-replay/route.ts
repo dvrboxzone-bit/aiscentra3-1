@@ -28,7 +28,7 @@ const DEADLINE_BUFFER_MS = 10_000
 function diagnosticFromResult(result: SignalEngineResult): StructuredFailureType | undefined {
   if (result.outcome !== 'error') return undefined
   const match = result.reason?.match(
-    /SIS structured output: (json_parse|schema_validation|output_truncated)/,
+    /SIS structured output: (json_parse|schema_validation|output_truncated|invalid_response_envelope)/,
   )
   return match?.[1] as StructuredFailureType | undefined
 }
