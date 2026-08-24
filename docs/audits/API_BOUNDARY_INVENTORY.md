@@ -67,27 +67,27 @@ claim to.
 
 | Metric                                              | Value |
 | --------------------------------------------------- | ----: |
-| Total routes                                        |    17 |
+| Total routes                                        |    18 |
 | Category: `public-read`                             |     3 |
 | Category: `authenticated-user`                      |     0 |
 | Category: `admin`                                   |     1 |
 | Category: `cron`                                    |    12 |
-| Category: `internal-machine`                        |     1 |
+| Category: `internal-machine`                        |     2 |
 | Category: `disabled`                                |     0 |
-| Direct AI-calling routes                            |     7 |
+| Direct AI-calling routes                            |     8 |
 | Indirect AI-triggering routes                       |     4 |
-| Service-role routes                                 |    13 |
-| Database-read routes                                |    15 |
-| Database-write routes                               |     8 |
+| Service-role routes                                 |    14 |
+| Database-read routes                                |    16 |
+| Database-write routes                               |     9 |
 | Literal rateLimit="missing" count                   |    15 |
-| Routes without a real caller-facing HTTP rate limit |    17 |
+| Routes without a real caller-facing HTTP rate limit |    18 |
 | Literal budgetGuard="missing" count                 |    15 |
-| Cost-sensitive routes                               |    11 |
-| External-network-call routes                        |    15 |
+| Cost-sensitive routes                               |    12 |
+| External-network-call routes                        |    16 |
 | Weak shared-secret (non-constant-time) routes       |    11 |
 | Confirmed raw-error-exposure routes                 |     5 |
 | Risk: P0                                            |     0 |
-| Risk: P1                                            |    13 |
+| Risk: P1                                            |    14 |
 | Risk: P2                                            |     2 |
 | Risk: P3                                            |     2 |
 
@@ -174,6 +174,7 @@ reported as-is, not adjusted to preserve a prior narrative.
 | `/api/cron/pipeline`            | GET       | cron             | inline check (fail-closed on missing secret) | indirect |      —       |    —     |     ✅      |  P1  |
 | `/api/cron/reports`             | GET       | cron             | inline check                                 | indirect |      ✅      |    —     |     ✅      |  P1  |
 | `/api/enrich/batch`             | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/internal/sis-replay`      | POST      | internal-machine | centralized `isAuthorizedCronRequest`        | direct   |      ✅      |    ✅    |      —      |  P1  |
 | `/api/enrich`                   | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
 | `/api/events/promote`           | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
 | `/api/health`                   | GET       | public-read      | none (intentional)                           | none     |      ✅      |    —     |      —      |  P2  |
