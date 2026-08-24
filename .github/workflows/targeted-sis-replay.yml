@@ -1,0 +1,77 @@
+name: Targeted SIS Replay (manual, allowlisted 9 only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enrich-batch
+  cancel-in-progress: false
+
+jobs:
+  targeted-sis-replay:
+    name: Replay the nine repaired SIS observations
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: production
+    steps:
+      - name: Call the internal allowlisted replay path once
+        shell: bash
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "${CRON_SECRET:-}" ]]; then
+            echo "::error::CRON_SECRET is not configured."
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          HTTP_STATUS="$(curl --silent --show-error --retry 0 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST 'https://aiscentra.com/api/internal/sis-replay' \
+            --header 'Content-Type: application/json' \
+            --header "x-cron-secret: ${CRON_SECRET}" \
+            --data-binary '{"observationIds":["e4275483-39e4-4441-84a2-0a1df546cf07","ec86e548-8394-4c45-8353-7ba588f23cf3","fc22b35a-776b-4666-aabc-64ea1a198c34","bcf826e4-069c-4627-a4ab-6635ce3e1f7e","5e0938e3-feb2-4531-9ebb-1e53164d219d","cb043c56-7be5-4e9d-9144-2c9c407d9655","91c78285-f310-4dfa-a0ca-0953e8cfdd40","948419ea-27e9-4213-b692-f80c04611cfa","de90407c-d4b9-4eee-862f-12a549f9544d"]}')"
+
+          echo "HTTP status: ${HTTP_STATUS}"
+
+          summary="$(jq -ce '
+            {
+              requested,
+              eligible,
+              attempted,
+              valid,
+              rejected,
+              retried,
+              failed,
+              diagnostic_counts: {
+                json_parse: .diagnostic_counts.json_parse,
+                schema_validation: .diagnostic_counts.schema_validation,
+                output_truncated: .diagnostic_counts.output_truncated
+              },
+              complete
+            }
+            | select(
+                ([.requested, .eligible, .attempted, .valid, .rejected, .retried, .failed,
+                  .diagnostic_counts.json_parse, .diagnostic_counts.schema_validation,
+                  .diagnostic_counts.output_truncated] | all(type == "number"))
+                and (.complete | type == "boolean")
+              )
+          ' "$response_file")" || {
+            echo "::error::Response did not match the count-only replay summary contract."
+            exit 1
+          }
+
+          echo "Summary: ${summary}"
+
+          if [[ "$HTTP_STATUS" != "200" ]] || [[ "$(jq -r '.complete' <<<"$summary")" != "true" ]]; then
+            echo "::error::Targeted SIS replay did not complete successfully."
+            exit 1
+          fi
