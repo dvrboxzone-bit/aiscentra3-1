@@ -67,7 +67,7 @@ export default function TrajectoriesPage(): React.JSX.Element {
               return (
                 <article
                   key={trajectory.name}
-                  className="flex min-h-72 flex-col border border-border-subtle p-7"
+                  className="flex min-h-72 flex-col border border-border-subtle bg-surface-tonal p-7"
                   data-content-slot="trajectory"
                 >
                   <div className="mb-8 flex items-start justify-between gap-4">

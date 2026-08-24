@@ -284,7 +284,7 @@ function VfinalCatalogCard({
 }): React.JSX.Element {
   return (
     <article
-      className="flex min-h-72 flex-col border border-border-subtle p-7"
+      className="flex min-h-72 flex-col border border-border-subtle bg-surface-tonal p-7"
       data-content-slot="signal"
       data-category={signal.category}
     >
