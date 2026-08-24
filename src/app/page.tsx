@@ -409,7 +409,7 @@ function FeaturedSignalCard({
         <span className="font-caption text-deep-obsidian">{signal.status}</span>
         <span className="text-xs font-medium text-gray-500">{relativeTime(signal.created_at)}</span>
       </div>
-      <h3 className="mb-3 text-xl font-medium leading-tight">{signal.title}</h3>
+      <h3 className="mb-3 text-xl font-medium leading-tight text-deep-obsidian">{signal.title}</h3>
       <p className="mb-6 text-sm text-gray-700">{signal.description}</p>
       <div className="flex items-center justify-between border-t border-gray-200 pt-4">
         <span className="font-mono text-[10px] uppercase tracking-widest text-gray-500">
