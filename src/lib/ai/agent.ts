@@ -26,6 +26,13 @@ import {
   estimateInputTokens,
   AITokenBudgetExceededError,
 } from './budget-gate'
+import {
+  AIStructuredOutputChainError,
+  AIStructuredOutputError,
+  type StructuredOutputDiagnostic,
+} from './structured-output'
+
+export { AIStructuredOutputChainError } from './structured-output'
 
 export type { AgentRole, AIMessage, AIOptions, AIResult }
 
@@ -34,7 +41,8 @@ export type ErrorKind =
   | 'server_error'
   | 'client_error'
   | 'json_parse'
-  | 'validation'
+  | 'schema_validation'
+  | 'output_truncated'
   /** REAL PRODUCTION INCIDENT this closes: distinguishes "this request
    * is physically too large for this model's own TPM budget, no
    * amount of waiting or retrying would ever help" from a generic
@@ -58,13 +66,14 @@ function backoffMs(attempt: number, retryAfterMs?: number): number {
 
 function classifyError(err: unknown): ErrorKind {
   if (err instanceof AIRequestTooLargeError) return 'request_too_large'
+  if (err instanceof AIStructuredOutputError) return err.diagnostic.failureType
   if (err instanceof AIProviderError) {
     if (err.isRateLimit) return 'rate_limit'
     if (err.isServerError) return 'server_error'
     return 'client_error'
   }
   if (err instanceof SyntaxError) return 'json_parse'
-  if (err instanceof z.ZodError) return 'validation'
+  if (err instanceof z.ZodError) return 'schema_validation'
   return 'unknown'
 }
 
@@ -252,6 +261,7 @@ export async function agentCompleteJSON<T>(
   const chain = getModelChain(role)
   const errors: string[] = []
   const kinds: ErrorKind[] = []
+  const structuredDiagnostics: StructuredOutputDiagnostic[] = []
   // See agentComplete's identical comment above -- preserves the real
   // thrown error object for the most recent attempt.
   let lastError: unknown
@@ -302,12 +312,17 @@ export async function agentCompleteJSON<T>(
 
       const kind = classifyError(err)
       kinds.push(kind)
+      if (err instanceof AIStructuredOutputError) {
+        structuredDiagnostics.push(err.diagnostic)
+      }
       lastError = err
       if (err instanceof AIProviderError && err.retryAfterMs) {
         maxRetryAfterMs = Math.max(maxRetryAfterMs ?? 0, err.retryAfterMs)
       }
       const msg =
-        err instanceof AIProviderError
+        err instanceof AIStructuredOutputError
+          ? `${err.diagnostic.provider}/${err.diagnostic.model}: ${err.diagnostic.failureType} finish_reason=${err.diagnostic.finishReason ?? 'null'} content_length=${err.diagnostic.contentLength}`
+          : err instanceof AIProviderError
           ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
           : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
       errors.push(`[${kind}] ${msg}`)
@@ -325,6 +340,16 @@ export async function agentCompleteJSON<T>(
       429,
       maxRetryAfterMs,
     )
+  }
+
+  if (
+    structuredDiagnostics.length === chain.length &&
+    kinds.every(
+      (kind) =>
+        kind === 'json_parse' || kind === 'schema_validation' || kind === 'output_truncated',
+    )
+  ) {
+    throw new AIStructuredOutputChainError(structuredDiagnostics, role)
   }
 
   // REAL BUG FIXED (merge-blocking review) -- see agentComplete's

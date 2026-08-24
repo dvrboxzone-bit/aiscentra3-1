@@ -134,6 +134,7 @@ export async function markObservationForRetry(
   id: string,
   retryAfterMs: number = 60_000,
   client?: RetryQueryClient,
+  metadataPatch: Record<string, unknown> = {},
 ): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase = (client ?? createAdminClient()) as any
@@ -178,7 +179,7 @@ export async function markObservationForRetry(
     .update({
       processed: false,
       processing_error: null,
-      metadata: { ...existingMetadata, retry_after: retryAt },
+      metadata: { ...existingMetadata, ...metadataPatch, retry_after: retryAt },
     })
     .eq('id', id)
     .select('id')) as { data: Array<{ id: string }> | null; error: { message: string } | null }
