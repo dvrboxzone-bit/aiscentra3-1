@@ -1,18 +1,27 @@
 import { NextResponse } from 'next/server'
 
 import { processBatchOfObservations, type BatchProcessingDeps } from '@/app/api/enrich/batch/route'
-import { acquireEnrichmentLock, releaseEnrichmentLock } from '@/lib/ai/execution-lock'
+import {
+  acquireEnrichmentLock,
+  releaseEnrichmentLock,
+  verifyEnrichmentLockLease,
+} from '@/lib/ai/execution-lock'
 import {
   TARGETED_SIS_V3_CLASSIFIER_POLICY,
   TARGETED_SIS_V3_PARSER_POLICY,
   TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
   hasTargetedSisV3PreclaimBudget,
+  TARGETED_SIS_V4_CLASSIFIER_POLICY,
+  TARGETED_SIS_V4_PARSER_POLICY,
+  buildLockScopedTPMAvailability,
+  createTargetedSisV4ReservationPlan,
+  type TargetedSisV4ReservationPlan,
 } from '@/lib/ai/execution-policy'
 import { structuredFailureTypesFromExecutionDiagnostics } from '@/lib/ai/execution-diagnostics'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { getModelChain } from '@/lib/ai/models'
 import { AIStructuredOutputChainError } from '@/lib/ai/structured-output'
-import { checkTPMBudget } from '@/lib/ai/tpm-manager'
+import { checkTPMBudget, getModelTPMCapacity } from '@/lib/ai/tpm-manager'
 import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
@@ -24,6 +33,7 @@ import { processObservation, type SignalEngineResult } from '@/modules/signals/e
 import {
   parseTargetedReplayRequest,
   parseTargetedReplayV3ControlRequest,
+  parseTargetedReplayV4ControlRequest,
   runTargetedSisReplay,
   TARGETED_SIS_REPAIR_KEY,
   TARGETED_SIS_REPLAY_V2_AUDIT_FIELD,
@@ -33,6 +43,10 @@ import {
   TARGETED_SIS_REPLAY_V3_CONTROL_KEY,
   TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD,
   isTargetedReplayV3ControlEligible,
+  isTargetedReplayV4ControlEligible,
+  TARGETED_SIS_REPLAY_V4_CONTROL_AUDIT_FIELD,
+  TARGETED_SIS_REPLAY_V4_CONTROL_KEY,
+  TARGETED_SIS_REPLAY_V4_CONTROL_MARKER_FIELD,
   type StructuredFailureType,
   type TargetedReplayItemResult,
 } from '@/modules/signals/targeted-sis-replay'
@@ -41,7 +55,9 @@ export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 const DEADLINE_BUFFER_MS = 10_000
-const V3_CAMPAIGN_HEADER = 'x-sis-replay-campaign'
+const CAMPAIGN_HEADER = 'x-sis-replay-campaign'
+
+type ControlCampaign = 'v3' | 'v4' | undefined
 
 function diagnosticFromResult(result: SignalEngineResult): StructuredFailureType | undefined {
   if (result.outcome !== 'error') return undefined
@@ -55,7 +71,8 @@ async function processClaimedObservation(
   supabase: ReturnType<typeof createAdminClient>,
   observation: ObservationRow,
   deadlineAt: number,
-  useV3ExecutionPolicy = false,
+  campaign: ControlCampaign = undefined,
+  v4Reservation?: TargetedSisV4ReservationPlan,
 ): Promise<TargetedReplayItemResult> {
   let diagnostic: StructuredFailureType | undefined
   let deadlineError: AIDeadlineExceededError | undefined
@@ -93,12 +110,23 @@ async function processClaimedObservation(
           sourceName,
           sourceType,
           itemDeadlineAt,
-          useV3ExecutionPolicy
+          campaign === 'v4' && v4Reservation
             ? {
-                classifier: TARGETED_SIS_V3_CLASSIFIER_POLICY,
-                parser: TARGETED_SIS_V3_PARSER_POLICY,
+                classifier: {
+                  ...TARGETED_SIS_V4_CLASSIFIER_POLICY,
+                  reservedModels: v4Reservation.classifierModels,
+                },
+                parser: {
+                  ...TARGETED_SIS_V4_PARSER_POLICY,
+                  reservedModels: v4Reservation.parserModels,
+                },
               }
-            : undefined,
+            : campaign === 'v3'
+              ? {
+                  classifier: TARGETED_SIS_V3_CLASSIFIER_POLICY,
+                  parser: TARGETED_SIS_V3_PARSER_POLICY,
+                }
+              : undefined,
         )
         diagnostic = diagnosticFromResult(result)
         return result
@@ -159,10 +187,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const isV3Control = request.headers.get(V3_CAMPAIGN_HEADER) === TARGETED_SIS_REPLAY_V3_CONTROL_KEY
-  const parsed = isV3Control
-    ? parseTargetedReplayV3ControlRequest(body)
-    : parseTargetedReplayRequest(body)
+  const campaignHeader = request.headers.get(CAMPAIGN_HEADER)
+  const campaign: ControlCampaign =
+    campaignHeader === TARGETED_SIS_REPLAY_V4_CONTROL_KEY
+      ? 'v4'
+      : campaignHeader === TARGETED_SIS_REPLAY_V3_CONTROL_KEY
+        ? 'v3'
+        : undefined
+  const parsed =
+    campaign === 'v4'
+      ? parseTargetedReplayV4ControlRequest(body)
+      : campaign === 'v3'
+        ? parseTargetedReplayV3ControlRequest(body)
+        : parseTargetedReplayRequest(body)
   if (!parsed.ok) {
     return NextResponse.json({ error: parsed.error }, { status: 400 })
   }
@@ -185,6 +222,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    const v4Reservations = new Map<string, TargetedSisV4ReservationPlan>()
     const loadRows = async (ids: readonly string[]): Promise<ObservationRow[]> => {
       const { data, error } = await db
         .from('observations')
@@ -199,26 +237,41 @@ export async function POST(request: Request): Promise<NextResponse> {
         return loadRows(ids)
       },
       claim: async (observation) => {
-        const markerField = isV3Control
-          ? TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD
-          : TARGETED_SIS_REPLAY_V2_MARKER_FIELD
-        const markerKey = isV3Control
-          ? TARGETED_SIS_REPLAY_V3_CONTROL_KEY
-          : TARGETED_SIS_REPLAY_V2_KEY
-        const auditField = isV3Control
-          ? TARGETED_SIS_REPLAY_V3_CONTROL_AUDIT_FIELD
-          : TARGETED_SIS_REPLAY_V2_AUDIT_FIELD
+        const markerField =
+          campaign === 'v4'
+            ? TARGETED_SIS_REPLAY_V4_CONTROL_MARKER_FIELD
+            : campaign === 'v3'
+              ? TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD
+              : TARGETED_SIS_REPLAY_V2_MARKER_FIELD
+        const markerKey =
+          campaign === 'v4'
+            ? TARGETED_SIS_REPLAY_V4_CONTROL_KEY
+            : campaign === 'v3'
+              ? TARGETED_SIS_REPLAY_V3_CONTROL_KEY
+              : TARGETED_SIS_REPLAY_V2_KEY
+        const auditField =
+          campaign === 'v4'
+            ? TARGETED_SIS_REPLAY_V4_CONTROL_AUDIT_FIELD
+            : campaign === 'v3'
+              ? TARGETED_SIS_REPLAY_V3_CONTROL_AUDIT_FIELD
+              : TARGETED_SIS_REPLAY_V2_AUDIT_FIELD
         const metadata = {
           ...(observation.metadata ?? {}),
           [markerField]: markerKey,
           [auditField]: {
-            reason: isV3Control
-              ? 'Approved v3 scheduling control checkpoint for one observation'
-              : 'Approved one-time v2 replay after increasing only the SIS output cap',
+            reason:
+              campaign === 'v4'
+                ? 'Approved v4 lock-scoped reservation control checkpoint for one observation'
+                : campaign === 'v3'
+                  ? 'Approved v3 scheduling control checkpoint for one observation'
+                  : 'Approved one-time v2 replay after increasing only the SIS output cap',
             claimed_at: new Date().toISOString(),
-            source: isV3Control
-              ? 'internal_allowlisted_sis_replay_v3_control'
-              : 'internal_allowlisted_sis_replay_v2',
+            source:
+              campaign === 'v4'
+                ? 'internal_allowlisted_sis_replay_v4_control'
+                : campaign === 'v3'
+                  ? 'internal_allowlisted_sis_replay_v3_control'
+                  : 'internal_allowlisted_sis_replay_v2',
           },
         }
         const { data, error } = await db
@@ -237,42 +290,92 @@ export async function POST(request: Request): Promise<NextResponse> {
         return (data as ObservationRow | null) ?? null
       },
       processOne: (observation, itemDeadlineAt) =>
-        processClaimedObservation(supabase, observation, itemDeadlineAt, isV3Control),
-      ...(isV3Control
+        processClaimedObservation(
+          supabase,
+          observation,
+          itemDeadlineAt,
+          campaign,
+          v4Reservations.get(observation.id),
+        ),
+      ...(campaign === 'v4'
         ? {
-            isEligible: isTargetedReplayV3ControlEligible,
-            canStart: async (_observation: ObservationRow, itemDeadlineAt: number) => {
-              const classifier = getModelChain('classifier')[0]
-              const parser = getModelChain('parser')[0]
-              if (!classifier || !parser) return false
-              return hasTargetedSisV3PreclaimBudget({
-                remainingMs: itemDeadlineAt - Date.now(),
-                classifierTPMAllowed: checkTPMBudget(
-                  classifier.model,
-                  TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
-                ).allowed,
-                parserTPMAllowed: checkTPMBudget(
-                  parser.model,
-                  TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
-                ).allowed,
+            isEligible: isTargetedReplayV4ControlEligible,
+            canStart: async (observation: ObservationRow, itemDeadlineAt: number) => {
+              const leaseVerified = await verifyEnrichmentLockLease(db, lockHolder, itemDeadlineAt)
+              if (!leaseVerified) return false
+              const classifierChain = getModelChain('classifier')
+              const parserChain = getModelChain('parser')
+              const models = [
+                ...new Set([...classifierChain, ...parserChain].map((ref) => ref.model)),
+              ]
+              const { data: usageRows, error: usageError } = await db
+                .from('ai_token_usage')
+                .select('model, tokens')
+                .in('model', models)
+                .gte('consumed_at', new Date(Date.now() - 60_000).toISOString())
+              if (usageError || !Array.isArray(usageRows)) return false
+              const availability = buildLockScopedTPMAvailability({
+                models,
+                rows: usageRows,
+                capacityForModel: getModelTPMCapacity,
               })
+              if (!availability) return false
+              const reservation = createTargetedSisV4ReservationPlan({
+                remainingMs: itemDeadlineAt - Date.now(),
+                lockLeaseVerified: true,
+                classifierChain,
+                parserChain,
+                estimatedTokens: TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
+                checkTPM: (model, estimatedTokens) => {
+                  const shared = availability.get(model)
+                  const local = checkTPMBudget(model, estimatedTokens)
+                  if (!shared) return { allowed: false, remainingTokens: 0 }
+                  return {
+                    allowed: shared.allowed && local.allowed,
+                    remainingTokens: Math.min(shared.remainingTokens, local.remainingTokens),
+                  }
+                },
+              })
+              if (!reservation) return false
+              v4Reservations.set(observation.id, reservation)
+              return true
             },
           }
-        : {}),
+        : campaign === 'v3'
+          ? {
+              isEligible: isTargetedReplayV3ControlEligible,
+              canStart: async (_observation: ObservationRow, itemDeadlineAt: number) => {
+                const classifier = getModelChain('classifier')[0]
+                const parser = getModelChain('parser')[0]
+                if (!classifier || !parser) return false
+                return hasTargetedSisV3PreclaimBudget({
+                  remainingMs: itemDeadlineAt - Date.now(),
+                  classifierTPMAllowed: checkTPMBudget(
+                    classifier.model,
+                    TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
+                  ).allowed,
+                  parserTPMAllowed: checkTPMBudget(
+                    parser.model,
+                    TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
+                  ).allowed,
+                })
+              },
+            }
+          : {}),
     })
 
-    const finalEligible = isV3Control
+    const finalEligible = campaign
       ? (await loadRows(parsed.observationIds)).filter((row) =>
-          isTargetedReplayV3ControlEligible(row),
+          campaign === 'v4'
+            ? isTargetedReplayV4ControlEligible(row)
+            : isTargetedReplayV3ControlEligible(row),
         ).length
       : undefined
 
     return NextResponse.json(
       {
         ...summary,
-        ...(isV3Control
-          ? { initial_eligible: summary.eligible, final_eligible: finalEligible }
-          : {}),
+        ...(campaign ? { initial_eligible: summary.eligible, final_eligible: finalEligible } : {}),
         duration_ms: Date.now() - startedAt,
         timestamp: new Date().toISOString(),
       },

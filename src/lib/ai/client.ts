@@ -353,13 +353,25 @@ export async function callProvider(
   }
 
   const content = parsed.data.choices[0]?.message.content
+  const finishReason = parsed.data.choices[0]?.finish_reason ?? null
+  if (content === '' && finishReason === 'length') {
+    throw new AIStructuredOutputError({
+      provider: ref.provider,
+      model: ref.model,
+      failureType: 'output_truncated',
+      httpStatus: response.status,
+      finishReason,
+      contentLength: 0,
+      contentEmpty: true,
+    })
+  }
   if (!content) {
     throw new AIInvalidResponseEnvelopeError({
       provider: ref.provider,
       model: ref.model,
       failureType: 'invalid_response_envelope',
       httpStatus: response.status,
-      finishReason: parsed.data.choices[0]?.finish_reason ?? null,
+      finishReason,
       contentLength: 0,
     })
   }

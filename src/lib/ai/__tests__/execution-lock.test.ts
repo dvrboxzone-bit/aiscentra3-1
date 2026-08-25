@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs'
 import { __setBudgetReserverForTests, AITokenBudgetExceededError } from '../budget-gate'
 import {
   acquireEnrichmentLock,
+  verifyEnrichmentLockLease,
   releaseEnrichmentLock,
   pruneTokenLedger,
   ENRICHMENT_LOCK,
@@ -192,6 +193,49 @@ describe('cross-platform execution lock', () => {
   test('release never throws, so a failed release cannot fail a good run', async () => {
     const { client } = makeLockClient({ fail: 'connection reset' })
     await releaseEnrichmentLock(client, 'run-4')
+  })
+})
+
+describe('durable lock lease verification', () => {
+  test('requires the same holder and a lease covering the full control deadline', async () => {
+    const requiredThrough = Date.parse('2026-08-25T12:01:00.000Z')
+    const client = {
+      from: (table: string) => {
+        assert.equal(table, 'execution_locks')
+        return {
+          select: (columns: string) => {
+            assert.equal(columns, 'holder, expires_at')
+            return {
+              eq: (column: string, value: string) => {
+                assert.equal(column, 'lock_name')
+                assert.equal(value, 'enrichment_cycle')
+                return {
+                  maybeSingle: async () => ({
+                    data: {
+                      holder: 'v4-holder',
+                      expires_at: '2026-08-25T12:05:00.000Z',
+                    },
+                    error: null,
+                  }),
+                }
+              },
+            }
+          },
+        }
+      },
+    }
+
+    assert.equal(await verifyEnrichmentLockLease(client, 'v4-holder', requiredThrough), true)
+    assert.equal(await verifyEnrichmentLockLease(client, 'other-holder', requiredThrough), false)
+  })
+
+  test('fails closed on storage errors', async () => {
+    const client = {
+      from: () => {
+        throw new Error('offline')
+      },
+    }
+    assert.equal(await verifyEnrichmentLockLease(client, 'v4-holder', Date.now()), false)
   })
 })
 

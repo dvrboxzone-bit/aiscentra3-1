@@ -13,6 +13,7 @@ export interface StructuredOutputDiagnostic {
   httpStatus: number
   finishReason: string | null
   contentLength: number
+  contentEmpty?: boolean
 }
 
 /**
@@ -77,7 +78,7 @@ export function structuredOutputRetryDelayMs(currentAttempt: number): number {
 
 export function diagnosticsForAudit(
   diagnostics: readonly StructuredOutputDiagnostic[],
-): Array<Record<string, string | number | null>> {
+): Array<Record<string, string | number | boolean | null>> {
   return diagnostics.map((item) => ({
     provider: item.provider,
     model: item.model,
@@ -85,5 +86,6 @@ export function diagnosticsForAudit(
     http_status: item.httpStatus,
     finish_reason: item.finishReason,
     content_length: item.contentLength,
+    ...(item.contentEmpty === undefined ? {} : { content_empty: item.contentEmpty }),
   }))
 }

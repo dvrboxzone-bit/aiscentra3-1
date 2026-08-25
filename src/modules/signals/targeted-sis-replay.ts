@@ -22,6 +22,10 @@ export const TARGETED_SIS_REPLAY_V3_CONTROL_ID = TARGETED_SIS_REPLAY_ALLOWLIST[0
 export const TARGETED_SIS_REPLAY_V3_CONTROL_KEY = 'targeted_sis_replay_20260825_v3_control'
 export const TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD = 'targeted_sis_replay_v3_control_key'
 export const TARGETED_SIS_REPLAY_V3_CONTROL_AUDIT_FIELD = 'targeted_sis_replay_v3_control_audit'
+export const TARGETED_SIS_REPLAY_V4_CONTROL_ID = TARGETED_SIS_REPLAY_ALLOWLIST[0]
+export const TARGETED_SIS_REPLAY_V4_CONTROL_KEY = 'targeted_sis_replay_20260825_v4_control'
+export const TARGETED_SIS_REPLAY_V4_CONTROL_MARKER_FIELD = 'targeted_sis_replay_v4_control_key'
+export const TARGETED_SIS_REPLAY_V4_CONTROL_AUDIT_FIELD = 'targeted_sis_replay_v4_control_audit'
 
 export type StructuredFailureType = StructuredOutputFailureType
 export type TargetedReplayDisposition = 'valid' | 'rejected' | 'retried' | 'failed'
@@ -108,6 +112,20 @@ export function parseTargetedReplayV3ControlRequest(
   return { ok: true, observationIds: [TARGETED_SIS_REPLAY_V3_CONTROL_ID] }
 }
 
+export function parseTargetedReplayV4ControlRequest(
+  body: unknown,
+): { ok: true; observationIds: [string] } | { ok: false; error: string } {
+  const parsed = parseTargetedReplayRequest(body)
+  if (!parsed.ok) return parsed
+  if (
+    parsed.observationIds.length !== 1 ||
+    parsed.observationIds[0] !== TARGETED_SIS_REPLAY_V4_CONTROL_ID
+  ) {
+    return { ok: false, error: 'V4 control accepts only its single server-side control ID' }
+  }
+  return { ok: true, observationIds: [TARGETED_SIS_REPLAY_V4_CONTROL_ID] }
+}
+
 export function isTargetedReplayEligible(observation: ObservationRow, nowMs = Date.now()): boolean {
   if (!ALLOWED_IDS.has(observation.id)) return false
   if (observation.processed) return false
@@ -144,6 +162,28 @@ export function isTargetedReplayV3ControlEligible(
   // v1/v2 are immutable audit history. Only the date-stamped v3 control
   // marker gates this new, separately authorized checkpoint.
   if (metadata[TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD] !== undefined) return false
+  const retryAfter = metadata['retry_after']
+  if (retryAfter !== undefined) {
+    if (typeof retryAfter !== 'string') return false
+    const retryAfterMs = Date.parse(retryAfter)
+    if (!Number.isFinite(retryAfterMs) || retryAfterMs > nowMs) return false
+  }
+  return true
+}
+
+export function isTargetedReplayV4ControlEligible(
+  observation: ObservationRow,
+  nowMs = Date.now(),
+): boolean {
+  if (observation.id !== TARGETED_SIS_REPLAY_V4_CONTROL_ID) return false
+  if (observation.processed) return false
+  if (observation.processing_error !== null) return false
+  if (observation.signal_id !== null) return false
+  if (observation.rejection_code !== null) return false
+  const metadata = observation.metadata ?? {}
+  if (metadata['repair_key'] !== TARGETED_SIS_REPAIR_KEY) return false
+  // V1/V2/V3 remain immutable history. Only the additive V4 marker gates V4.
+  if (metadata[TARGETED_SIS_REPLAY_V4_CONTROL_MARKER_FIELD] !== undefined) return false
   const retryAfter = metadata['retry_after']
   if (retryAfter !== undefined) {
     if (typeof retryAfter !== 'string') return false

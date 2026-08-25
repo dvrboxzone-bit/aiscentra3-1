@@ -278,8 +278,19 @@ export async function agentCompleteJSON<T>(
   // thrown error object for the most recent attempt.
   let lastError: unknown
   let maxRetryAfterMs: number | undefined
+  const chainStartedAt = Date.now()
+  const admittedModelIndexes = executionPolicy?.reservedModels
+    ? chain.flatMap((ref, index) =>
+        executionPolicy.reservedModels?.includes(ref.model) ? [index] : [],
+      )
+    : chain.map((_ref, index) => index)
+  const lastAdmittedModelIndex = admittedModelIndexes.at(-1)
 
   for (const [modelIndex, ref] of chain.entries()) {
+    if (executionPolicy?.reservedModels && !executionPolicy.reservedModels.includes(ref.model)) {
+      console.info(`[agent:${role}] skipping unreserved model ${ref.provider}/${ref.model}`)
+      continue
+    }
     const attemptBudgetMs = executionPolicy?.modelAttemptBudgetsMs[modelIndex]
     const reserveAfterModelMs = executionPolicy
       ? reservedTimeAfterModel(executionPolicy, modelIndex)
@@ -300,10 +311,23 @@ export async function agentCompleteJSON<T>(
         },
       )
     }
+    const carryForwardDeadlineAt =
+      executionPolicy?.carryForwardUnusedTime && attemptBudgetMs !== undefined
+        ? modelIndex === lastAdmittedModelIndex
+          ? deadlineAt - executionPolicy.reserveAfterChainMs
+          : Math.min(
+              deadlineAt - reserveAfterModelMs,
+              chainStartedAt +
+                executionPolicy.modelAttemptBudgetsMs
+                  .slice(0, modelIndex + 1)
+                  .reduce((total, budget) => total + budget, 0),
+            )
+        : undefined
     const modelDeadlineAt =
-      executionPolicy && attemptBudgetMs !== undefined
+      carryForwardDeadlineAt ??
+      (executionPolicy && attemptBudgetMs !== undefined
         ? Math.min(deadlineAt - reserveAfterModelMs, Date.now() + attemptBudgetMs)
-        : deadlineAt
+        : deadlineAt)
     ensureTimeLeft(
       modelDeadlineAt,
       2_000,
@@ -381,6 +405,9 @@ export async function agentCompleteJSON<T>(
           failureType: err.diagnostic.failureType,
           finishReason: err.diagnostic.finishReason,
           contentLength: err.diagnostic.contentLength,
+          ...(err.diagnostic.contentEmpty === undefined
+            ? {}
+            : { contentEmpty: err.diagnostic.contentEmpty }),
         })
       } else if (err instanceof AIProviderError) {
         safeExecutionDiagnostics.push({
