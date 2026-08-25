@@ -67,27 +67,27 @@ claim to.
 
 | Metric                                              | Value |
 | --------------------------------------------------- | ----: |
-| Total routes                                        |    18 |
+| Total routes                                        |    20 |
 | Category: `public-read`                             |     3 |
 | Category: `authenticated-user`                      |     0 |
 | Category: `admin`                                   |     1 |
 | Category: `cron`                                    |    12 |
-| Category: `internal-machine`                        |     2 |
+| Category: `internal-machine`                        |     4 |
 | Category: `disabled`                                |     0 |
-| Direct AI-calling routes                            |     8 |
-| Indirect AI-triggering routes                       |     4 |
-| Service-role routes                                 |    14 |
-| Database-read routes                                |    16 |
-| Database-write routes                               |     9 |
+| Direct AI-calling routes                            |     9 |
+| Indirect AI-triggering routes                       |     5 |
+| Service-role routes                                 |    16 |
+| Database-read routes                                |    18 |
+| Database-write routes                               |    11 |
 | Literal rateLimit="missing" count                   |    15 |
-| Routes without a real caller-facing HTTP rate limit |    18 |
+| Routes without a real caller-facing HTTP rate limit |    20 |
 | Literal budgetGuard="missing" count                 |    15 |
-| Cost-sensitive routes                               |    12 |
-| External-network-call routes                        |    16 |
+| Cost-sensitive routes                               |    14 |
+| External-network-call routes                        |    18 |
 | Weak shared-secret (non-constant-time) routes       |    11 |
 | Confirmed raw-error-exposure routes                 |     5 |
 | Risk: P0                                            |     0 |
-| Risk: P1                                            |    14 |
+| Risk: P1                                            |    16 |
 | Risk: P2                                            |     2 |
 | Risk: P3                                            |     2 |
 

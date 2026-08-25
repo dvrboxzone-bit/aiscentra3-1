@@ -37,7 +37,11 @@ WITH required_columns(table_name, column_name) AS (
     ('pipeline_metrics', 'queue_depth'),
     ('pipeline_metrics', 'oldest_pending_age_seconds'),
     ('pipeline_metrics', 'items_rejected'),
-    ('pipeline_metrics', 'items_retried')
+    ('pipeline_metrics', 'items_retried'),
+    ('sis_execution_runs', 'finalization_outcome'),
+    ('sis_execution_runs', 'finalization_signal'),
+    ('sis_execution_runs', 'finalization_decision'),
+    ('sis_execution_runs', 'finalization_message_id')
 ),
 missing_columns AS (
   SELECT 'MISSING COLUMN: ' || rc.table_name || '.' || rc.column_name AS problem
@@ -58,7 +62,12 @@ required_functions(function_name) AS (
     ('prevent_signal_quality_decision_mutation'),
     ('record_signal_quality_decision'),
     ('enforce_quality_approved_event_origin'),
-    ('enforce_quality_approved_report_publication')
+    ('enforce_quality_approved_report_publication'),
+    ('start_durable_sis_v1_control'),
+    ('claim_durable_sis_v1_attempt'),
+    ('reserve_durable_sis_v1_budget'),
+    ('complete_durable_sis_v1_attempt'),
+    ('finalize_durable_sis_v1')
 ),
 missing_functions AS (
   SELECT 'MISSING FUNCTION: public.' || rf.function_name AS problem
@@ -69,10 +78,26 @@ missing_functions AS (
       AND r.routine_name = rf.function_name
   )
 ),
+required_function_signatures(function_signature) AS (
+  VALUES
+    ('claim_durable_sis_v1_attempt(integer)'),
+    ('complete_durable_sis_v1_attempt(uuid,bigint,text,jsonb,jsonb,text,text,text,integer,text,text,jsonb,jsonb,jsonb)'),
+    ('finalize_durable_sis_v1(uuid,bigint)')
+),
+missing_function_signatures AS (
+  SELECT 'MISSING FUNCTION SIGNATURE: public.' || rfs.function_signature AS problem
+  FROM required_function_signatures rfs
+  WHERE to_regprocedure('public.' || rfs.function_signature) IS NULL
+),
 required_tables(table_name) AS (
   VALUES
     ('pipeline_metrics'),
-    ('signal_quality_decisions')
+    ('signal_quality_decisions'),
+    ('sis_execution_controls'),
+    ('sis_execution_runs'),
+    ('sis_execution_attempts'),
+    ('sis_provider_budget_reservations'),
+    ('sis_execution_finalizations')
 ),
 missing_tables AS (
   SELECT 'MISSING TABLE: public.' || rt.table_name AS problem
@@ -157,6 +182,14 @@ missing_triggers AS (
       AND NOT t.tgisinternal
       AND t.tgenabled <> 'D'
   )
+),
+missing_extensions AS (
+  SELECT 'MISSING EXTENSION: pgmq' AS problem
+  WHERE NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgmq')
+),
+missing_queues AS (
+  SELECT 'MISSING QUEUE: durable_sis_v1' AS problem
+  WHERE to_regclass('pgmq.q_durable_sis_v1') IS NULL
 )
 SELECT problem FROM missing_tables
 UNION ALL
@@ -164,10 +197,16 @@ SELECT problem FROM missing_columns
 UNION ALL
 SELECT problem FROM missing_functions
 UNION ALL
+SELECT problem FROM missing_function_signatures
+UNION ALL
 SELECT problem FROM missing_types
 UNION ALL
 SELECT problem FROM missing_enum_values
 UNION ALL
 SELECT problem FROM missing_constraints
 UNION ALL
-SELECT problem FROM missing_triggers;
+SELECT problem FROM missing_triggers
+UNION ALL
+SELECT problem FROM missing_extensions
+UNION ALL
+SELECT problem FROM missing_queues;

@@ -55,6 +55,8 @@ METRICS_REJECTED_RETRIED_MIGRATION="supabase/migrations/20260811130000_extend_pi
 [[ -f "$METRICS_REJECTED_RETRIED_MIGRATION" ]] || { echo "FATAL: $METRICS_REJECTED_RETRIED_MIGRATION not found (run from repo root)"; exit 1; }
 QUALITY_FOUNDATION_MIGRATION="supabase/migrations/20260821023045_add_signal_quality_foundation.sql"
 [[ -f "$QUALITY_FOUNDATION_MIGRATION" ]] || { echo "FATAL: $QUALITY_FOUNDATION_MIGRATION not found (run from repo root)"; exit 1; }
+DURABLE_SIS_MIGRATION="supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql"
+[[ -f "$DURABLE_SIS_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -136,9 +138,13 @@ CREATE TABLE public.signals (
 );
 CREATE TABLE public.observations (
   id UUID PRIMARY KEY,
+  processed BOOLEAN NOT NULL DEFAULT false,
   qualification_result TEXT,
   qualification_score NUMERIC,
   engine_version TEXT,
+  processing_error TEXT,
+  rejection_code TEXT,
+  rejection_reason TEXT,
   url TEXT,
   signal_id UUID,
   url_verified_ok BOOLEAN,
@@ -149,9 +155,18 @@ CREATE TABLE public.signal_decision_log (
   signal_id UUID,
   observation_id UUID NOT NULL,
   decision TEXT NOT NULL,
+  rejection_code TEXT,
+  rejection_reason TEXT,
   qualification_score NUMERIC,
+  sis_novelty NUMERIC,
+  sis_importance NUMERIC,
+  sis_urgency NUMERIC,
+  sis_confidence NUMERIC,
+  sis_final NUMERIC,
   qualification_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
   human_relevance_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+  anti_hype_score NUMERIC,
+  anti_hype_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
   thresholds_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   rule_trace JSONB NOT NULL DEFAULT '[]'::jsonb,
   engine_justification TEXT,
@@ -528,10 +543,186 @@ $PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
 echo "TEST 17 — production schema gate (scripts/release/schema-check.sql): real pass/fail against a real schema"
-echo "  -- applying Phase 1 after earlier mutation tests, then checking the full current schema --"
+echo "  -- installing a local PGMQ 1.5.1 contract fixture; production uses Supabase's real extension --"
+PG_SHARED_DIR="$($PGBIN/pg_config --sharedir)"
+cat > "$PG_SHARED_DIR/extension/pgmq.control" <<'PGMQ_CONTROL'
+default_version = '1.5.1'
+relocatable = false
+PGMQ_CONTROL
+cat > "$PG_SHARED_DIR/extension/pgmq--1.5.1.sql" <<'PGMQ_SQL'
+create schema pgmq;
+create table pgmq.meta(queue_name text primary key);
+create type pgmq.message_record as (msg_id bigint, read_ct integer, enqueued_at timestamptz, vt timestamptz, message jsonb);
+create function pgmq.create(q text) returns void language plpgsql as $$
+begin
+  insert into pgmq.meta values(q) on conflict do nothing;
+  execute format('create table if not exists pgmq.q_%I (msg_id bigserial primary key, read_ct integer not null default 0, enqueued_at timestamptz not null default now(), vt timestamptz not null default now(), message jsonb not null)', q);
+end $$;
+create function pgmq.send(q text, body jsonb, delay integer default 0) returns bigint language plpgsql as $$
+declare result bigint; begin
+  execute format('insert into pgmq.q_%I(vt,message) values(now()+(%L||'' seconds'')::interval,$1) returning msg_id',q,delay) into result using body;
+  return result;
+end $$;
+create function pgmq.read(q text, visibility_timeout integer, qty integer) returns setof pgmq.message_record language plpgsql as $$
+begin
+  return query execute format('update pgmq.q_%I set read_ct=read_ct+1,vt=now()+(%L||'' seconds'')::interval where msg_id in (select msg_id from pgmq.q_%I where vt<=now() order by msg_id limit %L for update skip locked) returning msg_id,read_ct,enqueued_at,vt,message',q,visibility_timeout,q,qty);
+end $$;
+create function pgmq.archive(q text, id bigint) returns boolean language plpgsql as $$
+declare affected integer; begin execute format('delete from pgmq.q_%I where msg_id=$1',q) using id; get diagnostics affected=row_count; return affected=1; end $$;
+PGMQ_SQL
+echo "  -- applying Phase 1 and Durable SIS after earlier mutation tests, then checking the full current schema --"
 $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_MIGRATION" >/dev/null
 FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
+
+echo ""
+echo "TEST 17a — Durable SIS FINALIZE is a crash-safe queue delivery"
+DURABLE_OBS="e4275483-39e4-4441-84a2-0a1df546cf07"
+DURABLE_RUN="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+DURABLE_ATTEMPT="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+INSERT INTO public.observations(id, processed) VALUES ('$DURABLE_OBS', false);
+UPDATE public.sis_execution_controls
+SET execution_enabled=true, groq_daily_token_limit=30000
+WHERE control_key='durable_sis_v1_control_20260825';
+INSERT INTO public.sis_execution_runs(id,control_key,observation_id,status,current_stage,classifier_output)
+VALUES ('$DURABLE_RUN','durable_sis_v1_control_20260825','$DURABLE_OBS','RUNNING','PARSER','{"decision":"SIGNAL"}'::jsonb);
+INSERT INTO public.sis_execution_attempts(id,run_id,stage,ordinal,provider,model,status)
+VALUES ('$DURABLE_ATTEMPT','$DURABLE_RUN','PARSER',1,'cloudflare','fixture-parser','RUNNING');
+INSERT INTO public.sis_provider_budget_reservations(attempt_id,provider,model,unit_kind,reserved_units)
+VALUES ('$DURABLE_ATTEMPT','cloudflare','fixture-parser','provider_request',1);
+WITH message AS (
+  SELECT pgmq.send('durable_sis_v1',jsonb_build_object('attempt_id','$DURABLE_ATTEMPT')) AS id
+)
+UPDATE public.sis_execution_attempts AS attempt
+SET pgmq_message_id=message.id
+FROM message
+WHERE attempt.id='$DURABLE_ATTEMPT';
+SELECT public.complete_durable_sis_v1_attempt(
+  p_attempt_id => '$DURABLE_ATTEMPT',
+  p_message_id => (SELECT pgmq_message_id FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT'),
+  p_status => 'SUCCEEDED',
+  p_validated_output => '{"title":"validated parser output"}'::jsonb,
+  p_finalization_outcome => 'DISCARD',
+  p_finalization_signal => '{}'::jsonb,
+  p_finalization_decision => '{"rejection_code":"R-15","rejection_reason":"fixture discard","engine_justification":"fixture"}'::jsonb
+);
+SQL
+
+check "parser outcome is committed before finalization" "SUCCEEDED" \
+  "$($PG -c "SELECT status FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT';")"
+check "run is ready for a separate durable finalization delivery" "READY_TO_FINALIZE|FINALIZE" \
+  "$($PG -c "SELECT status||'|'||current_stage FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
+check "provider message was archived after FINALIZE message was created" "1" \
+  "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1 WHERE message->>'stage'='FINALIZE' AND message->>'run_id'='$DURABLE_RUN';")"
+check "a crash before finalization has not created a decision" "0" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';")"
+
+FINALIZE_MESSAGE_ID="$($PG -c "SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
+FINALIZE_CLAIM="$($PG -c "SELECT stage||'|'||coalesce(provider,'NULL') FROM public.claim_durable_sis_v1_attempt(55);")"
+check "next delivery after parser success is FINALIZE with no provider" "FINALIZE|NULL" "$FINALIZE_CLAIM"
+
+echo "  -- force one transactional finalization failure, then redeliver only FINALIZE --"
+$PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE FUNCTION public.fail_durable_finalization_once() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'simulated temporary finalization failure';
+END
+$$;
+CREATE TRIGGER fail_durable_finalization_once
+BEFORE INSERT ON public.signal_decision_log
+FOR EACH ROW EXECUTE FUNCTION public.fail_durable_finalization_once();
+SQL
+set +e
+FINALIZE_FAILURE="$($PG -v ON_ERROR_STOP=1 -c "SELECT public.finalize_durable_sis_v1('$DURABLE_RUN',$FINALIZE_MESSAGE_ID);" 2>&1)"
+FINALIZE_FAILURE_CODE=$?
+set -e
+check "temporary finalization failure is surfaced" "1" \
+  "$([[ "$FINALIZE_FAILURE_CODE" -ne 0 && "$FINALIZE_FAILURE" == *"simulated temporary finalization failure"* ]] && echo 1 || echo 0)"
+check "failed finalization writes no decision" "0" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';")"
+check "failed finalization leaves its durable message unarchived" "1" \
+  "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1 WHERE msg_id=$FINALIZE_MESSAGE_ID;")"
+
+$PG -c "DROP TRIGGER fail_durable_finalization_once ON public.signal_decision_log; DROP FUNCTION public.fail_durable_finalization_once(); UPDATE pgmq.q_durable_sis_v1 SET vt=now() WHERE msg_id=$FINALIZE_MESSAGE_ID;" >/dev/null
+FINALIZE_REDELIVERY="$($PG -c "SELECT stage||'|'||coalesce(provider,'NULL') FROM public.claim_durable_sis_v1_attempt(55);")"
+check "redelivery after temporary failure is still FINALIZE-only" "FINALIZE|NULL" "$FINALIZE_REDELIVERY"
+$PG -v ON_ERROR_STOP=1 -c "SELECT public.finalize_durable_sis_v1('$DURABLE_RUN',$FINALIZE_MESSAGE_ID);" >/dev/null
+check "successful finalization writes exactly one decision" "1" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';")"
+check "discard finalization creates no Signal" "0" \
+  "$($PG -c "SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids);")"
+check "successful finalization archives the FINALIZE message" "0" \
+  "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1 WHERE msg_id=$FINALIZE_MESSAGE_ID;")"
+
+FINALIZE_DUPLICATE="$($PG -c "SELECT (public.finalize_durable_sis_v1('$DURABLE_RUN',$FINALIZE_MESSAGE_ID)->>'duplicate')::boolean;")"
+check "repeated finalization is reported as an idempotent duplicate" "t" "$FINALIZE_DUPLICATE"
+check "repeated finalization still has exactly one decision" "1" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';")"
+check "repeated finalization still has no duplicate Signal" "0" \
+  "$($PG -c "SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids);")"
+
+echo ""
+echo "TEST 17b — fallback budget failure preserves provider outcome and queues FINALIZE"
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
+  public.sis_execution_finalizations, public.sis_execution_runs;
+DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
+UPDATE public.observations SET processed=false, qualification_result=null, engine_version=null,
+  processing_error=null, rejection_code=null, rejection_reason=null WHERE id='$DURABLE_OBS';
+DELETE FROM pgmq.q_durable_sis_v1;
+UPDATE public.sis_execution_controls SET groq_daily_token_limit=1 WHERE control_key='durable_sis_v1_control_20260825';
+INSERT INTO public.sis_execution_runs(id,control_key,observation_id,status,current_stage)
+VALUES ('$DURABLE_RUN','durable_sis_v1_control_20260825','$DURABLE_OBS','RUNNING','PARSER');
+INSERT INTO public.sis_execution_attempts(id,run_id,stage,ordinal,provider,model,status)
+VALUES ('$DURABLE_ATTEMPT','$DURABLE_RUN','PARSER',1,'cloudflare','fixture-parser','RUNNING');
+INSERT INTO public.sis_provider_budget_reservations(attempt_id,provider,model,unit_kind,reserved_units)
+VALUES ('$DURABLE_ATTEMPT','cloudflare','fixture-parser','provider_request',1);
+WITH message AS (
+  SELECT pgmq.send('durable_sis_v1',jsonb_build_object('attempt_id','$DURABLE_ATTEMPT')) AS id
+)
+UPDATE public.sis_execution_attempts AS attempt
+SET pgmq_message_id=message.id
+FROM message
+WHERE attempt.id='$DURABLE_ATTEMPT';
+SELECT public.complete_durable_sis_v1_attempt(
+  p_attempt_id => '$DURABLE_ATTEMPT',
+  p_message_id => (SELECT pgmq_message_id FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT'),
+  p_status => 'RETRYABLE',
+  p_safe_diagnostic => '{"type":"provider_error","provider":"cloudflare","model":"fixture-parser","http_status":503,"finish_reason":null,"content_length":0}'::jsonb,
+  p_validated_output => '{"provider_outcome":"committed"}'::jsonb,
+  p_next_stage => 'PARSER',
+  p_next_provider => 'groq',
+  p_next_model => 'fallback-20b',
+  p_next_units => 2,
+  p_next_unit_kind => 'groq_tokens',
+  p_budget_unavailable_decision => '{"rejection_code":"R-15","rejection_reason":"fallback budget unavailable","engine_justification":"provider outcome preserved"}'::jsonb
+);
+SQL
+
+check "completed provider outcome remains committed when fallback budget is unavailable" "RETRYABLE|committed" \
+  "$($PG -c "SELECT status||'|'||(validated_output->>'provider_outcome') FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT';")"
+check "unfunded fallback is terminal without a provider invocation" "TERMINAL|budget_unavailable" \
+  "$($PG -c "SELECT status||'|'||(safe_diagnostic->>'type') FROM public.sis_execution_attempts WHERE run_id='$DURABLE_RUN' AND id<>'$DURABLE_ATTEMPT';")"
+check "budget failure queues only a FINALIZE delivery" "1|0" \
+  "$($PG -c "SELECT count(*) FILTER (WHERE message->>'stage'='FINALIZE')||'|'||count(*) FILTER (WHERE message ? 'attempt_id') FROM pgmq.q_durable_sis_v1;")"
+check "budget failure leaves the run ready for durable finalization" "READY_TO_FINALIZE|FINALIZE" \
+  "$($PG -c "SELECT status||'|'||current_stage FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
+check "budget-failure delivery cannot request a provider" "FINALIZE|NULL" \
+  "$($PG -c "SELECT stage||'|'||coalesce(provider,'NULL') FROM public.claim_durable_sis_v1_attempt(55);")"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
+  public.sis_execution_finalizations, public.sis_execution_runs;
+DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
+DELETE FROM public.observations WHERE id='$DURABLE_OBS';
+DELETE FROM pgmq.q_durable_sis_v1;
+UPDATE public.sis_execution_controls
+SET execution_enabled=false, groq_daily_token_limit=30000
+WHERE control_key='durable_sis_v1_control_20260825';
+SQL
 
 echo "  -- simulating Phase 1 not applied: remove every gated quality object -- must block release with every exact gap --"
 $PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
@@ -610,7 +801,17 @@ $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
 
 echo ""
 echo "TEST 18 — verify-urls backfill: real deterministic pagination, priority, resumability, idempotent re-run"
-$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+reset_signal_observation_fixtures() {
+  $PG -c "TRUNCATE
+    public.sis_provider_budget_reservations,
+    public.sis_execution_attempts,
+    public.sis_execution_finalizations,
+    public.sis_execution_runs,
+    public.signals,
+    public.observations;" >/dev/null
+}
+
+reset_signal_observation_fixtures
 
 # Real fixture: 12 observations. 5 linked to an ACTIVE signal (must
 # drain FIRST, priority pass), 7 unlinked/other (drained second).
@@ -672,7 +873,7 @@ check "after full backfill, the pending-rows query is genuinely exhausted (idemp
   "$($PG -c "SELECT count(*) FROM public.observations WHERE url_verified_ok IS NULL;")"
 
 $PG -c "DROP TABLE IF EXISTS public.seen_ids;" >/dev/null
-$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+reset_signal_observation_fixtures
 
 echo ""
 echo "  -- honest metrics contract: pipeline_metrics column comments genuinely state the real, enforced invariant (independent review) --"
