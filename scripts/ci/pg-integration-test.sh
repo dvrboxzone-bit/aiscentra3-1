@@ -596,7 +596,10 @@ VALUES ('$DURABLE_ATTEMPT','cloudflare','fixture-parser','provider_request',1);
 WITH message AS (
   SELECT pgmq.send('durable_sis_v1',jsonb_build_object('attempt_id','$DURABLE_ATTEMPT')) AS id
 )
-UPDATE public.sis_execution_attempts SET pgmq_message_id=message.id FROM message WHERE id='$DURABLE_ATTEMPT';
+UPDATE public.sis_execution_attempts AS attempt
+SET pgmq_message_id=message.id
+FROM message
+WHERE attempt.id='$DURABLE_ATTEMPT';
 SELECT public.complete_durable_sis_v1_attempt(
   p_attempt_id => '$DURABLE_ATTEMPT',
   p_message_id => (SELECT pgmq_message_id FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT'),
@@ -680,7 +683,10 @@ VALUES ('$DURABLE_ATTEMPT','cloudflare','fixture-parser','provider_request',1);
 WITH message AS (
   SELECT pgmq.send('durable_sis_v1',jsonb_build_object('attempt_id','$DURABLE_ATTEMPT')) AS id
 )
-UPDATE public.sis_execution_attempts SET pgmq_message_id=message.id FROM message WHERE id='$DURABLE_ATTEMPT';
+UPDATE public.sis_execution_attempts AS attempt
+SET pgmq_message_id=message.id
+FROM message
+WHERE attempt.id='$DURABLE_ATTEMPT';
 SELECT public.complete_durable_sis_v1_attempt(
   p_attempt_id => '$DURABLE_ATTEMPT',
   p_message_id => (SELECT pgmq_message_id FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT'),
