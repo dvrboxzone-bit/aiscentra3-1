@@ -262,6 +262,14 @@ describe('targeted SIS replay workflow contract', () => {
     ]) {
       assert.match(source, new RegExp(`\\b${field}\\b`))
     }
+    assert.match(
+      source,
+      /invalid_response_envelope:\s*\.diagnostic_counts\.invalid_response_envelope/,
+    )
+    assert.match(
+      source,
+      /\.diagnostic_counts\.invalid_response_envelope\]\s*\|\s*all\(type == "number"\)/,
+    )
     assert.doesNotMatch(source, /raw[_ -]?output|raw[_ -]?content|response body/i)
     assert.match(source, /if \[\[ "\$HTTP_STATUS" != "200" \]\]/)
     assert.match(source, /jq -r '\.complete'/)
