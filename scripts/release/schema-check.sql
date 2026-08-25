@@ -58,7 +58,12 @@ required_functions(function_name) AS (
     ('prevent_signal_quality_decision_mutation'),
     ('record_signal_quality_decision'),
     ('enforce_quality_approved_event_origin'),
-    ('enforce_quality_approved_report_publication')
+    ('enforce_quality_approved_report_publication'),
+    ('start_durable_sis_v1_control'),
+    ('claim_durable_sis_v1_attempt'),
+    ('reserve_durable_sis_v1_budget'),
+    ('complete_durable_sis_v1_attempt'),
+    ('finalize_durable_sis_v1')
 ),
 missing_functions AS (
   SELECT 'MISSING FUNCTION: public.' || rf.function_name AS problem
@@ -72,7 +77,12 @@ missing_functions AS (
 required_tables(table_name) AS (
   VALUES
     ('pipeline_metrics'),
-    ('signal_quality_decisions')
+    ('signal_quality_decisions'),
+    ('sis_execution_controls'),
+    ('sis_execution_runs'),
+    ('sis_execution_attempts'),
+    ('sis_provider_budget_reservations'),
+    ('sis_execution_finalizations')
 ),
 missing_tables AS (
   SELECT 'MISSING TABLE: public.' || rt.table_name AS problem
@@ -157,6 +167,14 @@ missing_triggers AS (
       AND NOT t.tgisinternal
       AND t.tgenabled <> 'D'
   )
+),
+missing_extensions AS (
+  SELECT 'MISSING EXTENSION: pgmq' AS problem
+  WHERE NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgmq')
+),
+missing_queues AS (
+  SELECT 'MISSING QUEUE: durable_sis_v1' AS problem
+  WHERE to_regclass('pgmq.q_durable_sis_v1') IS NULL
 )
 SELECT problem FROM missing_tables
 UNION ALL
@@ -170,4 +188,8 @@ SELECT problem FROM missing_enum_values
 UNION ALL
 SELECT problem FROM missing_constraints
 UNION ALL
-SELECT problem FROM missing_triggers;
+SELECT problem FROM missing_triggers
+UNION ALL
+SELECT problem FROM missing_extensions
+UNION ALL
+SELECT problem FROM missing_queues;

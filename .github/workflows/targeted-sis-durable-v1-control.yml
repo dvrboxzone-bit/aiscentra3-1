@@ -1,0 +1,63 @@
+name: Durable SIS V1 Control (manual, one ID only)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: enrich-batch
+  cancel-in-progress: false
+
+jobs:
+  durable-sis-control:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 12
+    steps:
+      - name: Start fixed server-side control
+        id: start
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --output start.json --write-out '%{http_code}' \
+            --request POST \
+            --header "x-cron-secret: ${CRON_SECRET}" \
+            --retry 0 \
+            --max-time 55 \
+            https://aiscentra.com/api/internal/sis-durable-control/start)
+          started=$(jq -r 'if .started == true then 1 else 0 end' start.json)
+          state=$(jq -r '.status // "MALFORMED"' start.json)
+          printf 'start_http=%s started=%s status=%s\n' "$status" "$started" "$state"
+          test "$status" = 200
+          test "$state" = QUEUED
+
+      - name: Execute bounded durable stages
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          attempted=0
+          finalized=0
+          diagnostics='{}'
+          for pass in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            status=$(curl --silent --show-error --output stage.json --write-out '%{http_code}' \
+              --request POST \
+              --header "x-cron-secret: ${CRON_SECRET}" \
+              --retry 0 \
+              --max-time 55 \
+              https://aiscentra.com/api/internal/sis-durable-control/stage)
+            test "$status" = 200
+            count=$(jq -er '.attempted | select(type == "number")' stage.json)
+            attempted=$((attempted + count))
+            diagnostic=$(jq -r '.diagnostic // empty' stage.json)
+            if [ -n "$diagnostic" ]; then
+              diagnostics=$(jq -cn --argjson old "$diagnostics" --arg key "$diagnostic" \
+                '$old + {($key): (($old[$key] // 0) + 1)}')
+            fi
+            state=$(jq -r '.status // "MALFORMED"' stage.json)
+            if [ "$state" = FINALIZED ]; then finalized=1; break; fi
+            test "$state" = QUEUED
+          done
+          printf 'attempted=%s finalized=%s diagnostic_counts=%s\n' \
+            "$attempted" "$finalized" "$diagnostics"
+          test "$finalized" = 1

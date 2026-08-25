@@ -130,6 +130,28 @@ describe('production schema gate — Signal Quality Foundation dependencies', ()
   })
 })
 
+describe('production schema gate — Durable SIS V1 PGMQ dependencies', () => {
+  test('requires the extension queue, state tables, budget ledger, and RPC boundary', () => {
+    const gate = schemaGateSrc()
+    for (const dependency of [
+      'MISSING EXTENSION: pgmq',
+      'MISSING QUEUE: durable_sis_v1',
+      'sis_execution_controls',
+      'sis_execution_runs',
+      'sis_execution_attempts',
+      'sis_provider_budget_reservations',
+      'sis_execution_finalizations',
+      'start_durable_sis_v1_control',
+      'claim_durable_sis_v1_attempt',
+      'reserve_durable_sis_v1_budget',
+      'complete_durable_sis_v1_attempt',
+      'finalize_durable_sis_v1',
+    ]) {
+      assert.match(gate, new RegExp(dependency))
+    }
+  })
+})
+
 describe('production-release.yml — one approval boundary and no release-time data mutation', () => {
   test('exactly one job uses the protected production environment', () => {
     const matches = workflowSrc().match(/^ {4}environment:\s*production\s*$/gm) ?? []

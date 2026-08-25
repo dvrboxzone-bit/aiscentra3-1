@@ -55,6 +55,8 @@ METRICS_REJECTED_RETRIED_MIGRATION="supabase/migrations/20260811130000_extend_pi
 [[ -f "$METRICS_REJECTED_RETRIED_MIGRATION" ]] || { echo "FATAL: $METRICS_REJECTED_RETRIED_MIGRATION not found (run from repo root)"; exit 1; }
 QUALITY_FOUNDATION_MIGRATION="supabase/migrations/20260821023045_add_signal_quality_foundation.sql"
 [[ -f "$QUALITY_FOUNDATION_MIGRATION" ]] || { echo "FATAL: $QUALITY_FOUNDATION_MIGRATION not found (run from repo root)"; exit 1; }
+DURABLE_SIS_MIGRATION="supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql"
+[[ -f "$DURABLE_SIS_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -528,8 +530,36 @@ $PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
 
 echo ""
 echo "TEST 17 — production schema gate (scripts/release/schema-check.sql): real pass/fail against a real schema"
-echo "  -- applying Phase 1 after earlier mutation tests, then checking the full current schema --"
+echo "  -- installing a local PGMQ 1.5.1 contract fixture; production uses Supabase's real extension --"
+PG_SHARED_DIR="$($PGBIN/pg_config --sharedir)"
+cat > "$PG_SHARED_DIR/extension/pgmq.control" <<'PGMQ_CONTROL'
+default_version = '1.5.1'
+relocatable = false
+PGMQ_CONTROL
+cat > "$PG_SHARED_DIR/extension/pgmq--1.5.1.sql" <<'PGMQ_SQL'
+create schema pgmq;
+create table pgmq.meta(queue_name text primary key);
+create type pgmq.message_record as (msg_id bigint, read_ct integer, enqueued_at timestamptz, vt timestamptz, message jsonb);
+create function pgmq.create(q text) returns void language plpgsql as $$
+begin
+  insert into pgmq.meta values(q) on conflict do nothing;
+  execute format('create table if not exists pgmq.q_%I (msg_id bigserial primary key, read_ct integer not null default 0, enqueued_at timestamptz not null default now(), vt timestamptz not null default now(), message jsonb not null)', q);
+end $$;
+create function pgmq.send(q text, body jsonb, delay integer default 0) returns bigint language plpgsql as $$
+declare result bigint; begin
+  execute format('insert into pgmq.q_%I(vt,message) values(now()+(%L||'' seconds'')::interval,$1) returning msg_id',q,delay) into result using body;
+  return result;
+end $$;
+create function pgmq.read(q text, visibility_timeout integer, qty integer) returns setof pgmq.message_record language plpgsql as $$
+begin
+  return query execute format('update pgmq.q_%I set read_ct=read_ct+1,vt=now()+(%L||'' seconds'')::interval where msg_id in (select msg_id from pgmq.q_%I where vt<=now() order by msg_id limit %L for update skip locked) returning msg_id,read_ct,enqueued_at,vt,message',q,visibility_timeout,q,qty);
+end $$;
+create function pgmq.archive(q text, id bigint) returns boolean language plpgsql as $$
+declare affected integer; begin execute format('delete from pgmq.q_%I where msg_id=$1',q) using id; get diagnostics affected=row_count; return affected=1; end $$;
+PGMQ_SQL
+echo "  -- applying Phase 1 and Durable SIS after earlier mutation tests, then checking the full current schema --"
 $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_MIGRATION" >/dev/null
 FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
 
