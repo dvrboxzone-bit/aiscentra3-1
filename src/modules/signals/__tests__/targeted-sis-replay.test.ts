@@ -5,12 +5,15 @@ import { resolve } from 'node:path'
 
 import { POST } from '@/app/api/internal/sis-replay/route'
 import type { ObservationRow } from '@/modules/observations/queries'
+import { SIS_STRUCTURED_OUTPUT_MAX_TOKENS } from '@/modules/signals/engine'
 import {
   parseTargetedReplayRequest,
   runTargetedSisReplay,
   TARGETED_SIS_REPAIR_KEY,
   TARGETED_SIS_REPLAY_ALLOWLIST,
-  TARGETED_SIS_REPLAY_KEY,
+  TARGETED_SIS_REPLAY_V1_KEY,
+  TARGETED_SIS_REPLAY_V2_KEY,
+  TARGETED_SIS_REPLAY_V2_MARKER_FIELD,
   type TargetedReplayItemResult,
 } from '@/modules/signals/targeted-sis-replay'
 
@@ -90,7 +93,9 @@ describe('targeted SIS replay', () => {
       claim: async (row) => {
         if (claimed.has(row.id)) return null
         claimed.add(row.id)
-        return observation(row.id, { targeted_sis_replay_key: TARGETED_SIS_REPLAY_KEY })
+        return observation(row.id, {
+          [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+        })
       },
       processOne: async (row): Promise<TargetedReplayItemResult> => {
         attempted.push(row.id)
@@ -125,9 +130,38 @@ describe('targeted SIS replay', () => {
     assert.match(source, /General observation queue access is forbidden/)
   })
 
-  test('a second successful invocation has zero eligible IDs', async () => {
+  test('a durable v1 marker does not block the separate v2 campaign', async () => {
+    const id = TARGETED_SIS_REPLAY_ALLOWLIST[0]
+    const v1Row = observation(id, { targeted_sis_replay_key: TARGETED_SIS_REPLAY_V1_KEY })
+    let attempts = 0
+
+    const summary = await runTargetedSisReplay([id], NOW + 120_000, {
+      loadEligible: async () => [v1Row],
+      claim: async (row) => {
+        assert.equal(row.metadata?.['targeted_sis_replay_key'], TARGETED_SIS_REPLAY_V1_KEY)
+        return observation(row.id, {
+          ...row.metadata,
+          [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+        })
+      },
+      processOne: async () => {
+        attempts++
+        return { disposition: 'retried', diagnostic: 'output_truncated' }
+      },
+      now: () => NOW,
+    })
+
+    assert.equal(summary.eligible, 1)
+    assert.equal(summary.attempted, 1)
+    assert.equal(attempts, 1)
+  })
+
+  test('a v2 marker blocks a second v2 attempt even when v1 history is present', async () => {
     const replayedRows = TARGETED_SIS_REPLAY_ALLOWLIST.map((id) =>
-      observation(id, { targeted_sis_replay_key: TARGETED_SIS_REPLAY_KEY }),
+      observation(id, {
+        targeted_sis_replay_key: TARGETED_SIS_REPLAY_V1_KEY,
+        [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+      }),
     )
     let processCalls = 0
 
@@ -147,6 +181,14 @@ describe('targeted SIS replay', () => {
     assert.equal(summary.eligible, 0)
     assert.equal(summary.attempted, 0)
     assert.equal(summary.complete, true)
+  })
+
+  test('SIS structured output alone uses the evidence-backed 1024-token cap', () => {
+    const engineSource = readFileSync(resolve('src/modules/signals/engine.ts'), 'utf8')
+
+    assert.equal(SIS_STRUCTURED_OUTPUT_MAX_TOKENS, 1024)
+    assert.match(engineSource, /maxTokens:\s*SIS_STRUCTURED_OUTPUT_MAX_TOKENS/)
+    assert.equal((engineSource.match(/SIS_STRUCTURED_OUTPUT_MAX_TOKENS/g) ?? []).length, 2)
   })
 
   test('a failed claim makes the invocation incomplete instead of reporting success', async () => {
@@ -244,7 +286,7 @@ describe('targeted SIS replay workflow contract', () => {
     assert.deepEqual(body['observationIds'], TARGETED_SIS_REPLAY_ALLOWLIST)
   })
 
-  test('accepts only progressing 503 passes and requires nine cumulative attempts plus final exhaustion', () => {
+  test('accepts only progressing 503 passes and requires initial-eligible attempts plus exhaustion', () => {
     const source = workflow()
 
     assert.match(
@@ -276,12 +318,32 @@ describe('targeted SIS replay workflow contract', () => {
     assert.match(source, /"\$HTTP_STATUS" == "503"/)
     assert.match(source, /"\$complete" != "false" \|\| "\$attempted" -eq 0/)
     assert.match(source, /total_attempted=\$\(\(total_attempted \+ attempted\)\)/)
-    assert.match(source, /"\$total_attempted" -ne 9/)
+    assert.match(source, /initial_eligible="\$eligible"/)
+    assert.match(source, /"\$total_attempted" -ne "\$initial_eligible"/)
+    assert.doesNotMatch(source, /"\$total_attempted" -ne 9/)
     assert.match(source, /"\$final_eligible" -ne 0/)
     assert.match(source, /"\$eligible" -eq 0/)
     assert.match(source, /completed=true/)
     assert.doesNotMatch(source, /raw[_ -]?output|raw[_ -]?content|response body/i)
     assert.match(source, /echo "Summary: \$\{totals\}"/)
     assert.match(source, /exit 1/)
+  })
+
+  test('supports initial eligible=8 and emits a count-only partial summary on every failure', () => {
+    const source = workflow()
+    const initialEligible = 8
+    const attemptedAcrossPasses = [3, 3, 2]
+
+    assert.equal(
+      attemptedAcrossPasses.reduce((total, attempted) => total + attempted, 0),
+      initialEligible,
+    )
+    assert.match(source, /initial_eligible_captured=false/)
+    assert.match(source, /if \[\[ "\$initial_eligible_captured" != "true" \]\]/)
+    assert.match(source, /trap on_error ERR/)
+    assert.match(source, /if \[\[ "\$summary_emitted" != "true" \]\]; then\s+print_summary false/s)
+    assert.match(source, /complete: \(\$complete == "true"\)/)
+    assert.doesNotMatch(source, /echo[^\n]*response_file/i)
+    assert.doesNotMatch(source, /echo[^\n]*\$\{?summary\}?\b/i)
   })
 })

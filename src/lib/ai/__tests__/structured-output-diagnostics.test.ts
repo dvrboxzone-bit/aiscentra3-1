@@ -9,23 +9,28 @@ const originalFetch = globalThis.fetch
 const originalApiKey = process.env['GROQ_API_KEY']
 const model = { provider: 'groq' as const, model: 'openai/gpt-oss-20b' }
 const schema = z.object({ ok: z.boolean() })
+let requestedMaxTokens: number | undefined
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  requestedMaxTokens = undefined
   if (originalApiKey === undefined) delete process.env['GROQ_API_KEY']
   else process.env['GROQ_API_KEY'] = originalApiKey
 })
 
 function respond(content: string, finishReason: string): void {
   process.env['GROQ_API_KEY'] = 'test-key-not-real'
-  globalThis.fetch = async () =>
-    new Response(
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as { max_tokens?: number }
+    requestedMaxTokens = body.max_tokens
+    return new Response(
       JSON.stringify({
         choices: [{ message: { content }, finish_reason: finishReason }],
         usage: { total_tokens: 10 },
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     )
+  }
 }
 
 async function captureFailure(): Promise<AIStructuredOutputError> {
@@ -58,6 +63,7 @@ describe('structured AI diagnostics', () => {
       finishReason: 'length',
       contentLength: raw.length,
     })
+    assert.equal(requestedMaxTokens, 400, 'the incident fixture must reproduce the old cap')
     assert.doesNotMatch(error.message, /private_fragment/)
   })
 

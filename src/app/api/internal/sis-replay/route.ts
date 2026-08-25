@@ -15,7 +15,9 @@ import {
   parseTargetedReplayRequest,
   runTargetedSisReplay,
   TARGETED_SIS_REPAIR_KEY,
-  TARGETED_SIS_REPLAY_KEY,
+  TARGETED_SIS_REPLAY_V2_AUDIT_FIELD,
+  TARGETED_SIS_REPLAY_V2_KEY,
+  TARGETED_SIS_REPLAY_V2_MARKER_FIELD,
   type StructuredFailureType,
   type TargetedReplayItemResult,
 } from '@/modules/signals/targeted-sis-replay'
@@ -142,11 +144,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       claim: async (observation) => {
         const metadata = {
           ...(observation.metadata ?? {}),
-          targeted_sis_replay_key: TARGETED_SIS_REPLAY_KEY,
-          targeted_sis_replay_audit: {
-            reason: 'Approved one-time replay of repaired SIS structured-output failures',
+          [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+          [TARGETED_SIS_REPLAY_V2_AUDIT_FIELD]: {
+            reason: 'Approved one-time v2 replay after increasing only the SIS output cap',
             claimed_at: new Date().toISOString(),
-            source: 'internal_allowlisted_sis_replay',
+            source: 'internal_allowlisted_sis_replay_v2',
           },
         }
         const { data, error } = await db
@@ -158,7 +160,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           .is('signal_id', null)
           .is('rejection_code', null)
           .eq('metadata->>repair_key', TARGETED_SIS_REPAIR_KEY)
-          .is('metadata->>targeted_sis_replay_key', null)
+          .is(`metadata->>${TARGETED_SIS_REPLAY_V2_MARKER_FIELD}`, null)
           .select('*')
           .maybeSingle()
         if (error) throw new Error('Targeted observation claim failed')

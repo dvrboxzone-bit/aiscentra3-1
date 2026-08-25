@@ -50,6 +50,10 @@ import type { SignalCategory, QualificationResult } from '@/types/database'
 
 const ENGINE_VERSION = 'v2.0'
 
+// Production replay evidence showed that 400 output tokens truncate valid SIS
+// JSON. This cap is intentionally scoped to SIS structured output only.
+export const SIS_STRUCTURED_OUTPUT_MAX_TOKENS = 1024
+
 // ── Input token budget ───────────────────────────────────────────────────────
 // Defensive truncation applied to observation.content before it reaches
 // either prompt builder (SIS and enrichment). Both buildSISPrompt and
@@ -538,7 +542,7 @@ export async function processObservation(
   await ingestToKnowledgeGraph(supabase, observation.id, observation.title, candidateCategory)
 
   // ── Stage 3: Strategic Importance Score ──────────────────────────────────
-  // Cheap LLM call (~400 tokens) — determines if enrichment is worth running
+  // Bounded structured-output call — determines if enrichment is worth running
   let sisResult: ReturnType<typeof computeSIS> | null = null
 
   try {
@@ -557,7 +561,7 @@ export async function processObservation(
         },
       ],
       SISOutputSchema,
-      { temperature: 0, maxTokens: 400 },
+      { temperature: 0, maxTokens: SIS_STRUCTURED_OUTPUT_MAX_TOKENS },
       deadlineAt,
     )
     sisResult = computeSIS(
