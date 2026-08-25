@@ -14,7 +14,10 @@ export const TARGETED_SIS_REPLAY_ALLOWLIST = [
 ] as const
 
 export const TARGETED_SIS_REPAIR_KEY = 'repair_lost_sis_structured_output_20260823_v1'
-export const TARGETED_SIS_REPLAY_KEY = 'targeted_sis_replay_20260823_v1'
+export const TARGETED_SIS_REPLAY_V1_KEY = 'targeted_sis_replay_20260823_v1'
+export const TARGETED_SIS_REPLAY_V2_KEY = 'targeted_sis_replay_20260825_v2'
+export const TARGETED_SIS_REPLAY_V2_MARKER_FIELD = 'targeted_sis_replay_v2_key'
+export const TARGETED_SIS_REPLAY_V2_AUDIT_FIELD = 'targeted_sis_replay_v2_audit'
 
 export type StructuredFailureType = StructuredOutputFailureType
 export type TargetedReplayDisposition = 'valid' | 'rejected' | 'retried' | 'failed'
@@ -91,7 +94,9 @@ export function isTargetedReplayEligible(observation: ObservationRow, nowMs = Da
 
   const metadata = observation.metadata ?? {}
   if (metadata['repair_key'] !== TARGETED_SIS_REPAIR_KEY) return false
-  if (metadata['targeted_sis_replay_key'] !== undefined) return false
+  // A v1 marker is durable history, not a v2 eligibility gate. The distinct
+  // v2 field grants exactly one new campaign attempt without overwriting v1.
+  if (metadata[TARGETED_SIS_REPLAY_V2_MARKER_FIELD] !== undefined) return false
 
   const retryAfter = metadata['retry_after']
   if (retryAfter !== undefined) {
