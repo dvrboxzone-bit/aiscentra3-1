@@ -217,7 +217,7 @@ describe('targeted SIS replay workflow contract', () => {
     assert.equal((source.match(/^ {4}environment:\s*production\s*$/gm) ?? []).length, 1)
   })
 
-  test('uses the existing secret without printing it and calls only the exact internal endpoint once', () => {
+  test('uses the existing secret and only the exact internal endpoint in a nine-pass sequential loop', () => {
     const source = workflow()
 
     assert.match(source, /CRON_SECRET:\s*\$\{\{ secrets\.CRON_SECRET \}\}/)
@@ -228,6 +228,8 @@ describe('targeted SIS replay workflow contract', () => {
     )
     assert.equal((source.match(/\bcurl\b/g) ?? []).length, 1)
     assert.match(source, /--retry 0/)
+    assert.match(source, /--max-time 65/)
+    assert.match(source, /for pass in \{1\.\.9\}; do/)
     assert.doesNotMatch(source, /\/api\/enrich\/batch|\/api\/cron\/|\/api\/pipeline/)
     assert.doesNotMatch(source, /\bcat\s+|set\s+-x|echo[^\n]*\$\{CRON_SECRET\}/)
   })
@@ -242,7 +244,7 @@ describe('targeted SIS replay workflow contract', () => {
     assert.deepEqual(body['observationIds'], TARGETED_SIS_REPLAY_ALLOWLIST)
   })
 
-  test('shares enrich-batch concurrency, disables cancellation, emits count-only output, and fails closed', () => {
+  test('accepts only progressing 503 passes and requires nine cumulative attempts plus final exhaustion', () => {
     const source = workflow()
 
     assert.match(
@@ -268,11 +270,18 @@ describe('targeted SIS replay workflow contract', () => {
     )
     assert.match(
       source,
-      /\.diagnostic_counts\.invalid_response_envelope\]\s*\|\s*all\(type == "number"\)/,
+      /\.diagnostic_counts\.invalid_response_envelope\]\s*\|\s*all\(type == "number" and \. >= 0 and floor == \.\)/,
     )
+    assert.match(source, /"\$HTTP_STATUS" != "200" && "\$HTTP_STATUS" != "503"/)
+    assert.match(source, /"\$HTTP_STATUS" == "503"/)
+    assert.match(source, /"\$complete" != "false" \|\| "\$attempted" -eq 0/)
+    assert.match(source, /total_attempted=\$\(\(total_attempted \+ attempted\)\)/)
+    assert.match(source, /"\$total_attempted" -ne 9/)
+    assert.match(source, /"\$final_eligible" -ne 0/)
+    assert.match(source, /"\$eligible" -eq 0/)
+    assert.match(source, /completed=true/)
     assert.doesNotMatch(source, /raw[_ -]?output|raw[_ -]?content|response body/i)
-    assert.match(source, /if \[\[ "\$HTTP_STATUS" != "200" \]\]/)
-    assert.match(source, /jq -r '\.complete'/)
+    assert.match(source, /echo "Summary: \$\{totals\}"/)
     assert.match(source, /exit 1/)
   })
 })
