@@ -14,10 +14,10 @@ jobs:
   targeted-sis-replay:
     name: Replay the nine repaired SIS observations
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 12
     environment: production
     steps:
-      - name: Call the internal allowlisted replay path once
+      - name: Run bounded sequential passes over the internal allowlisted replay path
         shell: bash
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -32,48 +32,140 @@ jobs:
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
 
-          HTTP_STATUS="$(curl --silent --show-error --retry 0 \
-            --output "$response_file" \
-            --write-out '%{http_code}' \
-            --request POST 'https://aiscentra.com/api/internal/sis-replay' \
-            --header 'Content-Type: application/json' \
-            --header "x-cron-secret: ${CRON_SECRET}" \
-            --data-binary '{"observationIds":["e4275483-39e4-4441-84a2-0a1df546cf07","ec86e548-8394-4c45-8353-7ba588f23cf3","fc22b35a-776b-4666-aabc-64ea1a198c34","bcf826e4-069c-4627-a4ab-6635ce3e1f7e","5e0938e3-feb2-4531-9ebb-1e53164d219d","cb043c56-7be5-4e9d-9144-2c9c407d9655","91c78285-f310-4dfa-a0ca-0953e8cfdd40","948419ea-27e9-4213-b692-f80c04611cfa","de90407c-d4b9-4eee-862f-12a549f9544d"]}')"
+          total_attempted=0
+          total_valid=0
+          total_rejected=0
+          total_retried=0
+          total_failed=0
+          total_json_parse=0
+          total_schema_validation=0
+          total_output_truncated=0
+          total_invalid_response_envelope=0
+          final_eligible=-1
+          passes=0
+          completed=false
 
-          echo "HTTP status: ${HTTP_STATUS}"
+          for pass in {1..9}; do
+            passes="$pass"
+            HTTP_STATUS="$(curl --silent --show-error --retry 0 --max-time 65 \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --request POST 'https://aiscentra.com/api/internal/sis-replay' \
+              --header 'Content-Type: application/json' \
+              --header "x-cron-secret: ${CRON_SECRET}" \
+              --data-binary '{"observationIds":["e4275483-39e4-4441-84a2-0a1df546cf07","ec86e548-8394-4c45-8353-7ba588f23cf3","fc22b35a-776b-4666-aabc-64ea1a198c34","bcf826e4-069c-4627-a4ab-6635ce3e1f7e","5e0938e3-feb2-4531-9ebb-1e53164d219d","cb043c56-7be5-4e9d-9144-2c9c407d9655","91c78285-f310-4dfa-a0ca-0953e8cfdd40","948419ea-27e9-4213-b692-f80c04611cfa","de90407c-d4b9-4eee-862f-12a549f9544d"]}')"
 
-          summary="$(jq -ce '
-            {
-              requested,
-              eligible,
-              attempted,
-              valid,
-              rejected,
-              retried,
-              failed,
-              diagnostic_counts: {
-                json_parse: .diagnostic_counts.json_parse,
-                schema_validation: .diagnostic_counts.schema_validation,
-                output_truncated: .diagnostic_counts.output_truncated,
-                invalid_response_envelope: .diagnostic_counts.invalid_response_envelope
-              },
-              complete
+            if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "503" ]]; then
+              echo "::error::Targeted SIS replay returned an unsupported HTTP status."
+              exit 1
+            fi
+
+            summary="$(jq -ce '
+              {
+                requested,
+                eligible,
+                attempted,
+                valid,
+                rejected,
+                retried,
+                failed,
+                diagnostic_counts: {
+                  json_parse: .diagnostic_counts.json_parse,
+                  schema_validation: .diagnostic_counts.schema_validation,
+                  output_truncated: .diagnostic_counts.output_truncated,
+                  invalid_response_envelope: .diagnostic_counts.invalid_response_envelope
+                },
+                complete
+              }
+              | select(
+                  ([.requested, .eligible, .attempted, .valid, .rejected, .retried, .failed,
+                    .diagnostic_counts.json_parse, .diagnostic_counts.schema_validation,
+                    .diagnostic_counts.output_truncated,
+                    .diagnostic_counts.invalid_response_envelope]
+                    | all(type == "number" and . >= 0 and floor == .))
+                  and .requested == 9
+                  and .eligible <= .requested
+                  and .attempted <= .eligible
+                  and (.valid + .rejected + .retried + .failed == .attempted)
+                  and ([.diagnostic_counts.json_parse, .diagnostic_counts.schema_validation,
+                        .diagnostic_counts.output_truncated,
+                        .diagnostic_counts.invalid_response_envelope] | add) <= .attempted
+                  and (.complete | type == "boolean")
+                )
+            ' "$response_file")" || {
+              echo "::error::Response did not match the count-only replay summary contract."
+              exit 1
             }
-            | select(
-                ([.requested, .eligible, .attempted, .valid, .rejected, .retried, .failed,
-                  .diagnostic_counts.json_parse, .diagnostic_counts.schema_validation,
-                  .diagnostic_counts.output_truncated,
-                  .diagnostic_counts.invalid_response_envelope] | all(type == "number"))
-                and (.complete | type == "boolean")
-              )
-          ' "$response_file")" || {
-            echo "::error::Response did not match the count-only replay summary contract."
-            exit 1
-          }
 
-          echo "Summary: ${summary}"
+            attempted="$(jq -r '.attempted' <<<"$summary")"
+            eligible="$(jq -r '.eligible' <<<"$summary")"
+            complete="$(jq -r '.complete' <<<"$summary")"
 
-          if [[ "$HTTP_STATUS" != "200" ]] || [[ "$(jq -r '.complete' <<<"$summary")" != "true" ]]; then
-            echo "::error::Targeted SIS replay did not complete successfully."
+            if [[ "$HTTP_STATUS" == "503" ]]; then
+              if [[ "$complete" != "false" || "$attempted" -eq 0 ]]; then
+                echo "::error::HTTP 503 is allowed only for an incomplete pass with real progress."
+                exit 1
+              fi
+            elif [[ "$complete" != "true" ]]; then
+              echo "::error::HTTP 200 must carry complete=true."
+              exit 1
+            fi
+
+            total_attempted=$((total_attempted + attempted))
+            total_valid=$((total_valid + $(jq -r '.valid' <<<"$summary")))
+            total_rejected=$((total_rejected + $(jq -r '.rejected' <<<"$summary")))
+            total_retried=$((total_retried + $(jq -r '.retried' <<<"$summary")))
+            total_failed=$((total_failed + $(jq -r '.failed' <<<"$summary")))
+            total_json_parse=$((total_json_parse + $(jq -r '.diagnostic_counts.json_parse' <<<"$summary")))
+            total_schema_validation=$((total_schema_validation + $(jq -r '.diagnostic_counts.schema_validation' <<<"$summary")))
+            total_output_truncated=$((total_output_truncated + $(jq -r '.diagnostic_counts.output_truncated' <<<"$summary")))
+            total_invalid_response_envelope=$((total_invalid_response_envelope + $(jq -r '.diagnostic_counts.invalid_response_envelope' <<<"$summary")))
+            final_eligible="$eligible"
+
+            if [[ "$total_attempted" -gt 9 ]]; then
+              echo "::error::Cumulative attempted count exceeded the allowlist size."
+              exit 1
+            fi
+
+            if [[ "$eligible" -eq 0 ]]; then
+              if [[ "$attempted" -ne 0 || "$total_attempted" -ne 9 || "$HTTP_STATUS" != "200" ]]; then
+                echo "::error::Replay exhausted before exactly nine one-time attempts were confirmed."
+                exit 1
+              fi
+              completed=true
+              break
+            fi
+
+            if [[ "$attempted" -eq 0 ]]; then
+              echo "::error::Replay pass made no progress."
+              exit 1
+            fi
+          done
+
+          if [[ "$completed" != "true" || "$total_attempted" -ne 9 || "$final_eligible" -ne 0 ]]; then
+            echo "::error::Nine bounded passes did not confirm exactly nine attempts and final eligible=0."
             exit 1
           fi
+
+          totals="$(jq -cn \
+            --argjson requested 9 \
+            --argjson passes "$passes" \
+            --argjson eligible "$final_eligible" \
+            --argjson attempted "$total_attempted" \
+            --argjson valid "$total_valid" \
+            --argjson rejected "$total_rejected" \
+            --argjson retried "$total_retried" \
+            --argjson failed "$total_failed" \
+            --argjson json_parse "$total_json_parse" \
+            --argjson schema_validation "$total_schema_validation" \
+            --argjson output_truncated "$total_output_truncated" \
+            --argjson invalid_response_envelope "$total_invalid_response_envelope" \
+            '{requested: $requested, passes: $passes, eligible: $eligible,
+              attempted: $attempted, valid: $valid, rejected: $rejected,
+              retried: $retried, failed: $failed,
+              diagnostic_counts: {json_parse: $json_parse,
+                schema_validation: $schema_validation,
+                output_truncated: $output_truncated,
+                invalid_response_envelope: $invalid_response_envelope},
+              complete: true}')"
+          echo "Summary: ${totals}"
