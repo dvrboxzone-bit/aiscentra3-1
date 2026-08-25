@@ -37,6 +37,22 @@ export interface LockRpcClient {
   ) => Promise<{ data: unknown; error: { message: string } | null }>
 }
 
+export interface LockLeaseClient {
+  from: (table: string) => {
+    select: (columns: string) => {
+      eq: (
+        column: string,
+        value: string,
+      ) => {
+        maybeSingle: () => Promise<{
+          data: { holder?: unknown; expires_at?: unknown } | null
+          error: { message: string } | null
+        }>
+      }
+    }
+  }
+}
+
 /**
  * Attempts to take the enrichment lease.
  *
@@ -117,6 +133,32 @@ export async function releaseEnrichmentLock(
         err instanceof Error ? err.message : String(err)
       }`,
     )
+  }
+}
+
+/**
+ * Proves that the caller still owns the durable shared lease through the
+ * supplied deadline. V4 preclaim planning must fail closed unless this read
+ * succeeds: an in-memory TPM snapshot without the cross-platform lease is not
+ * an atomic reservation against another enrichment invocation.
+ */
+export async function verifyEnrichmentLockLease(
+  client: LockLeaseClient,
+  holder: string,
+  requiredThroughMs: number,
+  lockName: string = ENRICHMENT_LOCK,
+): Promise<boolean> {
+  try {
+    const { data, error } = await client
+      .from('execution_locks')
+      .select('holder, expires_at')
+      .eq('lock_name', lockName)
+      .maybeSingle()
+    if (error || data?.holder !== holder || typeof data.expires_at !== 'string') return false
+    const expiresAt = Date.parse(data.expires_at)
+    return Number.isFinite(expiresAt) && expiresAt >= requiredThroughMs
+  } catch {
+    return false
   }
 }
 

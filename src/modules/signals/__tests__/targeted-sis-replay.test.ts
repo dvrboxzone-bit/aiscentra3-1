@@ -18,8 +18,13 @@ import {
   TARGETED_SIS_REPLAY_V3_CONTROL_ID,
   TARGETED_SIS_REPLAY_V3_CONTROL_KEY,
   TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD,
+  TARGETED_SIS_REPLAY_V4_CONTROL_ID,
+  TARGETED_SIS_REPLAY_V4_CONTROL_KEY,
+  TARGETED_SIS_REPLAY_V4_CONTROL_MARKER_FIELD,
   isTargetedReplayV3ControlEligible,
+  isTargetedReplayV4ControlEligible,
   parseTargetedReplayV3ControlRequest,
+  parseTargetedReplayV4ControlRequest,
   type TargetedReplayItemResult,
 } from '@/modules/signals/targeted-sis-replay'
 
@@ -137,6 +142,18 @@ describe('targeted SIS replay', () => {
     assert.match(source, /General observation queue access is forbidden/)
   })
 
+  test('v4 preclaim verifies the durable shared lease and shared TPM ledger before claim', () => {
+    const source = readFileSync(resolve('src/app/api/internal/sis-replay/route.ts'), 'utf8')
+    const leaseAt = source.indexOf('verifyEnrichmentLockLease(')
+    const ledgerAt = source.indexOf(".from('ai_token_usage')", leaseAt)
+    const planAt = source.indexOf('createTargetedSisV4ReservationPlan(', ledgerAt)
+    assert.ok(leaseAt > 0)
+    assert.ok(ledgerAt > leaseAt)
+    assert.ok(planAt > ledgerAt)
+    assert.match(source, /if \(!leaseVerified\) return false/)
+    assert.match(source, /if \(usageError \|\| !Array\.isArray\(usageRows\)\) return false/)
+  })
+
   test('a durable v1 marker does not block the separate v2 campaign', async () => {
     const id = TARGETED_SIS_REPLAY_ALLOWLIST[0]
     const v1Row = observation(id, { targeted_sis_replay_key: TARGETED_SIS_REPLAY_V1_KEY })
@@ -217,6 +234,37 @@ describe('targeted SIS replay', () => {
     )
     assert.equal(
       parseTargetedReplayV3ControlRequest({
+        observationIds: TARGETED_SIS_REPLAY_ALLOWLIST.slice(0, 7),
+      }).ok,
+      false,
+    )
+  })
+
+  test('v1/v2/v3 history does not block additive v4, while v4 blocks a repeat', () => {
+    const history = observation(TARGETED_SIS_REPLAY_V4_CONTROL_ID, {
+      targeted_sis_replay_key: TARGETED_SIS_REPLAY_V1_KEY,
+      [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+      [TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD]: TARGETED_SIS_REPLAY_V3_CONTROL_KEY,
+    })
+    assert.equal(isTargetedReplayV4ControlEligible(history, NOW), true)
+    assert.equal(
+      isTargetedReplayV4ControlEligible(
+        observation(TARGETED_SIS_REPLAY_V4_CONTROL_ID, {
+          ...history.metadata,
+          [TARGETED_SIS_REPLAY_V4_CONTROL_MARKER_FIELD]: TARGETED_SIS_REPLAY_V4_CONTROL_KEY,
+        }),
+        NOW,
+      ),
+      false,
+    )
+    assert.deepEqual(
+      parseTargetedReplayV4ControlRequest({
+        observationIds: [TARGETED_SIS_REPLAY_V4_CONTROL_ID],
+      }),
+      { ok: true, observationIds: [TARGETED_SIS_REPLAY_V4_CONTROL_ID] },
+    )
+    assert.equal(
+      parseTargetedReplayV4ControlRequest({
         observationIds: TARGETED_SIS_REPLAY_ALLOWLIST.slice(0, 7),
       }).ok,
       false,
@@ -377,6 +425,52 @@ describe('targeted SIS replay v3 control workflow contract', () => {
     assert.match(source, /"\$complete" != "true"/)
     assert.match(source, /invalid_response_envelope/)
     assert.doesNotMatch(source, /raw[_ -]?(prompt|response|content)/i)
+  })
+})
+
+describe('targeted SIS replay v4 control workflow contract', () => {
+  const workflowPath = '.github/workflows/targeted-sis-replay-v4-control.yml'
+  const workflow = (): string => readFileSync(workflowPath, 'utf8')
+
+  test('is valid manual-only YAML with the shared execution concurrency boundary', () => {
+    const source = workflow()
+    const parsed = parseYaml(source) as Record<string, unknown>
+    const triggerBlock = /^on:\r?\n([\s\S]*?)^permissions:/m.exec(source)?.[1] ?? ''
+    assert.equal(typeof parsed['on'], 'object')
+    assert.match(triggerBlock, /^ {2}workflow_dispatch:\s*$/m)
+    assert.doesNotMatch(triggerBlock, /inputs:|schedule:|push:|pull_request:/)
+    assert.match(source, /group:\s*enrich-batch/)
+    assert.match(source, /cancel-in-progress:\s*false/)
+    assert.equal((source.match(/^ {4}environment:\s*production\s*$/gm) ?? []).length, 1)
+  })
+
+  test('sends only the fixed v4 ID once and never invokes batch, cron or a cohort', () => {
+    const source = workflow()
+    assert.equal((source.match(/\bcurl\b/g) ?? []).length, 1)
+    assert.match(source, /--retry 0/)
+    assert.doesNotMatch(source, /for\s+|while\s+|\/api\/enrich\/batch|\/api\/cron\//)
+    assert.match(source, new RegExp(TARGETED_SIS_REPLAY_V4_CONTROL_KEY))
+    const bodyMatch = /--data-binary '([^']+)'/.exec(source)
+    assert.ok(bodyMatch)
+    assert.deepEqual(JSON.parse(bodyMatch[1] ?? ''), {
+      observationIds: [TARGETED_SIS_REPLAY_V4_CONTROL_ID],
+    })
+    for (const id of TARGETED_SIS_REPLAY_ALLOWLIST.slice(1))
+      assert.doesNotMatch(source, new RegExp(id))
+  })
+
+  test('prints count-only diagnostics and requires one resolved control attempt', () => {
+    const source = workflow()
+    assert.match(source, /"\$initial_eligible" -ne 1/)
+    assert.match(source, /"\$attempted" -ne 1/)
+    assert.match(source, /resolved="\$\(jq -r '\.valid \+ \.rejected'/)
+    assert.match(source, /"\$resolved" -ne 1/)
+    assert.match(source, /"\$retried" -ne 0/)
+    assert.match(source, /"\$failed" -ne 0/)
+    assert.match(source, /"\$deadline_exceeded" -ne 0/)
+    assert.match(source, /"\$final_eligible" -ne 0/)
+    assert.match(source, /invalid_response_envelope/)
+    assert.doesNotMatch(source, /raw[_ -]?(prompt|response|content)|reasoning/i)
   })
 })
 

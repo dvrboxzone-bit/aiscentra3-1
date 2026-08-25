@@ -20,6 +20,7 @@ export interface SafeAIExecutionDiagnostic {
   failureType?: StructuredOutputFailureType
   finishReason?: string | null
   contentLength?: number
+  contentEmpty?: boolean
   retryAttempt?: number
   retryAfterMs?: number
   backoffMs?: number

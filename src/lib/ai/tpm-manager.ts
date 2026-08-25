@@ -88,6 +88,14 @@ const TPM_LIMITS: Record<string, number> = {
 
 const SAFETY_MARGIN = 0.85 // use only 85% of limit to avoid edge cases
 
+export function getModelTPMCapacity(model: string): number {
+  const defaultLimit = TPM_LIMITS['default']
+  if (defaultLimit === undefined) {
+    throw new Error("Invariant violated: TPM_LIMITS is missing its required 'default' entry.")
+  }
+  return Math.round((TPM_LIMITS[model] ?? defaultLimit) * SAFETY_MARGIN)
+}
+
 // ── Token window tracking ─────────────────────────────────────────────────────
 
 interface TokenEntry {
@@ -130,11 +138,7 @@ export interface BudgetCheckResult {
 }
 
 export function checkTPMBudget(model: string, estimatedTokens: number): BudgetCheckResult {
-  const defaultLimit = TPM_LIMITS['default']
-  if (defaultLimit === undefined) {
-    throw new Error("Invariant violated: TPM_LIMITS is missing its required 'default' entry.")
-  }
-  const limit = (TPM_LIMITS[model] ?? defaultLimit) * SAFETY_MARGIN
+  const limit = getModelTPMCapacity(model)
   const used = getWindowedTokens(model)
   const remaining = Math.max(0, limit - used)
   const allowed = estimatedTokens <= remaining
@@ -193,12 +197,8 @@ export interface ModelCeilingCheck {
 }
 
 export function fitsWithinModelTPM(model: string, estimatedTokens: number): ModelCeilingCheck {
-  const defaultLimit = TPM_LIMITS['default']
-  if (defaultLimit === undefined) {
-    throw new Error("Invariant violated: TPM_LIMITS is missing its required 'default' entry.")
-  }
-  const absoluteCeiling = (TPM_LIMITS[model] ?? defaultLimit) * SAFETY_MARGIN
-  return { fits: estimatedTokens <= absoluteCeiling, modelCeiling: Math.round(absoluteCeiling) }
+  const absoluteCeiling = getModelTPMCapacity(model)
+  return { fits: estimatedTokens <= absoluteCeiling, modelCeiling: absoluteCeiling }
 }
 
 // ── Wait for budget ───────────────────────────────────────────────────────────
