@@ -37,7 +37,11 @@ WITH required_columns(table_name, column_name) AS (
     ('pipeline_metrics', 'queue_depth'),
     ('pipeline_metrics', 'oldest_pending_age_seconds'),
     ('pipeline_metrics', 'items_rejected'),
-    ('pipeline_metrics', 'items_retried')
+    ('pipeline_metrics', 'items_retried'),
+    ('sis_execution_runs', 'finalization_outcome'),
+    ('sis_execution_runs', 'finalization_signal'),
+    ('sis_execution_runs', 'finalization_decision'),
+    ('sis_execution_runs', 'finalization_message_id')
 ),
 missing_columns AS (
   SELECT 'MISSING COLUMN: ' || rc.table_name || '.' || rc.column_name AS problem
@@ -73,6 +77,17 @@ missing_functions AS (
     WHERE r.routine_schema = 'public'
       AND r.routine_name = rf.function_name
   )
+),
+required_function_signatures(function_signature) AS (
+  VALUES
+    ('claim_durable_sis_v1_attempt(integer)'),
+    ('complete_durable_sis_v1_attempt(uuid,bigint,text,jsonb,jsonb,text,text,text,integer,text,text,jsonb,jsonb,jsonb)'),
+    ('finalize_durable_sis_v1(uuid,bigint)')
+),
+missing_function_signatures AS (
+  SELECT 'MISSING FUNCTION SIGNATURE: public.' || rfs.function_signature AS problem
+  FROM required_function_signatures rfs
+  WHERE to_regprocedure('public.' || rfs.function_signature) IS NULL
 ),
 required_tables(table_name) AS (
   VALUES
@@ -181,6 +196,8 @@ UNION ALL
 SELECT problem FROM missing_columns
 UNION ALL
 SELECT problem FROM missing_functions
+UNION ALL
+SELECT problem FROM missing_function_signatures
 UNION ALL
 SELECT problem FROM missing_types
 UNION ALL

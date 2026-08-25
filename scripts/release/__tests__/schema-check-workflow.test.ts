@@ -146,6 +146,12 @@ describe('production schema gate — Durable SIS V1 PGMQ dependencies', () => {
       'reserve_durable_sis_v1_budget',
       'complete_durable_sis_v1_attempt',
       'finalize_durable_sis_v1',
+      'finalization_outcome',
+      'finalization_signal',
+      'finalization_decision',
+      'finalization_message_id',
+      'MISSING FUNCTION SIGNATURE',
+      'finalize_durable_sis_v1\\(uuid,bigint\\)',
     ]) {
       assert.match(gate, new RegExp(dependency))
     }

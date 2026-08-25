@@ -71,10 +71,50 @@ test('migration uses durable read/visibility, never pop, and installs disabled k
   assert.match(sql, /if coalesce\(v_enabled, false\) is false then[\s\S]*status='PAUSED'/i)
   assert.match(sql, /unit_kind = 'groq_tokens'/)
   assert.match(sql, /unit_kind = 'provider_request'/)
-  assert.match(sql, /perform pgmq\.archive[\s\S]*select pgmq\.send/)
+  assert.match(
+    sql,
+    /pgmq\.send\('durable_sis_v1',jsonb_build_object\('stage','FINALIZE','run_id',v_attempt\.run_id\)\)[\s\S]*pgmq\.archive\('durable_sis_v1',p_message_id\)/,
+  )
   assert.match(sql, /observation already finalized/)
   assert.match(sql, /v_attempt\.status not in \('QUEUED','RUNNING'\)/)
-  assert.match(sql, /select \* into v_existing[\s\S]*if found then return[\s\S]*run not ready/)
+  assert.match(
+    sql,
+    /select \* into v_existing[\s\S]*if found then[\s\S]*pgmq\.archive[\s\S]*return jsonb_build_object[\s\S]*run not ready/,
+  )
+})
+
+test('parser success persists a durable FINALIZE delivery before archiving provider work', () => {
+  const sql = readFileSync(
+    'supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql',
+    'utf8',
+  )
+  assert.match(sql, /finalization_outcome text/)
+  assert.match(sql, /finalization_signal jsonb/)
+  assert.match(sql, /finalization_decision jsonb/)
+  assert.match(sql, /finalization_message_id bigint/)
+  assert.match(
+    sql,
+    /if v_msg\.message->>'stage' = 'FINALIZE' then[\s\S]*'FINALIZE'::text[\s\S]*null::text, null::text/,
+  )
+  assert.match(
+    sql,
+    /create or replace function public\.finalize_durable_sis_v1\(\s*p_run_id uuid, p_message_id bigint[\s\S]*v_run\.finalization_outcome/,
+  )
+})
+
+test('fallback budget failure preserves the completed provider outcome and queues finalization', () => {
+  const sql = readFileSync(
+    'supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql',
+    'utf8',
+  )
+  const budgetBranch = sql.match(
+    /if not public\.reserve_durable_sis_v1_budget[\s\S]*?return jsonb_build_object\('status','QUEUED','stage','FINALIZE','reason','budget_unavailable'[\s\S]*?end if;/,
+  )?.[0]
+  assert.ok(budgetBranch)
+  assert.match(budgetBranch, /status='TERMINAL'/)
+  assert.match(budgetBranch, /finalization_outcome='DISCARD'/)
+  assert.match(budgetBranch, /pgmq\.archive\('durable_sis_v1',p_message_id\)/)
+  assert.doesNotMatch(budgetBranch, /raise exception 'durable SIS fallback budget unavailable'/)
 })
 
 test('manual workflow is bounded, one environment, and cannot call batch/replay/cron', () => {
@@ -104,6 +144,9 @@ test('production schema gate requires PGMQ and every durable SIS contract', () =
     'sis_execution_finalizations',
     'claim_durable_sis_v1_attempt',
     'finalize_durable_sis_v1',
+    'finalization_outcome',
+    'finalization_message_id',
+    'finalize_durable_sis_v1\\(uuid,bigint\\)',
   ]) {
     assert.match(gate, new RegExp(object))
   }
