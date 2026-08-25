@@ -17,6 +17,7 @@ import {
 } from './tpm-manager'
 import { ensureTimeLeft, msUntilDeadline, AIDeadlineExceededError } from './deadline'
 import { AIStructuredOutputError } from './structured-output'
+import type { StructuredOutputDiagnostic } from './structured-output'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export type AIResult = {
   tokensUsed: number
   provider: ProviderName
   model: string
+  httpStatus: number
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────────
@@ -57,6 +59,23 @@ export class AIProviderError extends Error {
   }
   get isServerError(): boolean {
     return this.statusCode >= 500
+  }
+}
+
+/**
+ * HTTP succeeded, but the provider did not return a usable OpenAI-compatible
+ * envelope. Only bounded metadata is retained; the response body is discarded.
+ */
+export class AIInvalidResponseEnvelopeError extends AIProviderError {
+  constructor(public readonly diagnostic: StructuredOutputDiagnostic) {
+    // Keep statusCode=0 for compatibility with the established provider-error
+    // classification while exposing the actual HTTP status in the diagnostic.
+    super(
+      `Invalid provider response envelope: provider=${diagnostic.provider}, model=${diagnostic.model}, http_status=${diagnostic.httpStatus}, finish_reason=${diagnostic.finishReason ?? 'null'}, content_length=${diagnostic.contentLength}`,
+      diagnostic.provider,
+      0,
+    )
+    this.name = 'AIInvalidResponseEnvelopeError'
   }
 }
 
@@ -287,26 +306,62 @@ export async function callProvider(
 
   // Same reasoning as the error-body read above -- the success body can
   // also stall mid-stream after headers/status arrived fine.
-  let raw: unknown
+  let rawText: string
   try {
-    raw = await response.json()
+    rawText = await response.text()
   } catch (err) {
     if (isAbortLikeError(err, signal)) throw deadlineFail('success-body-read-aborted')
     throw err
   }
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(rawText)
+  } catch {
+    throw new AIInvalidResponseEnvelopeError({
+      provider: ref.provider,
+      model: ref.model,
+      failureType: 'invalid_response_envelope',
+      httpStatus: response.status,
+      finishReason: null,
+      contentLength: rawText.length,
+    })
+  }
   const parsed = CompletionResponseSchema.safeParse(raw)
 
   if (!parsed.success) {
-    throw new AIProviderError(
-      `Invalid response from ${ref.provider}: ${parsed.error.message}`,
-      ref.provider,
-      0,
-    )
+    const candidate =
+      raw && typeof raw === 'object' && Array.isArray((raw as { choices?: unknown }).choices)
+        ? (raw as { choices: unknown[] }).choices[0]
+        : undefined
+    const finishReason =
+      candidate && typeof candidate === 'object'
+        ? (candidate as { finish_reason?: unknown }).finish_reason
+        : undefined
+    const content =
+      candidate && typeof candidate === 'object'
+        ? (candidate as { message?: { content?: unknown } }).message?.content
+        : undefined
+    throw new AIInvalidResponseEnvelopeError({
+      provider: ref.provider,
+      model: ref.model,
+      failureType: 'invalid_response_envelope',
+      httpStatus: response.status,
+      finishReason: typeof finishReason === 'string' ? finishReason : null,
+      contentLength: typeof content === 'string' ? content.length : rawText.length,
+    })
   }
 
   const content = parsed.data.choices[0]?.message.content
   if (!content) {
-    throw new AIProviderError(`${ref.provider} returned empty content`, ref.provider, 0)
+    throw new AIInvalidResponseEnvelopeError({
+      provider: ref.provider,
+      model: ref.model,
+      failureType: 'invalid_response_envelope',
+      httpStatus: response.status,
+      finishReason: parsed.data.choices[0]?.finish_reason ?? null,
+      contentLength: 0,
+    })
   }
 
   const tokensUsed = parsed.data.usage?.total_tokens ?? 0
@@ -322,6 +377,7 @@ export async function callProvider(
     tokensUsed,
     provider: ref.provider,
     model: ref.model,
+    httpStatus: response.status,
   }
 }
 
@@ -341,6 +397,7 @@ export async function callProviderJSON<T>(
       provider: result.provider,
       model: result.model,
       failureType: 'output_truncated',
+      httpStatus: result.httpStatus,
       finishReason: result.finishReason,
       contentLength: result.contentLength,
     })
@@ -359,6 +416,7 @@ export async function callProviderJSON<T>(
       provider: result.provider,
       model: result.model,
       failureType: 'json_parse',
+      httpStatus: result.httpStatus,
       finishReason: result.finishReason,
       contentLength: result.contentLength,
     })
@@ -370,6 +428,7 @@ export async function callProviderJSON<T>(
       provider: result.provider,
       model: result.model,
       failureType: 'schema_validation',
+      httpStatus: result.httpStatus,
       finishReason: result.finishReason,
       contentLength: result.contentLength,
     })

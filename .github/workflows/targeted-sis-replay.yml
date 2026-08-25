@@ -54,14 +54,16 @@ jobs:
               diagnostic_counts: {
                 json_parse: .diagnostic_counts.json_parse,
                 schema_validation: .diagnostic_counts.schema_validation,
-                output_truncated: .diagnostic_counts.output_truncated
+                output_truncated: .diagnostic_counts.output_truncated,
+                invalid_response_envelope: .diagnostic_counts.invalid_response_envelope
               },
               complete
             }
             | select(
                 ([.requested, .eligible, .attempted, .valid, .rejected, .retried, .failed,
                   .diagnostic_counts.json_parse, .diagnostic_counts.schema_validation,
-                  .diagnostic_counts.output_truncated] | all(type == "number"))
+                  .diagnostic_counts.output_truncated,
+                  .diagnostic_counts.invalid_response_envelope] | all(type == "number"))
                 and (.complete | type == "boolean")
               )
           ' "$response_file")" || {

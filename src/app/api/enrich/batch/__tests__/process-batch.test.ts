@@ -119,6 +119,30 @@ describe('processBatchOfObservations', () => {
     assert.ok(!calls.markForRetry.includes('obs-2'))
   })
 
+  test('a temporary provider 5xx is requeued and never terminalized as processed', async () => {
+    const obs1 = makeObservation('obs-1')
+    const obs2 = makeObservation('obs-2')
+
+    const { deps, calls } = makeDeps({
+      processObservation: (async (obs: ObservationRow) => {
+        if (obs.id === 'obs-1') {
+          throw new AIProviderError('temporary provider failure', 'groq', 503)
+        }
+        return { observationId: obs.id, outcome: 'signal_created', signalId: 'sig-1' }
+      }) as BatchProcessingDeps['processObservation'],
+    })
+
+    const stats = await processBatchOfObservations([obs1, obs2], Date.now() + 30_000, deps)
+
+    assert.equal(stats.stopped_reason, 'server_error')
+    assert.equal(stats.retried, 1)
+    assert.equal(stats.failed, 0)
+    assert.equal(stats.attempted, 1)
+    assert.equal(stats.error_breakdown.server_error, 1)
+    assert.deepEqual(calls.markForRetry, ['obs-1'])
+    assert.deepEqual(calls.markProcessed, [])
+  })
+
   test('a requeue failure after a deadline hit does not report retried++, uses requeue_failed, and still stops the batch', async () => {
     const obs1 = makeObservation('obs-1')
     const obs2 = makeObservation('obs-2')

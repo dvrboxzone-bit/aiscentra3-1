@@ -373,7 +373,7 @@ describe('agent.ts deadline contour (mocked fetch)', () => {
         status: 200,
         statusText: 'OK',
         headers: new Headers({ 'content-type': 'application/json' }),
-        json: () =>
+        text: () =>
           new Promise((_resolve, reject) => {
             const keepAlive = setInterval(() => {}, 50)
             init?.signal?.addEventListener('abort', () => {
@@ -385,7 +385,7 @@ describe('agent.ts deadline contour (mocked fetch)', () => {
               reject(new Error('test safety-net -- AbortSignal never fired for body read'))
             }, 8_000).unref?.()
           }),
-        text: () => Promise.resolve(''),
+        json: () => Promise.resolve({}),
       } as unknown as Response
     }) as typeof fetch
 

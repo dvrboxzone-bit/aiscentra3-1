@@ -108,7 +108,12 @@ describe('targeted SIS replay', () => {
       rejected: 0,
       retried: 0,
       failed: 0,
-      diagnostic_counts: { json_parse: 0, schema_validation: 0, output_truncated: 0 },
+      diagnostic_counts: {
+        json_parse: 0,
+        schema_validation: 0,
+        output_truncated: 0,
+        invalid_response_envelope: 0,
+      },
       complete: true,
     })
   })
@@ -166,6 +171,7 @@ describe('targeted SIS replay', () => {
       { disposition: 'rejected', diagnostic: 'schema_validation' },
       { disposition: 'retried', diagnostic: 'output_truncated' },
       { disposition: 'failed', diagnostic: 'json_parse' },
+      { disposition: 'retried', diagnostic: 'invalid_response_envelope' },
     ]
     const ids = TARGETED_SIS_REPLAY_ALLOWLIST.slice(0, results.length)
 
@@ -180,15 +186,16 @@ describe('targeted SIS replay', () => {
       now: () => NOW,
     })
 
-    assert.equal(summary.attempted, 4)
+    assert.equal(summary.attempted, 5)
     assert.equal(summary.valid, 1)
     assert.equal(summary.rejected, 1)
-    assert.equal(summary.retried, 1)
+    assert.equal(summary.retried, 2)
     assert.equal(summary.failed, 1)
     assert.deepEqual(summary.diagnostic_counts, {
       json_parse: 1,
       schema_validation: 1,
       output_truncated: 1,
+      invalid_response_envelope: 1,
     })
   })
 })
@@ -255,6 +262,14 @@ describe('targeted SIS replay workflow contract', () => {
     ]) {
       assert.match(source, new RegExp(`\\b${field}\\b`))
     }
+    assert.match(
+      source,
+      /invalid_response_envelope:\s*\.diagnostic_counts\.invalid_response_envelope/,
+    )
+    assert.match(
+      source,
+      /\.diagnostic_counts\.invalid_response_envelope\]\s*\|\s*all\(type == "number"\)/,
+    )
     assert.doesNotMatch(source, /raw[_ -]?output|raw[_ -]?content|response body/i)
     assert.match(source, /if \[\[ "\$HTTP_STATUS" != "200" \]\]/)
     assert.match(source, /jq -r '\.complete'/)

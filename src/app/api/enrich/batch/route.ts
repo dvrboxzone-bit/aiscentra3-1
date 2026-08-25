@@ -202,6 +202,7 @@ export interface BatchStats {
     | 'queue_empty'
     | 'time_budget'
     | 'rate_limited'
+    | 'server_error'
     | 'deadline_exceeded'
     | 'budget_exhausted'
     | 'requeue_failed'
@@ -228,6 +229,7 @@ export interface BatchStats {
      * call that would return a real 429. */
     request_too_large: number
     output_truncated: number
+    invalid_response_envelope: number
     unknown: number
   }
 }
@@ -299,6 +301,7 @@ function freshStats(): BatchStats {
       database: 0,
       request_too_large: 0,
       output_truncated: 0,
+      invalid_response_envelope: 0,
       unknown: 0,
     },
   }
@@ -490,7 +493,11 @@ export async function processBatchOfObservations(
           const nextAttempt = currentAttempt + 1
           const retryDelayMs = structuredOutputRetryDelayMs(currentAttempt)
           stats.attempted++
-          stats.error_breakdown.output_truncated++
+          if (err.failureType === 'invalid_response_envelope') {
+            stats.error_breakdown.invalid_response_envelope++
+          } else {
+            stats.error_breakdown.output_truncated++
+          }
           try {
             await deps.markObservationForRetry(observation.id, retryDelayMs, undefined, {
               structured_output_attempt: nextAttempt,
@@ -505,14 +512,14 @@ export async function processBatchOfObservations(
             stats.retried++
             stats.stopped_reason = 'structured_output_retry'
             console.warn(
-              `[enrich/batch] output_truncated — ${observation.id} queued for bounded retry attempt ${nextAttempt}/${STRUCTURED_OUTPUT_MAX_ATTEMPTS} in ${retryDelayMs}ms`,
+              `[enrich/batch] ${err.failureType} — ${observation.id} queued for bounded retry attempt ${nextAttempt}/${STRUCTURED_OUTPUT_MAX_ATTEMPTS} in ${retryDelayMs}ms`,
             )
           } catch (requeueErr) {
             stats.failed++
             stats.error_breakdown.requeue_failed++
             stats.stopped_reason = 'requeue_failed'
             console.error(
-              `[enrich/batch] requeue_failed after output_truncated for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+              `[enrich/batch] requeue_failed after ${err.failureType} for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
             )
           }
           break
@@ -652,8 +659,8 @@ export async function processBatchOfObservations(
         stats.error_breakdown.validation++
       else stats.error_breakdown.unknown++
 
-      if (isRateLimit) {
-        // 429 = temporary provider limit — NOT a processing error.
+      if (isRateLimit || isServerErr) {
+        // 429/5xx = temporary provider failure — NOT a processing error.
         // agent.ts already retried within-chain with exponential
         // backoff; if the WHOLE chain (all fallback models) was still
         // rate-limited, agent.ts now surfaces the largest Retry-After
@@ -665,13 +672,15 @@ export async function processBatchOfObservations(
         // request_too_large branch above.
         stats.attempted++
         const retryDelayMs =
-          (err instanceof AIProviderError ? err.retryAfterMs : undefined) ?? AI_RETRY_MS
+          (isRateLimit && err instanceof AIProviderError ? err.retryAfterMs : undefined) ??
+          AI_RETRY_MS
+        const temporaryKind = isRateLimit ? 'rate_limit' : 'server_error'
         try {
           await deps.markObservationForRetry(observation.id, retryDelayMs)
           stats.retried++
-          stats.stopped_reason = 'rate_limited'
+          stats.stopped_reason = isRateLimit ? 'rate_limited' : 'server_error'
           console.warn(
-            `[enrich/batch] rate_limit — ${observation.id} queued for retry in ${retryDelayMs}ms`,
+            `[enrich/batch] ${temporaryKind} — ${observation.id} queued for retry in ${retryDelayMs}ms`,
           )
         } catch (requeueErr) {
           // See identical comment on the deadline_exceeded branch
@@ -681,7 +690,7 @@ export async function processBatchOfObservations(
           stats.error_breakdown.requeue_failed++
           stats.stopped_reason = 'requeue_failed'
           console.error(
-            `[enrich/batch] requeue_failed after rate_limit for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
+            `[enrich/batch] requeue_failed after ${temporaryKind} for ${observation.id}: ${requeueErr instanceof Error ? requeueErr.message : String(requeueErr)}`,
           )
         }
         break

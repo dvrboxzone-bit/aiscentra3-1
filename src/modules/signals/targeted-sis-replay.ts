@@ -115,6 +115,7 @@ function freshSummary(requested: number): TargetedReplaySummary {
       json_parse: 0,
       schema_validation: 0,
       output_truncated: 0,
+      invalid_response_envelope: 0,
     },
     complete: true,
   }

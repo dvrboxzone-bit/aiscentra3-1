@@ -13,6 +13,7 @@ import {
   callProvider,
   callProviderJSON,
   AIProviderError,
+  AIInvalidResponseEnvelopeError,
   type AIMessage,
   type AIOptions,
   type AIResult,
@@ -43,6 +44,7 @@ export type ErrorKind =
   | 'json_parse'
   | 'schema_validation'
   | 'output_truncated'
+  | 'invalid_response_envelope'
   /** REAL PRODUCTION INCIDENT this closes: distinguishes "this request
    * is physically too large for this model's own TPM budget, no
    * amount of waiting or retrying would ever help" from a generic
@@ -66,6 +68,7 @@ function backoffMs(attempt: number, retryAfterMs?: number): number {
 
 function classifyError(err: unknown): ErrorKind {
   if (err instanceof AIRequestTooLargeError) return 'request_too_large'
+  if (err instanceof AIInvalidResponseEnvelopeError) return err.diagnostic.failureType
   if (err instanceof AIStructuredOutputError) return err.diagnostic.failureType
   if (err instanceof AIProviderError) {
     if (err.isRateLimit) return 'rate_limit'
@@ -312,7 +315,7 @@ export async function agentCompleteJSON<T>(
 
       const kind = classifyError(err)
       kinds.push(kind)
-      if (err instanceof AIStructuredOutputError) {
+      if (err instanceof AIStructuredOutputError || err instanceof AIInvalidResponseEnvelopeError) {
         structuredDiagnostics.push(err.diagnostic)
       }
       lastError = err
@@ -320,7 +323,7 @@ export async function agentCompleteJSON<T>(
         maxRetryAfterMs = Math.max(maxRetryAfterMs ?? 0, err.retryAfterMs)
       }
       const msg =
-        err instanceof AIStructuredOutputError
+        err instanceof AIStructuredOutputError || err instanceof AIInvalidResponseEnvelopeError
           ? `${err.diagnostic.provider}/${err.diagnostic.model}: ${err.diagnostic.failureType} finish_reason=${err.diagnostic.finishReason ?? 'null'} content_length=${err.diagnostic.contentLength}`
           : err instanceof AIProviderError
             ? `${ref.provider}/${ref.model}: HTTP ${err.statusCode}`
@@ -342,14 +345,37 @@ export async function agentCompleteJSON<T>(
     )
   }
 
-  if (
+  const hasRetryableStructuredFailure = structuredDiagnostics.some(
+    (diagnostic) =>
+      diagnostic.failureType === 'output_truncated' ||
+      diagnostic.failureType === 'invalid_response_envelope',
+  )
+  const allFailuresAreStructured =
     structuredDiagnostics.length === chain.length &&
     kinds.every(
       (kind) =>
-        kind === 'json_parse' || kind === 'schema_validation' || kind === 'output_truncated',
+        kind === 'json_parse' ||
+        kind === 'schema_validation' ||
+        kind === 'output_truncated' ||
+        kind === 'invalid_response_envelope',
     )
-  ) {
+
+  if (hasRetryableStructuredFailure || allFailuresAreStructured) {
     throw new AIStructuredOutputChainError(structuredDiagnostics, role)
+  }
+
+  // A temporary provider failure mixed with a permanent structured/client
+  // failure is still unresolved: a later provider attempt may succeed. Keep
+  // the temporary classification visible to the queue lifecycle instead of
+  // collapsing it into a terminal bare Error.
+  if (kinds.includes('rate_limit') || kinds.includes('server_error')) {
+    const rateLimited = kinds.includes('rate_limit')
+    throw new AIProviderError(
+      `[agent:${role}] Mixed chain retained temporary provider failure (JSON):\n${errors.join('\n')}`,
+      chain[0]?.provider ?? 'groq',
+      rateLimited ? 429 : 503,
+      rateLimited ? maxRetryAfterMs : undefined,
+    )
   }
 
   // REAL BUG FIXED (merge-blocking review) -- see agentComplete's
