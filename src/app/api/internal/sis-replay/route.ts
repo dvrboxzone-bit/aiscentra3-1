@@ -2,7 +2,17 @@ import { NextResponse } from 'next/server'
 
 import { processBatchOfObservations, type BatchProcessingDeps } from '@/app/api/enrich/batch/route'
 import { acquireEnrichmentLock, releaseEnrichmentLock } from '@/lib/ai/execution-lock'
+import {
+  TARGETED_SIS_V3_CLASSIFIER_POLICY,
+  TARGETED_SIS_V3_PARSER_POLICY,
+  TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
+  hasTargetedSisV3PreclaimBudget,
+} from '@/lib/ai/execution-policy'
+import { structuredFailureTypesFromExecutionDiagnostics } from '@/lib/ai/execution-diagnostics'
+import { AIDeadlineExceededError } from '@/lib/ai/deadline'
+import { getModelChain } from '@/lib/ai/models'
 import { AIStructuredOutputChainError } from '@/lib/ai/structured-output'
+import { checkTPMBudget } from '@/lib/ai/tpm-manager'
 import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
@@ -13,11 +23,16 @@ import {
 import { processObservation, type SignalEngineResult } from '@/modules/signals/engine'
 import {
   parseTargetedReplayRequest,
+  parseTargetedReplayV3ControlRequest,
   runTargetedSisReplay,
   TARGETED_SIS_REPAIR_KEY,
   TARGETED_SIS_REPLAY_V2_AUDIT_FIELD,
   TARGETED_SIS_REPLAY_V2_KEY,
   TARGETED_SIS_REPLAY_V2_MARKER_FIELD,
+  TARGETED_SIS_REPLAY_V3_CONTROL_AUDIT_FIELD,
+  TARGETED_SIS_REPLAY_V3_CONTROL_KEY,
+  TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD,
+  isTargetedReplayV3ControlEligible,
   type StructuredFailureType,
   type TargetedReplayItemResult,
 } from '@/modules/signals/targeted-sis-replay'
@@ -26,6 +41,7 @@ export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 const DEADLINE_BUFFER_MS = 10_000
+const V3_CAMPAIGN_HEADER = 'x-sis-replay-campaign'
 
 function diagnosticFromResult(result: SignalEngineResult): StructuredFailureType | undefined {
   if (result.outcome !== 'error') return undefined
@@ -39,8 +55,10 @@ async function processClaimedObservation(
   supabase: ReturnType<typeof createAdminClient>,
   observation: ObservationRow,
   deadlineAt: number,
+  useV3ExecutionPolicy = false,
 ): Promise<TargetedReplayItemResult> {
   let diagnostic: StructuredFailureType | undefined
+  let deadlineError: AIDeadlineExceededError | undefined
   // The generated Database type on this historical branch predates the
   // columns used by this internal repair path; keep the same deliberately
   // loose server-only convention as the existing enrichment route.
@@ -67,21 +85,45 @@ async function processClaimedObservation(
     fetchObservationsPage: async () => {
       throw new Error('General observation queue access is forbidden in targeted SIS replay')
     },
-    processObservation: async (...args) => {
+    processObservation: async (row, trustScore, sourceName, sourceType, itemDeadlineAt) => {
       try {
-        const result = await processObservation(...args)
+        const result = await processObservation(
+          row,
+          trustScore,
+          sourceName,
+          sourceType,
+          itemDeadlineAt,
+          useV3ExecutionPolicy
+            ? {
+                classifier: TARGETED_SIS_V3_CLASSIFIER_POLICY,
+                parser: TARGETED_SIS_V3_PARSER_POLICY,
+              }
+            : undefined,
+        )
         diagnostic = diagnosticFromResult(result)
         return result
       } catch (error) {
         if (error instanceof AIStructuredOutputChainError) {
           diagnostic = error.failureType
         }
+        if (error instanceof AIDeadlineExceededError) deadlineError = error
         throw error
       }
     },
     markObservationProcessed,
     markObservationForRetry: (id, delay, _client, metadata) =>
-      markObservationForRetry(id, delay, supabase as never, metadata),
+      markObservationForRetry(id, delay, supabase as never, {
+        ...metadata,
+        ...(deadlineError
+          ? {
+              targeted_sis_deadline_last_failure: {
+                context: deadlineError.context,
+                diagnostics: deadlineError.diagnostics,
+                recorded_at: new Date().toISOString(),
+              },
+            }
+          : {}),
+      }),
   }
 
   const stats = await processBatchOfObservations([observation], deadlineAt, deps)
@@ -94,7 +136,15 @@ async function processClaimedObservation(
           ? 'retried'
           : 'failed'
 
-  return diagnostic ? { disposition, diagnostic } : { disposition }
+  const diagnostics = deadlineError
+    ? structuredFailureTypesFromExecutionDiagnostics(deadlineError.diagnostics)
+    : []
+  if (diagnostic) diagnostics.push(diagnostic)
+  return {
+    disposition,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(deadlineError ? { deadlineExceeded: true } : {}),
+  }
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -109,7 +159,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const parsed = parseTargetedReplayRequest(body)
+  const isV3Control = request.headers.get(V3_CAMPAIGN_HEADER) === TARGETED_SIS_REPLAY_V3_CONTROL_KEY
+  const parsed = isV3Control
+    ? parseTargetedReplayV3ControlRequest(body)
+    : parseTargetedReplayRequest(body)
   if (!parsed.ok) {
     return NextResponse.json({ error: parsed.error }, { status: 400 })
   }
@@ -132,23 +185,40 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    const loadRows = async (ids: readonly string[]): Promise<ObservationRow[]> => {
+      const { data, error } = await db
+        .from('observations')
+        .select('*')
+        .in('id', [...ids])
+      if (error) throw new Error('Targeted observation read failed')
+      return (data ?? []) as ObservationRow[]
+    }
+
     const summary = await runTargetedSisReplay(parsed.observationIds, deadlineAt, {
       loadEligible: async (ids) => {
-        const { data, error } = await db
-          .from('observations')
-          .select('*')
-          .in('id', [...ids])
-        if (error) throw new Error('Targeted observation read failed')
-        return (data ?? []) as ObservationRow[]
+        return loadRows(ids)
       },
       claim: async (observation) => {
+        const markerField = isV3Control
+          ? TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD
+          : TARGETED_SIS_REPLAY_V2_MARKER_FIELD
+        const markerKey = isV3Control
+          ? TARGETED_SIS_REPLAY_V3_CONTROL_KEY
+          : TARGETED_SIS_REPLAY_V2_KEY
+        const auditField = isV3Control
+          ? TARGETED_SIS_REPLAY_V3_CONTROL_AUDIT_FIELD
+          : TARGETED_SIS_REPLAY_V2_AUDIT_FIELD
         const metadata = {
           ...(observation.metadata ?? {}),
-          [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
-          [TARGETED_SIS_REPLAY_V2_AUDIT_FIELD]: {
-            reason: 'Approved one-time v2 replay after increasing only the SIS output cap',
+          [markerField]: markerKey,
+          [auditField]: {
+            reason: isV3Control
+              ? 'Approved v3 scheduling control checkpoint for one observation'
+              : 'Approved one-time v2 replay after increasing only the SIS output cap',
             claimed_at: new Date().toISOString(),
-            source: 'internal_allowlisted_sis_replay_v2',
+            source: isV3Control
+              ? 'internal_allowlisted_sis_replay_v3_control'
+              : 'internal_allowlisted_sis_replay_v2',
           },
         }
         const { data, error } = await db
@@ -160,19 +230,49 @@ export async function POST(request: Request): Promise<NextResponse> {
           .is('signal_id', null)
           .is('rejection_code', null)
           .eq('metadata->>repair_key', TARGETED_SIS_REPAIR_KEY)
-          .is(`metadata->>${TARGETED_SIS_REPLAY_V2_MARKER_FIELD}`, null)
+          .is(`metadata->>${markerField}`, null)
           .select('*')
           .maybeSingle()
         if (error) throw new Error('Targeted observation claim failed')
         return (data as ObservationRow | null) ?? null
       },
       processOne: (observation, itemDeadlineAt) =>
-        processClaimedObservation(supabase, observation, itemDeadlineAt),
+        processClaimedObservation(supabase, observation, itemDeadlineAt, isV3Control),
+      ...(isV3Control
+        ? {
+            isEligible: isTargetedReplayV3ControlEligible,
+            canStart: async (_observation: ObservationRow, itemDeadlineAt: number) => {
+              const classifier = getModelChain('classifier')[0]
+              const parser = getModelChain('parser')[0]
+              if (!classifier || !parser) return false
+              return hasTargetedSisV3PreclaimBudget({
+                remainingMs: itemDeadlineAt - Date.now(),
+                classifierTPMAllowed: checkTPMBudget(
+                  classifier.model,
+                  TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
+                ).allowed,
+                parserTPMAllowed: checkTPMBudget(
+                  parser.model,
+                  TARGETED_SIS_V3_PREFLIGHT_ESTIMATED_TOKENS,
+                ).allowed,
+              })
+            },
+          }
+        : {}),
     })
+
+    const finalEligible = isV3Control
+      ? (await loadRows(parsed.observationIds)).filter((row) =>
+          isTargetedReplayV3ControlEligible(row),
+        ).length
+      : undefined
 
     return NextResponse.json(
       {
         ...summary,
+        ...(isV3Control
+          ? { initial_eligible: summary.eligible, final_eligible: finalEligible }
+          : {}),
         duration_ms: Date.now() - startedAt,
         timestamp: new Date().toISOString(),
       },

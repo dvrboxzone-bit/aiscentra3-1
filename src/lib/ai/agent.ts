@@ -21,6 +21,8 @@ import {
 import { withModelQueue, AIRequestTooLargeError } from './tpm-manager'
 import { getModelChain, type AgentRole } from './models'
 import { ensureTimeLeft, sleepWithDeadline, AIDeadlineExceededError } from './deadline'
+import type { SafeAIExecutionDiagnostic } from './execution-diagnostics'
+import { reservedTimeAfterModel, type AIJSONExecutionPolicy } from './execution-policy'
 import {
   reserveBudgetForCall,
   consumerForRole,
@@ -82,10 +84,15 @@ function classifyError(err: unknown): ErrorKind {
 
 // ── Core retry wrapper ────────────────────────────────────────────────────────
 
-async function withRetry<T>(fn: () => Promise<T>, label: string, deadlineAt: number): Promise<T> {
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  deadlineAt: number,
+  maxRetries: number = MAX_RETRIES,
+): Promise<T> {
   let lastErr: unknown
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     ensureTimeLeft(deadlineAt, 1_000, `withRetry:${label}:attempt-${attempt}`)
     try {
       return await fn()
@@ -111,12 +118,12 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, deadlineAt: num
         kind === 'server_error' ||
         (err instanceof AIProviderError && err.statusCode === 413)
       if (!isRetryable) throw err
-      if (attempt === MAX_RETRIES) break
+      if (attempt === maxRetries) break
 
       const retryAfterMs = err instanceof AIProviderError ? err.retryAfterMs : undefined
       const delay = backoffMs(attempt, retryAfterMs)
 
-      console.warn(`[${label}] ${kind} — retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`)
+      console.warn(`[${label}] ${kind} — retry ${attempt + 1}/${maxRetries} in ${delay}ms`)
       await sleepWithDeadline(delay, deadlineAt, `withRetry:${label}:backoff`)
     }
   }
@@ -260,19 +267,45 @@ export async function agentCompleteJSON<T>(
   schema: z.ZodType<T>,
   options: AIOptions = {},
   deadlineAt: number,
+  executionPolicy?: AIJSONExecutionPolicy,
 ): Promise<T & { _modelUsed?: string }> {
   const chain = getModelChain(role)
   const errors: string[] = []
   const kinds: ErrorKind[] = []
   const structuredDiagnostics: StructuredOutputDiagnostic[] = []
+  const safeExecutionDiagnostics: SafeAIExecutionDiagnostic[] = []
   // See agentComplete's identical comment above -- preserves the real
   // thrown error object for the most recent attempt.
   let lastError: unknown
   let maxRetryAfterMs: number | undefined
 
-  for (const ref of chain) {
+  for (const [modelIndex, ref] of chain.entries()) {
+    const attemptBudgetMs = executionPolicy?.modelAttemptBudgetsMs[modelIndex]
+    const reserveAfterModelMs = executionPolicy
+      ? reservedTimeAfterModel(executionPolicy, modelIndex)
+      : 0
+    if (executionPolicy && attemptBudgetMs === undefined) {
+      throw new Error(`Missing execution budget for ${executionPolicy.stage} model ${modelIndex}`)
+    }
+    if (executionPolicy && attemptBudgetMs !== undefined) {
+      ensureTimeLeft(
+        deadlineAt,
+        attemptBudgetMs + reserveAfterModelMs,
+        `agentCompleteJSON:${executionPolicy.stage}:reserved-window-${modelIndex}`,
+        {
+          kind: 'deadline_exceeded',
+          stage: executionPolicy.stage,
+          provider: ref.provider,
+          model: ref.model,
+        },
+      )
+    }
+    const modelDeadlineAt =
+      executionPolicy && attemptBudgetMs !== undefined
+        ? Math.min(deadlineAt - reserveAfterModelMs, Date.now() + attemptBudgetMs)
+        : deadlineAt
     ensureTimeLeft(
-      deadlineAt,
+      modelDeadlineAt,
       2_000,
       `agentCompleteJSON:${role}:before-${ref.provider}/${ref.model}`,
     )
@@ -295,19 +328,38 @@ export async function agentCompleteJSON<T>(
                 consumer: consumerForRole(role),
                 estimatedTokens: (options.maxTokens ?? 1000) + estimateInputTokens(messages),
               })
-              return callProviderJSON(ref, messages, schema, options, deadlineAt)
+              return callProviderJSON(ref, messages, schema, options, modelDeadlineAt)
             },
-            deadlineAt,
+            modelDeadlineAt,
           ),
         label,
-        deadlineAt,
+        modelDeadlineAt,
+        executionPolicy?.maxRetriesPerModel,
       )
       console.info(`[agent:${role}] ✓ JSON ${ref.provider}/${ref.model}`)
       return { ...result, _modelUsed: `${ref.provider}/${ref.model}` }
     } catch (err) {
-      // See agentComplete's identical comment above: a deadline failure
-      // must propagate immediately, not be treated as "try next model".
-      if (err instanceof AIDeadlineExceededError) throw err
+      if (err instanceof AIDeadlineExceededError) {
+        const deadlineDiagnostic: SafeAIExecutionDiagnostic = {
+          kind: 'deadline_exceeded',
+          stage: executionPolicy?.stage ?? role,
+          provider: ref.provider,
+          model: ref.model,
+          remainingMs: Math.max(0, deadlineAt - Date.now()),
+        }
+        err.attachDiagnostics([...safeExecutionDiagnostics, deadlineDiagnostic])
+        // A v3 per-model deadline is a circuit breaker that preserves the
+        // next model's reserved window. Continue only while a fallback exists;
+        // the shared job deadline remains fail-fast everywhere else.
+        if (executionPolicy && modelIndex < chain.length - 1 && Date.now() < deadlineAt) {
+          safeExecutionDiagnostics.push(...err.diagnostics)
+          console.warn(
+            `[agent:${role}] bounded ${ref.provider}/${ref.model} window elapsed — trying reserved fallback`,
+          )
+          continue
+        }
+        throw err
+      }
       // A budget refusal is not a model failure: trying the next
       // model in the chain would spend the very budget just
       // refused. Propagate immediately.
@@ -317,6 +369,28 @@ export async function agentCompleteJSON<T>(
       kinds.push(kind)
       if (err instanceof AIStructuredOutputError || err instanceof AIInvalidResponseEnvelopeError) {
         structuredDiagnostics.push(err.diagnostic)
+        safeExecutionDiagnostics.push({
+          kind:
+            err.diagnostic.failureType === 'invalid_response_envelope'
+              ? 'model_contract'
+              : 'provider_error',
+          stage: executionPolicy?.stage ?? role,
+          provider: err.diagnostic.provider,
+          model: err.diagnostic.model,
+          httpStatus: err.diagnostic.httpStatus,
+          failureType: err.diagnostic.failureType,
+          finishReason: err.diagnostic.finishReason,
+          contentLength: err.diagnostic.contentLength,
+        })
+      } else if (err instanceof AIProviderError) {
+        safeExecutionDiagnostics.push({
+          kind: 'provider_error',
+          stage: executionPolicy?.stage ?? role,
+          provider: ref.provider,
+          model: ref.model,
+          httpStatus: err.statusCode,
+          ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}),
+        })
       }
       lastError = err
       if (err instanceof AIProviderError && err.retryAfterMs) {
@@ -330,6 +404,36 @@ export async function agentCompleteJSON<T>(
             : `${ref.provider}/${ref.model}: ${String(err).slice(0, 100)}`
       errors.push(`[${kind}] ${msg}`)
       console.warn(`[agent:${role}] ✗ JSON ${ref.provider}/${ref.model} (${kind})`)
+
+      if (
+        executionPolicy &&
+        modelIndex < chain.length - 1 &&
+        (kind === 'rate_limit' || kind === 'server_error')
+      ) {
+        const requestedBackoff =
+          err instanceof AIProviderError && err.retryAfterMs !== undefined
+            ? err.retryAfterMs
+            : executionPolicy.maxFallbackBackoffMs
+        const backoff = Math.min(requestedBackoff, executionPolicy.maxFallbackBackoffMs)
+        const fallbackDeadlineAt = deadlineAt - reserveAfterModelMs
+        if (backoff > 0 && fallbackDeadlineAt - Date.now() >= backoff) {
+          safeExecutionDiagnostics.push({
+            kind: 'backoff',
+            stage: executionPolicy.stage,
+            provider: ref.provider,
+            model: ref.model,
+            ...(err instanceof AIProviderError && err.retryAfterMs !== undefined
+              ? { retryAfterMs: err.retryAfterMs }
+              : {}),
+            backoffMs: backoff,
+          })
+          await sleepWithDeadline(
+            backoff,
+            fallbackDeadlineAt,
+            `agentCompleteJSON:${executionPolicy.stage}:bounded-fallback-backoff`,
+          )
+        }
+      }
     }
   }
 

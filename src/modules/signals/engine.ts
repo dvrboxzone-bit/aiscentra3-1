@@ -20,6 +20,7 @@ import { agentCompleteJSON, AIStructuredOutputChainError } from '@/lib/ai/agent'
 import { AIProviderError } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { AITokenBudgetExceededError } from '@/lib/ai/budget-gate'
+import type { AIJSONExecutionPolicy } from '@/lib/ai/execution-policy'
 import { AIRequestTooLargeError } from '@/lib/ai/tpm-manager'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
@@ -295,6 +296,10 @@ export async function processObservation(
   sourceName: string,
   sourceType: string = '',
   deadlineAt: number,
+  executionPolicies?: {
+    classifier?: AIJSONExecutionPolicy
+    parser?: AIJSONExecutionPolicy
+  },
 ): Promise<SignalEngineResult> {
   const supabase = createAdminClient()
 
@@ -563,6 +568,7 @@ export async function processObservation(
       SISOutputSchema,
       { temperature: 0, maxTokens: SIS_STRUCTURED_OUTPUT_MAX_TOKENS },
       deadlineAt,
+      executionPolicies?.classifier,
     )
     sisResult = computeSIS(
       sisRaw as Parameters<typeof computeSIS>[0],
@@ -701,6 +707,7 @@ export async function processObservation(
       EnrichmentOutputSchema,
       { temperature: 0.2, maxTokens: 1024 },
       deadlineAt,
+      executionPolicies?.parser,
     )
   } catch (err) {
     if (err instanceof AIStructuredOutputChainError) {

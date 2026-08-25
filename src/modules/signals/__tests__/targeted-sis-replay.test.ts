@@ -2,6 +2,7 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 
 import { POST } from '@/app/api/internal/sis-replay/route'
 import type { ObservationRow } from '@/modules/observations/queries'
@@ -14,6 +15,11 @@ import {
   TARGETED_SIS_REPLAY_V1_KEY,
   TARGETED_SIS_REPLAY_V2_KEY,
   TARGETED_SIS_REPLAY_V2_MARKER_FIELD,
+  TARGETED_SIS_REPLAY_V3_CONTROL_ID,
+  TARGETED_SIS_REPLAY_V3_CONTROL_KEY,
+  TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD,
+  isTargetedReplayV3ControlEligible,
+  parseTargetedReplayV3ControlRequest,
   type TargetedReplayItemResult,
 } from '@/modules/signals/targeted-sis-replay'
 
@@ -113,6 +119,7 @@ describe('targeted SIS replay', () => {
       rejected: 0,
       retried: 0,
       failed: 0,
+      deadline_exceeded: 0,
       diagnostic_counts: {
         json_parse: 0,
         schema_validation: 0,
@@ -183,6 +190,70 @@ describe('targeted SIS replay', () => {
     assert.equal(summary.complete, true)
   })
 
+  test('v1/v2 history does not block v3 control, while its date-stamped marker does', () => {
+    const history = observation(TARGETED_SIS_REPLAY_V3_CONTROL_ID, {
+      targeted_sis_replay_key: TARGETED_SIS_REPLAY_V1_KEY,
+      [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+    })
+    assert.equal(isTargetedReplayV3ControlEligible(history, NOW), true)
+    assert.equal(
+      isTargetedReplayV3ControlEligible(
+        observation(TARGETED_SIS_REPLAY_V3_CONTROL_ID, {
+          ...history.metadata,
+          [TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD]: TARGETED_SIS_REPLAY_V3_CONTROL_KEY,
+        }),
+        NOW,
+      ),
+      false,
+    )
+  })
+
+  test('v3 parser accepts only one fixed control ID and no seven-ID cohort', () => {
+    assert.deepEqual(
+      parseTargetedReplayV3ControlRequest({
+        observationIds: [TARGETED_SIS_REPLAY_V3_CONTROL_ID],
+      }),
+      { ok: true, observationIds: [TARGETED_SIS_REPLAY_V3_CONTROL_ID] },
+    )
+    assert.equal(
+      parseTargetedReplayV3ControlRequest({
+        observationIds: TARGETED_SIS_REPLAY_ALLOWLIST.slice(0, 7),
+      }).ok,
+      false,
+    )
+  })
+
+  test('insufficient preclaim budget writes no campaign marker and does not mutate observation', async () => {
+    const row = observation(TARGETED_SIS_REPLAY_V3_CONTROL_ID, {
+      targeted_sis_replay_key: TARGETED_SIS_REPLAY_V1_KEY,
+      [TARGETED_SIS_REPLAY_V2_MARKER_FIELD]: TARGETED_SIS_REPLAY_V2_KEY,
+    })
+    const metadataBefore = structuredClone(row.metadata)
+    let claims = 0
+    let attempts = 0
+    const summary = await runTargetedSisReplay([row.id], NOW + 120_000, {
+      loadEligible: async () => [row],
+      isEligible: isTargetedReplayV3ControlEligible,
+      canStart: async () => false,
+      claim: async () => {
+        claims++
+        return row
+      },
+      processOne: async () => {
+        attempts++
+        return { disposition: 'valid' }
+      },
+      now: () => NOW,
+    })
+
+    assert.equal(summary.eligible, 1)
+    assert.equal(summary.attempted, 0)
+    assert.equal(summary.complete, false)
+    assert.equal(claims, 0)
+    assert.equal(attempts, 0)
+    assert.deepEqual(row.metadata, metadataBefore)
+  })
+
   test('SIS structured output alone uses the evidence-backed 1024-token cap', () => {
     const engineSource = readFileSync(resolve('src/modules/signals/engine.ts'), 'utf8')
 
@@ -239,6 +310,73 @@ describe('targeted SIS replay', () => {
       output_truncated: 1,
       invalid_response_envelope: 1,
     })
+  })
+
+  test('deadline retry is counted separately without hiding prior model-contract defects', async () => {
+    const id = TARGETED_SIS_REPLAY_V3_CONTROL_ID
+    const summary = await runTargetedSisReplay([id], NOW + 120_000, {
+      loadEligible: async () => [observation(id)],
+      claim: async (row) => row,
+      processOne: async () => ({
+        disposition: 'retried',
+        diagnostics: ['invalid_response_envelope'],
+        deadlineExceeded: true,
+      }),
+      now: () => NOW,
+    })
+    assert.equal(summary.retried, 1)
+    assert.equal(summary.deadline_exceeded, 1)
+    assert.equal(summary.diagnostic_counts.invalid_response_envelope, 1)
+  })
+})
+
+describe('targeted SIS replay v3 control workflow contract', () => {
+  const workflowPath = '.github/workflows/targeted-sis-replay-v3-control.yml'
+  const workflow = (): string => readFileSync(workflowPath, 'utf8')
+
+  test('is syntactically valid YAML', () => {
+    const parsed = parseYaml(workflow()) as Record<string, unknown>
+    assert.equal(typeof parsed['on'], 'object')
+    assert.equal(typeof parsed['jobs'], 'object')
+  })
+
+  test('is one manual production control with no inputs, loops, cohort, batch or cron', () => {
+    const source = workflow()
+    const triggerBlock = /^on:\r?\n([\s\S]*?)^permissions:/m.exec(source)?.[1] ?? ''
+    assert.match(triggerBlock, /^ {2}workflow_dispatch:\s*$/m)
+    assert.doesNotMatch(triggerBlock, /inputs:|schedule:|push:|pull_request:/)
+    assert.equal((source.match(/^ {4}environment:\s*production\s*$/gm) ?? []).length, 1)
+    assert.equal((source.match(/\bcurl\b/g) ?? []).length, 1)
+    assert.doesNotMatch(source, /for\s+|while\s+|\/api\/enrich\/batch|\/api\/cron\//)
+    assert.match(source, /--retry 0/)
+    assert.match(source, /group:\s*enrich-batch/)
+  })
+
+  test('uses the 20260825 v3 marker and sends only the fixed control ID', () => {
+    const source = workflow()
+    assert.match(source, new RegExp(TARGETED_SIS_REPLAY_V3_CONTROL_KEY))
+    const bodyMatch = /--data-binary '([^']+)'/.exec(source)
+    assert.ok(bodyMatch)
+    assert.deepEqual(JSON.parse(bodyMatch[1] ?? ''), {
+      observationIds: [TARGETED_SIS_REPLAY_V3_CONTROL_ID],
+    })
+    for (const id of TARGETED_SIS_REPLAY_ALLOWLIST.slice(1))
+      assert.doesNotMatch(source, new RegExp(id))
+  })
+
+  test('fails unless the exact one-control success contract is satisfied', () => {
+    const source = workflow()
+    assert.match(source, /"\$initial_eligible" -ne 1/)
+    assert.match(source, /"\$attempted" -ne 1/)
+    assert.match(source, /resolved="\$\(jq -r '\.valid \+ \.rejected'/)
+    assert.match(source, /"\$resolved" -ne 1/)
+    assert.match(source, /"\$retried" -ne 0/)
+    assert.match(source, /"\$failed" -ne 0/)
+    assert.match(source, /"\$deadline_exceeded" -ne 0/)
+    assert.match(source, /"\$final_eligible" -ne 0/)
+    assert.match(source, /"\$complete" != "true"/)
+    assert.match(source, /invalid_response_envelope/)
+    assert.doesNotMatch(source, /raw[_ -]?(prompt|response|content)/i)
   })
 })
 

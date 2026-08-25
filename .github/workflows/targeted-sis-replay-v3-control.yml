@@ -1,0 +1,91 @@
+name: Targeted SIS Replay v3 (single control)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enrich-batch
+  cancel-in-progress: false
+
+jobs:
+  v3-control:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 3
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: Run exactly one allowlisted v3 control
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          response_file="$(mktemp)"
+          cleanup() { rm -f "$response_file"; }
+          trap cleanup EXIT
+
+          HTTP_STATUS="$(curl --silent --show-error --retry 0 --max-time 65 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST 'https://aiscentra.com/api/internal/sis-replay' \
+            --header "x-cron-secret: ${CRON_SECRET}" \
+            --header 'x-sis-replay-campaign: targeted_sis_replay_20260825_v3_control' \
+            --header 'content-type: application/json' \
+            --data-binary '{"observationIds":["e4275483-39e4-4441-84a2-0a1df546cf07"]}')"
+
+          echo "HTTP status: ${HTTP_STATUS}"
+
+          jq -e '
+            [.requested, .initial_eligible, .attempted, .valid, .rejected,
+             .retried, .failed, .deadline_exceeded, .final_eligible,
+             .diagnostic_counts.json_parse,
+             .diagnostic_counts.schema_validation,
+             .diagnostic_counts.output_truncated,
+             .diagnostic_counts.invalid_response_envelope]
+            | all(type == "number" and . >= 0 and floor == .)
+          ' "$response_file" >/dev/null
+          jq -e '.complete | type == "boolean"' "$response_file" >/dev/null
+
+          summary="$(jq -c '{
+            requested,
+            initial_eligible,
+            attempted,
+            valid,
+            rejected,
+            retried,
+            failed,
+            deadline_exceeded,
+            diagnostic_counts: {
+              json_parse: .diagnostic_counts.json_parse,
+              schema_validation: .diagnostic_counts.schema_validation,
+              output_truncated: .diagnostic_counts.output_truncated,
+              invalid_response_envelope: .diagnostic_counts.invalid_response_envelope
+            },
+            final_eligible,
+            complete
+          }' "$response_file")"
+          echo "Summary: ${summary}"
+
+          initial_eligible="$(jq -r '.initial_eligible' "$response_file")"
+          attempted="$(jq -r '.attempted' "$response_file")"
+          resolved="$(jq -r '.valid + .rejected' "$response_file")"
+          retried="$(jq -r '.retried' "$response_file")"
+          failed="$(jq -r '.failed' "$response_file")"
+          deadline_exceeded="$(jq -r '.deadline_exceeded' "$response_file")"
+          final_eligible="$(jq -r '.final_eligible' "$response_file")"
+          complete="$(jq -r '.complete' "$response_file")"
+
+          if [[ "$HTTP_STATUS" != "200" ||
+                "$initial_eligible" -ne 1 ||
+                "$attempted" -ne 1 ||
+                "$resolved" -ne 1 ||
+                "$retried" -ne 0 ||
+                "$failed" -ne 0 ||
+                "$deadline_exceeded" -ne 0 ||
+                "$final_eligible" -ne 0 ||
+                "$complete" != "true" ]]; then
+            exit 1
+          fi

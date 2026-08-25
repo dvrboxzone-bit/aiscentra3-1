@@ -18,6 +18,10 @@ export const TARGETED_SIS_REPLAY_V1_KEY = 'targeted_sis_replay_20260823_v1'
 export const TARGETED_SIS_REPLAY_V2_KEY = 'targeted_sis_replay_20260825_v2'
 export const TARGETED_SIS_REPLAY_V2_MARKER_FIELD = 'targeted_sis_replay_v2_key'
 export const TARGETED_SIS_REPLAY_V2_AUDIT_FIELD = 'targeted_sis_replay_v2_audit'
+export const TARGETED_SIS_REPLAY_V3_CONTROL_ID = TARGETED_SIS_REPLAY_ALLOWLIST[0]
+export const TARGETED_SIS_REPLAY_V3_CONTROL_KEY = 'targeted_sis_replay_20260825_v3_control'
+export const TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD = 'targeted_sis_replay_v3_control_key'
+export const TARGETED_SIS_REPLAY_V3_CONTROL_AUDIT_FIELD = 'targeted_sis_replay_v3_control_audit'
 
 export type StructuredFailureType = StructuredOutputFailureType
 export type TargetedReplayDisposition = 'valid' | 'rejected' | 'retried' | 'failed'
@@ -25,6 +29,8 @@ export type TargetedReplayDisposition = 'valid' | 'rejected' | 'retried' | 'fail
 export interface TargetedReplayItemResult {
   disposition: TargetedReplayDisposition
   diagnostic?: StructuredFailureType
+  diagnostics?: readonly StructuredFailureType[]
+  deadlineExceeded?: boolean
 }
 
 export interface TargetedReplaySummary {
@@ -35,6 +41,7 @@ export interface TargetedReplaySummary {
   rejected: number
   retried: number
   failed: number
+  deadline_exceeded: number
   diagnostic_counts: Record<StructuredFailureType, number>
   complete: boolean
 }
@@ -43,6 +50,8 @@ export interface TargetedReplayDeps {
   loadEligible: (ids: readonly string[]) => Promise<ObservationRow[]>
   claim: (observation: ObservationRow) => Promise<ObservationRow | null>
   processOne: (observation: ObservationRow, deadlineAt: number) => Promise<TargetedReplayItemResult>
+  canStart?: (observation: ObservationRow, deadlineAt: number) => Promise<boolean>
+  isEligible?: (observation: ObservationRow, nowMs: number) => boolean
   now?: () => number
 }
 
@@ -85,6 +94,20 @@ export function parseTargetedReplayRequest(
   return { ok: true, observationIds: normalized }
 }
 
+export function parseTargetedReplayV3ControlRequest(
+  body: unknown,
+): { ok: true; observationIds: [string] } | { ok: false; error: string } {
+  const parsed = parseTargetedReplayRequest(body)
+  if (!parsed.ok) return parsed
+  if (
+    parsed.observationIds.length !== 1 ||
+    parsed.observationIds[0] !== TARGETED_SIS_REPLAY_V3_CONTROL_ID
+  ) {
+    return { ok: false, error: 'V3 control accepts only its single server-side control ID' }
+  }
+  return { ok: true, observationIds: [TARGETED_SIS_REPLAY_V3_CONTROL_ID] }
+}
+
 export function isTargetedReplayEligible(observation: ObservationRow, nowMs = Date.now()): boolean {
   if (!ALLOWED_IDS.has(observation.id)) return false
   if (observation.processed) return false
@@ -107,6 +130,29 @@ export function isTargetedReplayEligible(observation: ObservationRow, nowMs = Da
   return true
 }
 
+export function isTargetedReplayV3ControlEligible(
+  observation: ObservationRow,
+  nowMs = Date.now(),
+): boolean {
+  if (observation.id !== TARGETED_SIS_REPLAY_V3_CONTROL_ID) return false
+  if (observation.processed) return false
+  if (observation.processing_error !== null) return false
+  if (observation.signal_id !== null) return false
+  if (observation.rejection_code !== null) return false
+  const metadata = observation.metadata ?? {}
+  if (metadata['repair_key'] !== TARGETED_SIS_REPAIR_KEY) return false
+  // v1/v2 are immutable audit history. Only the date-stamped v3 control
+  // marker gates this new, separately authorized checkpoint.
+  if (metadata[TARGETED_SIS_REPLAY_V3_CONTROL_MARKER_FIELD] !== undefined) return false
+  const retryAfter = metadata['retry_after']
+  if (retryAfter !== undefined) {
+    if (typeof retryAfter !== 'string') return false
+    const retryAfterMs = Date.parse(retryAfter)
+    if (!Number.isFinite(retryAfterMs) || retryAfterMs > nowMs) return false
+  }
+  return true
+}
+
 function freshSummary(requested: number): TargetedReplaySummary {
   return {
     requested,
@@ -116,6 +162,7 @@ function freshSummary(requested: number): TargetedReplaySummary {
     rejected: 0,
     retried: 0,
     failed: 0,
+    deadline_exceeded: 0,
     diagnostic_counts: {
       json_parse: 0,
       schema_validation: 0,
@@ -138,12 +185,13 @@ export async function runTargetedSisReplay(
   const summary = freshSummary(observationIds.length)
   const requestedOrder = new Map(observationIds.map((id, index) => [id, index]))
   const now = deps.now ?? Date.now
+  const isEligible = deps.isEligible ?? isTargetedReplayEligible
   const loaded = await deps.loadEligible(observationIds)
   const seenEligible = new Set<string>()
   const eligible = loaded
     .filter((row) => {
       if (seenEligible.has(row.id)) return false
-      if (!requestedOrder.has(row.id) || !isTargetedReplayEligible(row, now())) return false
+      if (!requestedOrder.has(row.id) || !isEligible(row, now())) return false
       seenEligible.add(row.id)
       return true
     })
@@ -161,6 +209,11 @@ export async function runTargetedSisReplay(
       break
     }
 
+    if (deps.canStart && !(await deps.canStart(observation, deadlineAt))) {
+      summary.complete = false
+      break
+    }
+
     const claimed = await deps.claim(observation)
     if (!claimed) {
       summary.complete = false
@@ -171,7 +224,10 @@ export async function runTargetedSisReplay(
     try {
       const result = await deps.processOne(claimed, deadlineAt)
       summary[result.disposition]++
-      if (result.diagnostic) summary.diagnostic_counts[result.diagnostic]++
+      const diagnostics = new Set(result.diagnostics ?? [])
+      if (result.diagnostic) diagnostics.add(result.diagnostic)
+      for (const diagnostic of diagnostics) summary.diagnostic_counts[diagnostic]++
+      if (result.deadlineExceeded) summary.deadline_exceeded++
     } catch {
       summary.failed++
     }

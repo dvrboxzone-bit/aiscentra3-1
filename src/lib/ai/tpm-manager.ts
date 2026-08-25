@@ -215,7 +215,14 @@ export async function waitForTPMBudget(
     const check = checkTPMBudget(model, estimatedTokens)
     if (check.allowed) return
 
-    ensureTimeLeft(deadlineAt, check.waitMs, `waitForTPMBudget:${model}`)
+    ensureTimeLeft(deadlineAt, check.waitMs, `waitForTPMBudget:${model}`, {
+      kind: 'tpm_wait',
+      stage: 'tpm_wait',
+      model,
+      tpmWaitMs: check.waitMs,
+      tpmUsedTokens: check.usedTokens,
+      tpmLimitTokens: check.limitTokens,
+    })
 
     if (Date.now() - start > maxWaitMs) {
       console.warn(`[tpm-manager] Max wait exceeded for ${model}, proceeding anyway`)

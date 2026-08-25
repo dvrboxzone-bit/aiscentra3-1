@@ -56,15 +56,30 @@
  * own time-budget enforcement, and callers must be able to tell the
  * two apart without inspecting statusCode.
  */
+import type { SafeAIExecutionDiagnostic } from './execution-diagnostics'
+
 export class AIDeadlineExceededError extends Error {
   constructor(
     message: string,
     public readonly context: string,
     public readonly deadlineAt: number,
     public readonly now: number = Date.now(),
+    public readonly diagnostics: SafeAIExecutionDiagnostic[] = [],
   ) {
     super(message)
     this.name = 'AI_DEADLINE_EXCEEDED'
+  }
+
+  attachDiagnostics(diagnostics: readonly SafeAIExecutionDiagnostic[]): this {
+    const seen = new Set(this.diagnostics.map((diagnostic) => JSON.stringify(diagnostic)))
+    for (const diagnostic of diagnostics) {
+      const key = JSON.stringify(diagnostic)
+      if (!seen.has(key)) {
+        this.diagnostics.push(diagnostic)
+        seen.add(key)
+      }
+    }
+    return this
   }
 }
 
@@ -76,13 +91,20 @@ export class AIDeadlineExceededError extends Error {
  * diagnosability (this project has already paid the cost of opaque
  * "something timed out somewhere" failures once; not repeating that).
  */
-export function ensureTimeLeft(deadlineAt: number, minMs: number, context: string): void {
+export function ensureTimeLeft(
+  deadlineAt: number,
+  minMs: number,
+  context: string,
+  diagnostic?: Omit<SafeAIExecutionDiagnostic, 'remainingMs' | 'requiredMs'>,
+): void {
   const remaining = deadlineAt - Date.now()
   if (remaining < minMs) {
     throw new AIDeadlineExceededError(
       `[deadline] ${context}: ${remaining}ms remaining, needed >=${minMs}ms`,
       context,
       deadlineAt,
+      Date.now(),
+      diagnostic ? [{ ...diagnostic, remainingMs: remaining, requiredMs: minMs }] : [],
     )
   }
 }
