@@ -640,7 +640,17 @@ $PG -v ON_ERROR_STOP=1 -f "$METRICS_REJECTED_RETRIED_MIGRATION" >/dev/null
 
 echo ""
 echo "TEST 18 — verify-urls backfill: real deterministic pagination, priority, resumability, idempotent re-run"
-$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+reset_signal_observation_fixtures() {
+  $PG -c "TRUNCATE
+    public.sis_provider_budget_reservations,
+    public.sis_execution_attempts,
+    public.sis_execution_finalizations,
+    public.sis_execution_runs,
+    public.signals,
+    public.observations;" >/dev/null
+}
+
+reset_signal_observation_fixtures
 
 # Real fixture: 12 observations. 5 linked to an ACTIVE signal (must
 # drain FIRST, priority pass), 7 unlinked/other (drained second).
@@ -702,7 +712,7 @@ check "after full backfill, the pending-rows query is genuinely exhausted (idemp
   "$($PG -c "SELECT count(*) FROM public.observations WHERE url_verified_ok IS NULL;")"
 
 $PG -c "DROP TABLE IF EXISTS public.seen_ids;" >/dev/null
-$PG -c "TRUNCATE public.signals, public.observations;" >/dev/null
+reset_signal_observation_fixtures
 
 echo ""
 echo "  -- honest metrics contract: pipeline_metrics column comments genuinely state the real, enforced invariant (independent review) --"
