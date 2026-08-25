@@ -1,6 +1,16 @@
 'use client'
 
+import { useEffect } from 'react'
+import * as Sentry from '@sentry/nextjs'
+
 import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
+
+function SentryErrorCapture({ error }: { error: Error }): null {
+  useEffect(() => {
+    Sentry.captureException(error)
+  }, [error])
+  return null
+}
 
 /**
  * AIscentra — vfinal global error boundary (Frontend Design
@@ -10,6 +20,7 @@ import { VfinalPublicShell } from '@/components/layout/vfinal-public-shell'
  * every real page.
  */
 export default function GlobalError({
+  error,
   reset,
 }: {
   error: Error & { digest?: string }
@@ -17,6 +28,7 @@ export default function GlobalError({
 }): React.JSX.Element {
   return (
     <VfinalPublicShell>
+      <SentryErrorCapture error={error} />
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
         <span className="font-caption mb-2 text-silver-haze">OBSERVATORY ERROR</span>
         <h1 className="font-heading mb-4 text-3xl text-frost">Signal processing interrupted</h1>

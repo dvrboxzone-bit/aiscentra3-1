@@ -328,6 +328,33 @@
       "hasCallerFacingRateLimit": false
     },
     {
+      "path": "/api/internal/sentry-test",
+      "file": "src/app/api/internal/sentry-test/route.ts",
+      "methods": ["POST"],
+      "category": "internal-machine",
+      "guard": "preview-only VERCEL_ENV gate plus centralized isAuthorizedCronRequest (cron-guard.ts, crypto.timingSafeEqual)",
+      "authMechanism": "shared-secret-constant-time",
+      "authzMechanism": "fixed Preview-only technical event with no caller-controlled payload",
+      "featureFlag": "NEXT_PUBLIC_SENTRY_DSN (optional; missing DSN disables capture)",
+      "inputValidation": "rejects query parameters and any non-empty request body",
+      "aiCall": false,
+      "serviceRole": false,
+      "databaseRead": false,
+      "databaseWrite": false,
+      "externalNetworkCall": true,
+      "costSensitive": false,
+      "rateLimit": "Preview-only, shared-secret guarded, and accepts no caller-controlled event payload",
+      "budgetGuard": "not applicable -- one fixed technical error capture only; no AI/provider workload",
+      "publicResponseDto": "fixed sent/disabled/flush status only; no event data or raw errors",
+      "rawErrorExposureRisk": "none -- response contains fixed status values only",
+      "productionState": "returns 404 outside Vercel Preview; Sentry is disabled when DSN is absent",
+      "risk": "P3",
+      "notes": "Controlled transport verification endpoint. It emits one fixed technical marker without user, Signal, Observation, prompt, model-output, or reasoning data.",
+      "aiCallMode": "none",
+      "weakSharedSecret": false,
+      "hasCallerFacingRateLimit": false
+    },
+    {
       "path": "/api/internal/sis-durable-control/start",
       "file": "src/app/api/internal/sis-durable-control/start/route.ts",
       "methods": ["POST"],
@@ -545,13 +572,13 @@
     }
   ],
   "summary": {
-    "totalRoutes": 20,
+    "totalRoutes": 21,
     "categoryCounts": {
       "public-read": 3,
       "authenticated-user": 0,
       "admin": 1,
       "cron": 12,
-      "internal-machine": 4,
+      "internal-machine": 5,
       "disabled": 0
     },
     "directAiRoutes": 9,
@@ -560,17 +587,17 @@
     "databaseReadRoutes": 18,
     "databaseWriteRoutes": 11,
     "rateLimitMissingLiteralCount": 15,
-    "routesWithoutRealCallerFacingRateLimit": 20,
+    "routesWithoutRealCallerFacingRateLimit": 21,
     "budgetGuardMissingLiteralCount": 15,
     "costSensitiveRoutes": 14,
-    "externalNetworkRoutes": 18,
+    "externalNetworkRoutes": 19,
     "weakSharedSecretRoutes": 11,
     "confirmedRawErrorRoutes": 5,
     "riskCounts": {
       "P0": 0,
       "P1": 16,
       "P2": 2,
-      "P3": 2
+      "P3": 3
     }
   }
 }
