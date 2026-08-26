@@ -1,6 +1,13 @@
 import type { NextConfig } from 'next'
+import { withSentryConfig } from '@sentry/nextjs'
 
 const config: NextConfig = {
+  env: {
+    NEXT_PUBLIC_SENTRY_RELEASE:
+      process.env['VERCEL_GIT_COMMIT_SHA'] ?? process.env['GITHUB_SHA'] ?? '',
+    NEXT_PUBLIC_SENTRY_ENVIRONMENT:
+      process.env['VERCEL_ENV'] ?? process.env['NODE_ENV'] ?? 'development',
+  },
   async headers() {
     return [
       {
@@ -17,4 +24,16 @@ const config: NextConfig = {
   images: { remotePatterns: [] },
 }
 
-export default config
+export default withSentryConfig(config, {
+  org: 'aiscentra',
+  project: 'javascript-nextjs',
+  silent: true,
+  telemetry: false,
+  sourcemaps: { disable: true },
+  bundleSizeOptimizations: {
+    excludeDebugStatements: true,
+    excludeTracing: true,
+    excludeReplayIframe: true,
+    excludeReplayShadowDom: true,
+  },
+})
