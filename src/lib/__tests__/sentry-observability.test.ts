@@ -241,11 +241,22 @@ describe('controlled Preview event', () => {
     assert.match(workflow, /\$\{PREVIEW_URL\}\/api\/internal\/sentry-test/)
     assert.match(workflow, /--request POST/)
     assert.match(workflow, /--retry 0/)
+    assert.match(
+      workflow,
+      /SENTRY_PREVIEW_VERCEL_BYPASS_SECRET:\s*\$\{\{ secrets\.SENTRY_PREVIEW_VERCEL_BYPASS_SECRET \}\}/,
+    )
+    assert.match(workflow, /-z "\$\{SENTRY_PREVIEW_VERCEL_BYPASS_SECRET:-\}".*exit 1/s)
+    assert.match(
+      workflow,
+      /--header "x-vercel-protection-bypass: \$\{SENTRY_PREVIEW_VERCEL_BYPASS_SECRET\}"/,
+    )
     assert.match(workflow, /http_status.*!=.*202/)
     assert.match(workflow, /keys == \["sent"\] and \.sent == true/)
     assert.doesNotMatch(workflow, /--data(?:-binary)?\b/)
     assert.doesNotMatch(workflow, /curl[^\n]*(?:aiscentra\.com|www\.aiscentra\.com)/)
     assert.equal(workflow.match(/--request POST/g)?.length, 1)
     assert.equal(workflow.match(/secrets\.CRON_SECRET/g)?.length, 1)
+    assert.equal(workflow.match(/secrets\.SENTRY_PREVIEW_VERCEL_BYPASS_SECRET/g)?.length, 1)
+    assert.doesNotMatch(workflow, /echo[^\n]*\$\{SENTRY_PREVIEW_VERCEL_BYPASS_SECRET\}|set\s+-x/)
   })
 })

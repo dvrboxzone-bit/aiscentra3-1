@@ -98,12 +98,18 @@ jobs:
       - name: POST exactly one fixed controlled event with no caller input
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SENTRY_PREVIEW_VERCEL_BYPASS_SECRET: ${{ secrets.SENTRY_PREVIEW_VERCEL_BYPASS_SECRET }}
         shell: bash
         run: |
           set -Eeuo pipefail
 
           if [[ -z "${CRON_SECRET:-}" ]]; then
             echo "::error::CRON_SECRET GitHub secret is not configured"
+            exit 1
+          fi
+
+          if [[ -z "${SENTRY_PREVIEW_VERCEL_BYPASS_SECRET:-}" ]]; then
+            echo "::error::SENTRY_PREVIEW_VERCEL_BYPASS_SECRET GitHub secret is not configured"
             exit 1
           fi
 
@@ -116,6 +122,7 @@ jobs:
             --write-out '%{http_code}' \
             --request POST \
             --header "Authorization: Bearer ${CRON_SECRET}" \
+            --header "x-vercel-protection-bypass: ${SENTRY_PREVIEW_VERCEL_BYPASS_SECRET}" \
             "${PREVIEW_URL}/api/internal/sentry-test")"
 
           echo "Controlled endpoint HTTP status: ${http_status}"
