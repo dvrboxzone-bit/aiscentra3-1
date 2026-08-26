@@ -177,7 +177,7 @@ describe('controlled Preview event', () => {
         captured.push(error)
         return 'event-id'
       },
-      flush: async (timeout) => timeout === 2_000,
+      flush: async (timeout) => timeout === 10_000,
     })
     assert.equal(outcome, 'sent')
     assert.equal(captured.length, 1)

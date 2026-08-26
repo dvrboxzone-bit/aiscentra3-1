@@ -27,5 +27,5 @@ export async function captureControlledSentryTestEvent(
 ): Promise<'sent' | 'disabled' | 'flush_failed'> {
   if (!deps.enabled()) return 'disabled'
   deps.captureException(new ControlledSentryTestError())
-  return (await deps.flush(2_000)) ? 'sent' : 'flush_failed'
+  return (await deps.flush(10_000)) ? 'sent' : 'flush_failed'
 }
