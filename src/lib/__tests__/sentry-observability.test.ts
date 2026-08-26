@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, test } from 'node:test'
 
 import type { ErrorEvent, EventHint } from '@sentry/nextjs'
@@ -215,5 +216,27 @@ describe('controlled Preview event', () => {
       { ...deps, environment: () => 'production' },
     )
     assert.equal(production.status, 404)
+  })
+
+  test('manual workflow is fixed to one exact Preview-only controlled POST', () => {
+    const workflow = readFileSync('.github/workflows/sentry-preview-control.yml', 'utf8')
+
+    assert.match(workflow, /workflow_dispatch:/)
+    assert.match(workflow, /ACTOR_NAME.*github\.actor/)
+    assert.match(workflow, /OWNER_NAME.*github\.repository_owner/)
+    assert.match(workflow, /WORKFLOW_SHA.*github\.sha/)
+    assert.match(workflow, /COMMIT_SHA.*WORKFLOW_SHA/)
+    assert.match(
+      workflow,
+      /\^https:\/\/aiscentra3-1-\[a-z0-9\]\+-welvers-projects\\\.vercel\\\.app\$/,
+    )
+    assert.match(workflow, /\$\{INPUT_PREVIEW_URL\}\/api\/internal\/sentry-test/)
+    assert.match(workflow, /--request POST/)
+    assert.match(workflow, /--retry 0/)
+    assert.match(workflow, /http_status.*!=.*202/)
+    assert.match(workflow, /keys == \["sent"\] and \.sent == true/)
+    assert.doesNotMatch(workflow, /--data(?:-binary)?\b/)
+    assert.doesNotMatch(workflow, /curl[^\n]*(?:aiscentra\.com|www\.aiscentra\.com)/)
+    assert.equal(workflow.match(/curl --silent/g)?.length, 1)
   })
 })
