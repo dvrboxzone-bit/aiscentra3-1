@@ -569,12 +569,39 @@
       "aiCallMode": "none",
       "weakSharedSecret": false,
       "hasCallerFacingRateLimit": false
+    },
+    {
+      "path": "/api/subscribe",
+      "file": "src/app/api/subscribe/route.ts",
+      "methods": ["POST"],
+      "category": "public-read",
+      "guard": "none -- public subscribe form, intentionally open to any visitor",
+      "authMechanism": "none",
+      "authzMechanism": "none",
+      "featureFlag": "none",
+      "inputValidation": "strict Zod schema (email/signals/forecasts/projectNews booleans) before any network call",
+      "aiCall": false,
+      "serviceRole": false,
+      "databaseRead": false,
+      "databaseWrite": false,
+      "externalNetworkCall": true,
+      "costSensitive": false,
+      "rateLimit": "missing",
+      "budgetGuard": "n/a -- Resend's own account-level contact/API limits are the only real ceiling; no app-level rate limit implemented yet",
+      "publicResponseDto": "{ ok: true } on success, { error: string } on failure -- no internal state, no stack traces returned to the caller",
+      "rawErrorExposureRisk": "no -- catch blocks return a fixed, generic user-facing message; the real error/response body is only logged server-side via console.error, never returned to the caller",
+      "productionState": "enabled, public, no restriction",
+      "risk": "P3",
+      "notes": "Creates/updates a real Resend Contact via the official Contacts API, opting the contact into whichever of the 3 real Resend Topics (Signals/Forecasts/Project News) were checked. Topic IDs read from env vars (RESEND_TOPIC_SIGNALS_ID etc.) -- a topic is silently omitted from the request if its own env var is unset, an honest partial-rollout state. Same real Cloudflare Turnstile server-side re-verification pattern already used by /api/contact.",
+      "aiCallMode": "none",
+      "weakSharedSecret": false,
+      "hasCallerFacingRateLimit": false
     }
   ],
   "summary": {
-    "totalRoutes": 21,
+    "totalRoutes": 22,
     "categoryCounts": {
-      "public-read": 3,
+      "public-read": 4,
       "authenticated-user": 0,
       "admin": 1,
       "cron": 12,
@@ -586,18 +613,18 @@
     "serviceRoleRoutes": 16,
     "databaseReadRoutes": 18,
     "databaseWriteRoutes": 11,
-    "rateLimitMissingLiteralCount": 15,
-    "routesWithoutRealCallerFacingRateLimit": 21,
+    "rateLimitMissingLiteralCount": 16,
+    "routesWithoutRealCallerFacingRateLimit": 22,
     "budgetGuardMissingLiteralCount": 15,
     "costSensitiveRoutes": 14,
-    "externalNetworkRoutes": 19,
+    "externalNetworkRoutes": 20,
     "weakSharedSecretRoutes": 11,
     "confirmedRawErrorRoutes": 5,
     "riskCounts": {
       "P0": 0,
       "P1": 16,
       "P2": 2,
-      "P3": 3
+      "P3": 4
     }
   }
 }
