@@ -19,6 +19,10 @@
  * `topics` array rather than failing the whole request -- an honest
  * partial-rollout state, not a silent full failure.
  *
+ * Also adds the contact to the real "All Subscribers" Segment
+ * (RESEND_SEGMENT_ALL_SUBSCRIBERS_ID) -- Resend's Broadcast API
+ * requires a segment_id, Topics alone only filter within one.
+ *
  * Cloudflare Turnstile: identical real trust-boundary pattern already
  * established in /api/contact -- re-verified server-side via
  * Cloudflare's own siteverify API before any Resend call is made.
@@ -144,6 +148,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json(
         { error: 'The subscription could not be saved. Please try again later.' },
         { status: 502 },
+      )
+    }
+
+    // REAL BUG FIXED (found via direct research of Resend's own
+    // Broadcast API docs, before writing the send logic): Resend's
+    // Broadcasts API requires a `segment_id` (required parameter) --
+    // `topic_id` alone only further FILTERS within a segment, it does
+    // not replace one. Contacts created via the Contacts API are NOT
+    // automatically placed in any segment. Without this second real
+    // call, a subscriber would never actually receive a Broadcast no
+    // matter which Topics they opted into.
+    const segmentId = process.env['RESEND_SEGMENT_ALL_SUBSCRIBERS_ID']
+    if (segmentId) {
+      const segmentResponse = await fetch(
+        `https://api.resend.com/contacts/${encodeURIComponent(email)}/segments/${segmentId}`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+        },
+      )
+      if (!segmentResponse.ok) {
+        const detail = await segmentResponse.text()
+        console.error(
+          '[api/subscribe] Failed to add contact to segment:',
+          segmentResponse.status,
+          detail,
+        )
+        // Not a hard failure: the Contact and its Topic preferences
+        // were already saved successfully above. Being outside the
+        // Segment only means the next digest send won't reach them
+        // yet -- logged for investigation, not surfaced as an error
+        // to the person who just subscribed.
+      }
+    } else {
+      console.error(
+        '[api/subscribe] RESEND_SEGMENT_ALL_SUBSCRIBERS_ID is not set -- contact saved but not added to any segment',
       )
     }
 
