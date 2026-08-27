@@ -190,17 +190,28 @@ describe('VfinalStrategicMemoryCanvas — real stop/restart, not merely skipped 
     )
   })
 
-  test('uses the approved enlarged timeline and node-label fonts', () => {
+  test('uses the approved enlarged timeline font; node labels are real DOM elements, not canvas text (independent-review upgrade, 2026-08-26)', () => {
     const originalNow = Date.now
     let nowCalls = 0
     Date.now = () => (nowCalls++ === 0 ? 0 : 1000)
+    let container: HTMLElement
     try {
-      render(React.createElement(VfinalStrategicMemoryCanvas))
+      container = render(React.createElement(VfinalStrategicMemoryCanvas)).container
     } finally {
       Date.now = originalNow
     }
     assert.ok(recordedFonts.includes('24px JetBrains Mono'))
-    assert.ok(recordedFonts.includes('20px JetBrains Mono'))
+    // REAL ARCHITECTURE CHANGE: node labels moved out of ctx.fillText
+    // into real, hoverable, bordered DOM elements (see the component's
+    // own updated docstring) -- the old 20px node-label canvas font is
+    // genuinely no longer drawn at all, not merely renamed.
+    assert.equal(
+      recordedFonts.includes('20px JetBrains Mono'),
+      false,
+      'node labels no longer render as canvas text at all',
+    )
+    const labels = container.querySelectorAll('.memory-label')
+    assert.equal(labels.length, 11, 'all 11 real nodes must have a real DOM label element')
   })
 
   test('unmount fully disconnects the IntersectionObserver (real cleanup, not a leaked observer)', () => {
