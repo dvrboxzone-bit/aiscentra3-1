@@ -41,16 +41,9 @@ export const revalidate = 3600
  * - Hero Density Scan is a filtration metaphor, not an operational metric. Its
  *   signal count remains explicitly unavailable until a suitable live
  *   source is approved.
- * - Strategic Memory "KNOWLEDGE GRAPH — NODE COUNT UNAVAILABLE": no real
- *   Knowledge Graph node-count query exists in this codebase yet --
- *   shows UNAVAILABLE rather than the HTML's own fabricated "4,716".
- *   Expanded into a bordered status box (independent-review layout
- *   fix, 2026-08-27) matching the same real pattern already used by
- *   the Forecasts section's own "IN DEVELOPMENT" box -- the text
- *   column's real content weight needed to grow to match the
- *   Strategic Memory canvas's own increased height (450px -> 675px,
- *   a separate, earlier explicit owner instruction), not merely
- *   restyled for its own sake.
+ * - Strategic Memory "NODES SYNCED": no real Knowledge Graph node-count
+ *   query exists in this codebase yet -- shows UNAVAILABLE rather than
+ *   the HTML's own fabricated "4,716".
  * - Observations: 2 real signals, taken from the pool but excluded
  *   from the Featured six, linking to their real /signals/[id] page.
  * - Forecasts: the HTML's own text is ALREADY an honest "IN
@@ -263,21 +256,11 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                 Events, entities, and facts are linked over time, creating an evolving memory that
                 grows more valuable every year.
               </p>
-              <div
-                className="mb-8 border border-border-subtle bg-surface-tonal p-6"
-                data-field="knowledge-graph-status"
-              >
-                <div className="mb-2 flex items-center gap-3">
-                  <div className="h-2 w-2 rounded-full bg-mint-signal" />
-                  <span className="font-caption block text-silver-haze">
-                    KNOWLEDGE GRAPH — NODE COUNT UNAVAILABLE
-                  </span>
-                </div>
-                <p className="text-sm text-silver-haze">
-                  The animation traces how a Source, Signal, Event, Entity and Fact link together
-                  and later get re-verified. Live node and edge counts will appear here once the
-                  underlying graph query is connected.
-                </p>
+              <div className="mt-8 flex items-center gap-4">
+                <div className="h-2 w-2 rounded-full bg-mint-signal" />
+                <span className="font-caption text-silver-haze opacity-40">
+                  NODES SYNCED: UNAVAILABLE
+                </span>
               </div>
             </div>
             <VfinalStrategicMemoryCanvas />

@@ -161,9 +161,8 @@ const CYCLE_DURATION_MS = 18000
  * 2026), and each node's own glowing point. Only the node label
  * fillText calls were removed from the draw loop.
  *
- * Container height increased 450px -> 675px (+50%) and the full
- * animation cycle slowed 12s -> 18s (+50%), both per the same explicit
- * owner instruction and live-reviewed prototype.
+ * The full animation cycle was slowed 12s -> 18s (+50%), per explicit
+ * owner instruction and a live-reviewed prototype.
  *
  * SSR-safe: 'use client', all canvas/DOM work inside useEffect.
  * IntersectionObserver genuinely STOPS scheduling requestAnimationFrame
