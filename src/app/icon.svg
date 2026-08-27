@@ -1,11 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
   <rect width="180" height="180" fill="#030303"/>
-  <rect x="82.11" y="31.14" width="17.97" height="9.17" rx="4.58" fill="#8B9D83"/>
-  <rect x="71.11" y="49.47" width="34.84" height="8.8" rx="4.4" fill="#8B9D83"/>
-  <rect x="59.74" y="67.44" width="51.71" height="8.8" rx="4.4" fill="#8B9D83"/>
-  <rect x="48.74" y="85.78" width="68.58" height="8.44" rx="4.22" fill="#ffffff"/>
-  <rect x="37.37" y="103.75" width="85.45" height="8.8" rx="4.4" fill="#ffffff"/>
-  <rect x="26.0" y="121.36" width="102.32" height="9.17" rx="4.58" fill="#8B9D83"/>
-  <rect x="15.0" y="140.06" width="119.19" height="8.8" rx="4.4" fill="#8B9D83"/>
-  <polygon points="107.91,31.5 137.62,31.5 174.29,148.5 144.58,148.5" fill="#ffffff"/>
+  <polygon points="90.21,15.0 59.07,72.73 90.21,72.73" fill="#ffffff"/>
+  <polygon points="90.21,15.0 90.21,72.73 121.29,72.73" fill="#8B9D83"/>
+  <polygon points="59.07,72.73 90.21,72.73 33.78,165.0 9.34,165.0" fill="#ffffff"/>
+  <polygon points="90.21,72.73 121.29,72.73 170.66,164.18 146.39,164.18" fill="#8B9D83"/>
 </svg>
