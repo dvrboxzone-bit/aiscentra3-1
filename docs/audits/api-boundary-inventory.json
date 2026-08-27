@@ -592,7 +592,7 @@
       "rawErrorExposureRisk": "no -- catch blocks return a fixed, generic user-facing message; the real error/response body is only logged server-side via console.error, never returned to the caller",
       "productionState": "enabled, public, no restriction",
       "risk": "P3",
-      "notes": "Creates/updates a real Resend Contact via the official Contacts API, opting the contact into whichever of the 3 real Resend Topics (Signals/Forecasts/Project News) were checked. Topic IDs read from env vars (RESEND_TOPIC_SIGNALS_ID etc.) -- a topic is silently omitted from the request if its own env var is unset, an honest partial-rollout state. Same real Cloudflare Turnstile server-side re-verification pattern already used by /api/contact.",
+      "notes": "Creates/updates a real Resend Contact via the official Contacts API, opting the contact into whichever of the 3 real Resend Topics (Signals/Forecasts/Project News) were checked. Topic IDs read from env vars (RESEND_TOPIC_SIGNALS_ID etc.) -- a topic is silently omitted from the request if its own env var is unset, an honest partial-rollout state. Same real Cloudflare Turnstile server-side re-verification pattern already used by /api/contact. Also sends a real transactional confirmation email via Resend Emails API (POST /emails) immediately after a successful subscription, listing which lists were chosen -- a failure here does not fail the subscribe request itself.",
       "aiCallMode": "none",
       "weakSharedSecret": false,
       "hasCallerFacingRateLimit": false

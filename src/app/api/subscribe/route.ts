@@ -23,6 +23,12 @@
  * (RESEND_SEGMENT_ALL_SUBSCRIBERS_ID) -- Resend's Broadcast API
  * requires a segment_id, Topics alone only filter within one.
  *
+ * Sends a real confirmation email (explicit owner instruction,
+ * 2026-08-27) via Resend's direct Emails API, not the Broadcast API
+ * -- {{{RESEND_UNSUBSCRIBE_URL}}} is Broadcast-only, so this
+ * transactional confirmation honestly points to the real contact
+ * address instead of a fabricated unsubscribe link.
+ *
  * Cloudflare Turnstile: identical real trust-boundary pattern already
  * established in /api/contact -- re-verified server-side via
  * Cloudflare's own siteverify API before any Resend call is made.
@@ -185,6 +191,59 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       console.error(
         '[api/subscribe] RESEND_SEGMENT_ALL_SUBSCRIBERS_ID is not set -- contact saved but not added to any segment',
       )
+    }
+
+    // Real confirmation email (explicit owner instruction, 2026-08-27).
+    // Sent via Resend's real, direct Emails API (POST /emails, the
+    // same one already used and proven by /api/contact) -- NOT the
+    // Broadcast API. Deliberately so: {{{RESEND_UNSUBSCRIBE_URL}}}
+    // (used in the digest email) is a Broadcast-only placeholder, not
+    // available on a direct /emails send, so this transactional
+    // confirmation honestly does not fabricate an unsubscribe link
+    // that would not actually work; it points to the real
+    // aiscentra@gmail.com contact address instead, and every future
+    // real digest email will carry the real, working unsubscribe
+    // link. A failure here does not fail the subscribe request itself
+    // -- the real subscription (Contact + Topics + Segment) was
+    // already saved successfully above.
+    const chosenLists: string[] = []
+    if (signals) chosenLists.push('Signals')
+    if (forecasts) chosenLists.push('Forecasts')
+    if (projectNews) chosenLists.push('Project news')
+
+    try {
+      const confirmResponse = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'AIscentra <contact@aiscentra.com>',
+          to: email,
+          subject: 'You are subscribed to AIscentra',
+          html: `<div style="background:#030303;color:#e5e7eb;padding:32px;font-family:sans-serif;">
+            <p style="font-size:11px;letter-spacing:0.08em;color:#8B9D83;text-transform:uppercase;margin:0 0 16px;">SUBSCRIBED</p>
+            <p>Thank you for subscribing to AIscentra. You will now receive:</p>
+            <ul>${chosenLists.map((l) => `<li>${l}</li>`).join('')}</ul>
+            <p>This is completely free. Every future email includes a real, working one-click unsubscribe link.</p>
+            <p style="font-size:12px;color:#666;margin-top:24px;">
+              Questions, or want to change your preferences right away? Email
+              <a href="mailto:aiscentra@gmail.com" style="color:#666;">aiscentra@gmail.com</a>.
+            </p>
+          </div>`,
+        }),
+      })
+      if (!confirmResponse.ok) {
+        const detail = await confirmResponse.text()
+        console.error(
+          '[api/subscribe] Failed to send confirmation email:',
+          confirmResponse.status,
+          detail,
+        )
+      }
+    } catch (error) {
+      console.error('[api/subscribe] Unexpected error sending confirmation email:', error)
     }
 
     return NextResponse.json({ ok: true })
