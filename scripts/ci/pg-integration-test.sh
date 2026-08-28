@@ -671,7 +671,7 @@ echo ""
 echo "TEST 17b — fallback budget failure is technical FAILED, never content DISCARD"
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
-  public.sis_execution_finalizations, public.sis_execution_runs;
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
 DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
 UPDATE public.observations SET processed=false, qualification_result=null, engine_version=null,
   processing_error=null, rejection_code=null, rejection_reason=null WHERE id='$DURABLE_OBS';
