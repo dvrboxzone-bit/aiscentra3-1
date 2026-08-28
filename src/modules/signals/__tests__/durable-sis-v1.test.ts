@@ -2,28 +2,71 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parse as parseYaml } from 'yaml'
+import { estimateRequestTokens } from '@/lib/ai/client'
+import type { ModelRef } from '@/lib/ai/config'
 
 import {
+  DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
   DURABLE_SIS_V1_CONTROL_ID,
   assertSafeDiagnostic,
   budgetReservationFor,
+  firstRunnableModel,
   invokeOneProvider,
   nextModel,
+  nextRunnableModel,
 } from '../durable-sis-v1'
+import {
+  DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+  DurableSisParserOutputSchema,
+  maximalDurableParserOutput,
+} from '../durable-sis-parser-contract'
+
+const repairMigration = (): string =>
+  readFileSync(
+    'supabase/migrations/20260828143422_fix_durable_sis_parser_technical_failure.sql',
+    'utf8',
+  )
 
 test('control is fixed to the approved observation and preserves separate provider units', () => {
   assert.equal(DURABLE_SIS_V1_CONTROL_ID, 'e4275483-39e4-4441-84a2-0a1df546cf07')
   const messages = [{ role: 'user' as const, content: 'classify this observation' }]
   assert.equal(
-    budgetReservationFor(messages, { provider: 'groq', model: 'openai/gpt-oss-20b' }).unitKind,
+    budgetReservationFor(
+      messages,
+      { provider: 'groq', model: 'openai/gpt-oss-20b' },
+      DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
+    ).unitKind,
     'groq_tokens',
   )
+  assert.equal(
+    budgetReservationFor(
+      messages,
+      { provider: 'groq', model: 'openai/gpt-oss-20b' },
+      DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+    ).units,
+    estimateRequestTokens(messages, DURABLE_SIS_V1_PARSER_MAX_TOKENS),
+  )
   assert.deepEqual(
-    budgetReservationFor(messages, {
-      provider: 'cloudflare',
-      model: '@cf/zai-org/glm-4.7-flash',
-    }),
+    budgetReservationFor(
+      messages,
+      {
+        provider: 'cloudflare',
+        model: '@cf/zai-org/glm-4.7-flash',
+      },
+      DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+    ),
     { unitKind: 'provider_request', units: 1 },
+  )
+})
+
+test('maximum strict parser JSON contract fits the derived 2048-token output budget', () => {
+  const maximum = maximalDurableParserOutput()
+  assert.deepEqual(DurableSisParserOutputSchema.parse(maximum), maximum)
+  assert.equal(DURABLE_SIS_V1_PARSER_MAX_TOKENS, 2048)
+  assert.ok(Math.ceil(Buffer.byteLength(JSON.stringify(maximum), 'utf8') / 2) <= 2048)
+  assert.equal(
+    DurableSisParserOutputSchema.safeParse({ ...maximum, unbounded_extra: 'forbidden' }).success,
+    false,
   )
 })
 
@@ -47,6 +90,26 @@ test('one failed stage advances exactly one model and diagnostics reject raw fie
       finish_reason: 'length',
       content_length: 0,
     }),
+  )
+})
+
+test('a fallback without a full local attempt window is skipped before reservation', () => {
+  const chain = [
+    { provider: 'groq' as const, model: 'primary' },
+    { provider: 'groq' as const, model: 'locally-blocked' },
+    { provider: 'cloudflare' as const, model: 'independent' },
+  ]
+  const messages = [{ role: 'user' as const, content: 'bounded parser input' }]
+  const probe = (ref: ModelRef): boolean => ref.model !== 'locally-blocked'
+  const [current] = chain
+  assert.ok(current)
+  assert.deepEqual(
+    nextRunnableModel(chain, current, messages, DURABLE_SIS_V1_PARSER_MAX_TOKENS, probe),
+    chain[2],
+  )
+  assert.deepEqual(
+    firstRunnableModel(chain.slice(1), messages, DURABLE_SIS_V1_PARSER_MAX_TOKENS, probe),
+    chain[2],
   )
 })
 
@@ -102,19 +165,34 @@ test('parser success persists a durable FINALIZE delivery before archiving provi
   )
 })
 
-test('fallback budget failure preserves the completed provider outcome and queues finalization', () => {
-  const sql = readFileSync(
-    'supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql',
-    'utf8',
-  )
-  const budgetBranch = sql.match(
-    /if not public\.reserve_durable_sis_v1_budget[\s\S]*?return jsonb_build_object\('status','QUEUED','stage','FINALIZE','reason','budget_unavailable'[\s\S]*?end if;/,
+test('technical chain and fallback-budget exhaustion fail the run without content finalization', () => {
+  const sql = repairMigration()
+  const completionFunction = sql.split(
+    'create or replace function public.complete_durable_sis_v1_attempt',
+  )[1]
+  assert.ok(completionFunction)
+  const budgetBranch = completionFunction.match(
+    /if not public\.reserve_durable_sis_v1_budget[\s\S]*?return jsonb_build_object\('status','FAILED','stage',p_next_stage,'reason','budget_unavailable'[\s\S]*?end if;/,
   )?.[0]
   assert.ok(budgetBranch)
   assert.match(budgetBranch, /status='TERMINAL'/)
-  assert.match(budgetBranch, /finalization_outcome='DISCARD'/)
+  assert.match(budgetBranch, /status='FAILED'/)
+  assert.match(budgetBranch, /finalization_outcome=null/)
   assert.match(budgetBranch, /pgmq\.archive\('durable_sis_v1',p_message_id\)/)
-  assert.doesNotMatch(budgetBranch, /raise exception 'durable SIS fallback budget unavailable'/)
+  assert.doesNotMatch(budgetBranch, /pgmq\.send|READY_TO_FINALIZE|signal_decision_log/)
+  assert.match(sql, /create or replace function public\.fail_durable_sis_v1_stage/)
+  assert.match(sql, /set status='FAILED'/)
+})
+
+test('FAILED runs are retryable through a generic recovery ledger without hardcoded incident ids', () => {
+  const sql = repairMigration()
+  assert.match(sql, /where status <> 'FAILED'/)
+  assert.match(sql, /sis_execution_runs_one_nonfailed_per_observation_idx/)
+  assert.match(sql, /sis_execution_recoveries/)
+  assert.match(sql, /recover_durable_sis_v1_technical_failure/)
+  assert.match(sql, /decision_log_id=d\.id/)
+  assert.doesNotMatch(sql, /772de061|ca354cfb/)
+  assert.doesNotMatch(sql, /delete from public\.signal_decision_log/i)
 })
 
 test('manual workflow is bounded, one environment, and cannot call batch/replay/cron', () => {

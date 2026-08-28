@@ -57,6 +57,8 @@ QUALITY_FOUNDATION_MIGRATION="supabase/migrations/20260821023045_add_signal_qual
 [[ -f "$QUALITY_FOUNDATION_MIGRATION" ]] || { echo "FATAL: $QUALITY_FOUNDATION_MIGRATION not found (run from repo root)"; exit 1; }
 DURABLE_SIS_MIGRATION="supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql"
 [[ -f "$DURABLE_SIS_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_MIGRATION not found (run from repo root)"; exit 1; }
+DURABLE_SIS_REPAIR_MIGRATION="supabase/migrations/20260828143422_fix_durable_sis_parser_technical_failure.sql"
+[[ -f "$DURABLE_SIS_REPAIR_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_REPAIR_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -573,6 +575,7 @@ PGMQ_SQL
 echo "  -- applying Phase 1 and Durable SIS after earlier mutation tests, then checking the full current schema --"
 $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_REPAIR_MIGRATION" >/dev/null
 FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
 
@@ -665,10 +668,10 @@ check "repeated finalization still has no duplicate Signal" "0" \
   "$($PG -c "SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids);")"
 
 echo ""
-echo "TEST 17b — fallback budget failure preserves provider outcome and queues FINALIZE"
+echo "TEST 17b — fallback budget failure is technical FAILED, never content DISCARD"
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
-  public.sis_execution_finalizations, public.sis_execution_runs;
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
 DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
 UPDATE public.observations SET processed=false, qualification_result=null, engine_version=null,
   processing_error=null, rejection_code=null, rejection_reason=null WHERE id='$DURABLE_OBS';
@@ -706,16 +709,102 @@ check "completed provider outcome remains committed when fallback budget is unav
   "$($PG -c "SELECT status||'|'||(validated_output->>'provider_outcome') FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT';")"
 check "unfunded fallback is terminal without a provider invocation" "TERMINAL|budget_unavailable" \
   "$($PG -c "SELECT status||'|'||(safe_diagnostic->>'type') FROM public.sis_execution_attempts WHERE run_id='$DURABLE_RUN' AND id<>'$DURABLE_ATTEMPT';")"
-check "budget failure queues only a FINALIZE delivery" "1|0" \
-  "$($PG -c "SELECT count(*) FILTER (WHERE message->>'stage'='FINALIZE')||'|'||count(*) FILTER (WHERE message ? 'attempt_id') FROM pgmq.q_durable_sis_v1;")"
-check "budget failure leaves the run ready for durable finalization" "READY_TO_FINALIZE|FINALIZE" \
+check "budget failure creates no FINALIZE or provider delivery" "0" \
+  "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1;")"
+check "budget failure marks the run FAILED at the technical stage" "FAILED|PARSER" \
   "$($PG -c "SELECT status||'|'||current_stage FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
-check "budget-failure delivery cannot request a provider" "FINALIZE|NULL" \
-  "$($PG -c "SELECT stage||'|'||coalesce(provider,'NULL') FROM public.claim_durable_sis_v1_attempt(55);")"
+check "budget failure leaves the observation unprocessed" "false||" \
+  "$($PG -c "SELECT processed||'|'||coalesce(qualification_result,'')||'|'||coalesce(rejection_code,'') FROM public.observations WHERE id='$DURABLE_OBS';")"
+check "budget failure writes no content decision or Signal" "0|0" \
+  "$($PG -c "SELECT (SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS')||'|'||(SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids));")"
+
+echo ""
+echo "TEST 17c — chain exhaustion is FAILED and a later start creates a new run"
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
+DELETE FROM pgmq.q_durable_sis_v1;
+UPDATE public.sis_execution_controls SET groq_daily_token_limit=30000 WHERE control_key='durable_sis_v1_control_20260825';
+INSERT INTO public.sis_execution_runs(id,control_key,observation_id,status,current_stage)
+VALUES ('$DURABLE_RUN','durable_sis_v1_control_20260825','$DURABLE_OBS','RUNNING','PARSER');
+INSERT INTO public.sis_execution_attempts(id,run_id,stage,ordinal,provider,model,status)
+VALUES ('$DURABLE_ATTEMPT','$DURABLE_RUN','PARSER',3,'cloudflare','fixture-parser','RUNNING');
+INSERT INTO public.sis_provider_budget_reservations(attempt_id,provider,model,unit_kind,reserved_units)
+VALUES ('$DURABLE_ATTEMPT','cloudflare','fixture-parser','provider_request',1);
+WITH message AS (
+  SELECT pgmq.send('durable_sis_v1',jsonb_build_object('attempt_id','$DURABLE_ATTEMPT')) AS id
+)
+UPDATE public.sis_execution_attempts AS attempt
+SET pgmq_message_id=message.id
+FROM message
+WHERE attempt.id='$DURABLE_ATTEMPT';
+SELECT public.fail_durable_sis_v1_stage(
+  p_attempt_id => '$DURABLE_ATTEMPT',
+  p_message_id => (SELECT pgmq_message_id FROM public.sis_execution_attempts WHERE id='$DURABLE_ATTEMPT'),
+  p_attempt_status => 'TERMINAL',
+  p_safe_diagnostic => '{"type":"output_truncated","provider":"cloudflare","model":"fixture-parser","http_status":200,"finish_reason":"length","content_length":8254}'::jsonb
+);
+SQL
+
+check "chain exhaustion marks the current run FAILED" "FAILED|output_truncated" \
+  "$($PG -c "SELECT status||'|'||(safe_last_failure->>'type') FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
+check "chain exhaustion archives work and creates no FINALIZE" "0" \
+  "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1;")"
+check "chain exhaustion leaves observation and content ledgers untouched" "false|0|0" \
+  "$($PG -c "SELECT processed||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS')||'|'||(SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids)) FROM public.observations WHERE id='$DURABLE_OBS';")"
+
+RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('groq','retry-classifier',100,'groq_tokens')->>'started')::boolean;")"
+check "the next start after FAILED creates a new run" "t" "$RESTART_RESULT"
+check "FAILED audit run and new active run coexist" "2|1" \
+  "$($PG -c "SELECT count(*)||'|'||count(*) FILTER (WHERE status<>'FAILED') FROM public.sis_execution_runs WHERE observation_id='$DURABLE_OBS';")"
+
+echo ""
+echo "TEST 17d — one-off technical recovery preserves audit and restores retryability"
+TECHNICAL_DECISION="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1"
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
+DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
+DELETE FROM pgmq.q_durable_sis_v1;
+UPDATE public.sis_execution_controls SET execution_enabled=false WHERE control_key='durable_sis_v1_control_20260825';
+UPDATE public.observations SET processed=true, signal_id=null, qualification_result='DISCARD',
+  rejection_code='R-15', rejection_reason='Durable SIS parser exhausted provider chain',
+  engine_version='durable-sis-v1' WHERE id='$DURABLE_OBS';
+INSERT INTO public.sis_execution_runs(
+  id,control_key,observation_id,status,current_stage,safe_last_failure,
+  finalization_outcome,finalization_signal,finalization_decision
+) VALUES (
+  '$DURABLE_RUN','durable_sis_v1_control_20260825','$DURABLE_OBS','FINALIZED','FINALIZE',
+  '{"type":"output_truncated","provider":"cloudflare","model":"fixture-parser","http_status":200,"finish_reason":"length","content_length":8254}'::jsonb,
+  'DISCARD','{}'::jsonb,
+  '{"rejection_code":"R-15","rejection_reason":"Durable SIS parser exhausted provider chain","engine_justification":"All bounded provider attempts ended in typed failures."}'::jsonb
+);
+INSERT INTO public.signal_decision_log(
+  id,signal_id,observation_id,decision,rejection_code,rejection_reason,
+  engine_justification,engine_version
+) VALUES (
+  '$TECHNICAL_DECISION',null,'$DURABLE_OBS','DISCARD','R-15',
+  'Durable SIS parser exhausted provider chain',
+  'All bounded provider attempts ended in typed failures.','durable-sis-v1'
+);
+INSERT INTO public.sis_execution_finalizations(run_id,observation_id,outcome,signal_id,decision_log_id)
+VALUES ('$DURABLE_RUN','$DURABLE_OBS','DISCARD',null,'$TECHNICAL_DECISION');
+SELECT public.recover_durable_sis_v1_technical_failure('$DURABLE_RUN','$TECHNICAL_DECISION');
+SQL
+
+check "recovery marks only the old run FAILED and restores the observation" "FAILED|false||" \
+  "$($PG -c "SELECT run.status||'|'||observation.processed||'|'||coalesce(observation.qualification_result,'')||'|'||coalesce(observation.rejection_code,'') FROM public.sis_execution_runs run JOIN public.observations observation ON observation.id=run.observation_id WHERE run.id='$DURABLE_RUN';")"
+check "recovery preserves decision audit and records the explicit waiver" "1|1|0" \
+  "$($PG -c "SELECT (SELECT count(*) FROM public.signal_decision_log WHERE id='$TECHNICAL_DECISION')||'|'||(SELECT count(*) FROM public.sis_execution_recoveries WHERE decision_log_id='$TECHNICAL_DECISION')||'|'||(SELECT count(*) FROM public.sis_execution_finalizations WHERE run_id='$DURABLE_RUN');")"
+$PG -c "UPDATE public.sis_execution_controls SET execution_enabled=true WHERE control_key='durable_sis_v1_control_20260825';" >/dev/null
+RECOVERED_RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('groq','recovered-classifier',100,'groq_tokens')->>'started')::boolean;")"
+check "the recovered observation can create a fresh run without hiding its old decision" "t" "$RECOVERED_RESTART_RESULT"
+check "recovery never deletes the append-only technical decision" "1" \
+  "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE id='$TECHNICAL_DECISION';")"
 
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
-  public.sis_execution_finalizations, public.sis_execution_runs;
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
 DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
 DELETE FROM public.observations WHERE id='$DURABLE_OBS';
 DELETE FROM pgmq.q_durable_sis_v1;
@@ -806,6 +895,7 @@ reset_signal_observation_fixtures() {
     public.sis_provider_budget_reservations,
     public.sis_execution_attempts,
     public.sis_execution_finalizations,
+    public.sis_execution_recoveries,
     public.sis_execution_runs,
     public.signals,
     public.observations;" >/dev/null

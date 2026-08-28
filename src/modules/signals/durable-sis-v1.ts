@@ -6,11 +6,12 @@ import {
 } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
 import { AIStructuredOutputError } from '@/lib/ai/structured-output'
+import { checkTPMBudget, fitsWithinModelTPM } from '@/lib/ai/tpm-manager'
 import type { AIMessage } from '@/lib/ai/client'
 
 export const DURABLE_SIS_V1_CONTROL_ID = 'e4275483-39e4-4441-84a2-0a1df546cf07'
 export const DURABLE_SIS_V1_CONTROL_KEY = 'durable_sis_v1_control_20260825'
-export const DURABLE_SIS_V1_MAX_TOKENS = 1024
+export const DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS = 1024
 export const DURABLE_SIS_V1_STAGE_DEADLINE_MS = 45_000
 
 export type DurableSisStage = 'CLASSIFIER' | 'PARSER'
@@ -40,14 +41,58 @@ export type DurableBudgetReservation =
 export function budgetReservationFor(
   messages: readonly AIMessage[],
   ref: ModelRef,
+  outputBudget: number,
 ): DurableBudgetReservation {
   if (ref.provider === 'groq') {
     return {
       unitKind: 'groq_tokens' as const,
-      units: estimateRequestTokens([...messages], DURABLE_SIS_V1_MAX_TOKENS),
+      units: estimateRequestTokens([...messages], outputBudget),
     }
   }
   return { unitKind: 'provider_request' as const, units: 1 }
+}
+
+export interface DurableAttemptWindowProbe {
+  (ref: ModelRef, estimatedTokens: number): boolean
+}
+
+const defaultAttemptWindowProbe: DurableAttemptWindowProbe = (ref, estimatedTokens) => {
+  const ceiling = fitsWithinModelTPM(ref.model, estimatedTokens)
+  if (!ceiling.fits) return false
+  return checkTPMBudget(ref.model, estimatedTokens).allowed
+}
+
+/**
+ * Selects only a provider that can start with a full stage window now. A model
+ * that would first consume that window in a local TPM wait is skipped without
+ * creating or reserving a doomed attempt.
+ */
+export function firstRunnableModel(
+  chain: readonly ModelRef[],
+  messages: readonly AIMessage[],
+  outputBudget: number,
+  probe: DurableAttemptWindowProbe = defaultAttemptWindowProbe,
+): ModelRef | null {
+  return (
+    chain.find((candidate) =>
+      probe(candidate, estimateRequestTokens([...messages], outputBudget)),
+    ) ?? null
+  )
+}
+
+export function nextRunnableModel(
+  chain: readonly ModelRef[],
+  current: ModelRef,
+  messages: readonly AIMessage[],
+  outputBudget: number,
+  probe: DurableAttemptWindowProbe = defaultAttemptWindowProbe,
+): ModelRef | null {
+  const currentIndex = chain.findIndex(
+    (candidate) => candidate.provider === current.provider && candidate.model === current.model,
+  )
+  return currentIndex < 0
+    ? null
+    : firstRunnableModel(chain.slice(currentIndex + 1), messages, outputBudget, probe)
 }
 
 export function nextModel(chain: readonly ModelRef[], current: ModelRef): ModelRef | null {

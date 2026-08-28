@@ -6,20 +6,25 @@ import { getModelChain } from '@/lib/ai/models'
 import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 import { createAdminClient } from '@/lib/supabase/server'
 import {
-  DURABLE_SIS_V1_MAX_TOKENS,
+  DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
   DURABLE_SIS_V1_STAGE_DEADLINE_MS,
   assertSafeDiagnostic,
   budgetReservationFor,
+  firstRunnableModel,
   invokeOneProvider,
-  nextModel,
+  nextRunnableModel,
   safeDiagnostic,
 } from '@/modules/signals/durable-sis-v1'
 import {
   ENRICHMENT_SYSTEM_PROMPT,
-  EnrichmentOutputSchema,
   buildEnrichmentPrompt,
   type EnrichmentOutput,
 } from '@/modules/signals/enrichment-prompt'
+import {
+  DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION,
+  DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+  DurableSisParserOutputSchema,
+} from '@/modules/signals/durable-sis-parser-contract'
 import { computeAllScores, computeMomentumScore } from '@/modules/signals/scoring'
 import {
   SISOutputSchema,
@@ -132,6 +137,27 @@ async function complete(
   return data as CompletionResult
 }
 
+async function failStage(
+  db: RpcClient,
+  claim: ProviderClaim,
+  args: {
+    status: 'SUCCEEDED' | 'TERMINAL' | 'DELIVERY_UNCERTAIN'
+    diagnostic: ReturnType<typeof safeDiagnostic>
+    validatedOutput?: unknown
+  },
+): Promise<CompletionResult> {
+  const { data, error } = await db.rpc('fail_durable_sis_v1_stage', {
+    p_attempt_id: claim.attempt_id,
+    p_message_id: claim.message_id,
+    p_attempt_status: args.status,
+    p_safe_diagnostic: args.diagnostic,
+    p_validated_output: args.validatedOutput ?? null,
+  })
+  if (error || !data || typeof data !== 'object')
+    throw new DurableCommitError('Stage failure commit failed')
+  return data as CompletionResult
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -197,7 +223,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       },
     ]
     const parserMessages: AIMessage[] = [
-      { role: 'system', content: ENRICHMENT_SYSTEM_PROMPT },
+      {
+        role: 'system',
+        content: `${ENRICHMENT_SYSTEM_PROMPT}\n\n${DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION}`,
+      },
       {
         role: 'user',
         content: buildEnrichmentPrompt({
@@ -212,9 +241,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       },
     ]
     const messages = providerClaim.stage === 'CLASSIFIER' ? classifierMessages : parserMessages
+    const outputBudget =
+      providerClaim.stage === 'CLASSIFIER'
+        ? DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS
+        : DURABLE_SIS_V1_PARSER_MAX_TOKENS
     if (providerClaim.redelivered) {
       const chain = getModelChain(providerClaim.stage === 'CLASSIFIER' ? 'classifier' : 'parser')
-      const fallback = nextModel(chain, ref)
+      const fallback = nextRunnableModel(chain, ref, messages, outputBudget)
       const diagnostic = {
         type: 'delivery_uncertain' as const,
         provider: ref.provider,
@@ -223,34 +256,33 @@ export async function POST(request: Request): Promise<NextResponse> {
         finish_reason: null,
         content_length: 0,
       }
-      const fallbackReservation = fallback ? budgetReservationFor(messages, fallback) : null
-      const finalizationDecision = {
-        rejection_code: 'R-15',
-        rejection_reason: `Durable SIS ${providerClaim.stage.toLowerCase()} delivery outcome was uncertain`,
-        engine_justification: 'No provider was called twice after an uncertain delivery.',
+      assertSafeDiagnostic(diagnostic)
+      if (!fallback) {
+        await failStage(db, providerClaim, {
+          status: 'DELIVERY_UNCERTAIN',
+          diagnostic,
+        })
+        return NextResponse.json({
+          attempted: 0,
+          status: 'FAILED',
+          stage: providerClaim.stage,
+          diagnostic: diagnostic.type,
+        })
       }
+      const fallbackReservation = budgetReservationFor(messages, fallback, outputBudget)
       const completed = await complete(db, providerClaim, {
-        p_status: fallback ? 'DELIVERY_UNCERTAIN' : 'TERMINAL',
+        p_status: 'DELIVERY_UNCERTAIN',
         p_safe_diagnostic: diagnostic,
-        p_budget_unavailable_decision: finalizationDecision,
-        ...(fallback
-          ? {
-              p_next_stage: providerClaim.stage,
-              p_next_provider: fallback.provider,
-              p_next_model: fallback.model,
-              p_next_units: fallbackReservation?.units,
-              p_next_unit_kind: fallbackReservation?.unitKind,
-            }
-          : {
-              p_finalization_outcome: 'DISCARD',
-              p_finalization_signal: {},
-              p_finalization_decision: finalizationDecision,
-            }),
+        p_next_stage: providerClaim.stage,
+        p_next_provider: fallback.provider,
+        p_next_model: fallback.model,
+        p_next_units: fallbackReservation.units,
+        p_next_unit_kind: fallbackReservation.unitKind,
       })
       return NextResponse.json({
         attempted: 0,
-        status: 'QUEUED',
-        stage: completed.stage ?? (fallback ? providerClaim.stage : 'FINALIZE'),
+        status: completed.status === 'FAILED' ? 'FAILED' : 'QUEUED',
+        stage: completed.stage ?? providerClaim.stage,
         diagnostic: completed.reason ?? diagnostic.type,
       })
     }
@@ -262,7 +294,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             ref,
             messages,
             SISOutputSchema,
-            { maxTokens: DURABLE_SIS_V1_MAX_TOKENS, temperature: 0 },
+            { maxTokens: DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS, temperature: 0 },
             deadlineAt,
           ),
         )
@@ -280,9 +312,39 @@ export async function POST(request: Request): Promise<NextResponse> {
           })
           return NextResponse.json({ attempted: 1, status: 'QUEUED', stage: 'FINALIZE' })
         }
-        const parser = getModelChain('parser')[0]
-        if (!parser) throw new Error('Parser unavailable')
-        const parserReservation = budgetReservationFor(parserMessages, parser)
+        const parserChain = getModelChain('parser')
+        const parser = firstRunnableModel(
+          parserChain,
+          parserMessages,
+          DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+        )
+        if (!parser) {
+          const unavailableRef = parserChain[0] ?? ref
+          const diagnostic = {
+            type: 'budget_unavailable' as const,
+            provider: unavailableRef.provider,
+            model: unavailableRef.model,
+            http_status: 0,
+            finish_reason: null,
+            content_length: 0,
+          }
+          await failStage(db, providerClaim, {
+            status: 'SUCCEEDED',
+            diagnostic,
+            validatedOutput: sis,
+          })
+          return NextResponse.json({
+            attempted: 1,
+            status: 'FAILED',
+            stage: 'PARSER',
+            diagnostic: diagnostic.type,
+          })
+        }
+        const parserReservation = budgetReservationFor(
+          parserMessages,
+          parser,
+          DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+        )
         const completed = await complete(db, providerClaim, {
           p_validated_output: sis,
           p_next_stage: 'PARSER',
@@ -290,16 +352,10 @@ export async function POST(request: Request): Promise<NextResponse> {
           p_next_model: parser.model,
           p_next_units: parserReservation.units,
           p_next_unit_kind: parserReservation.unitKind,
-          p_budget_unavailable_decision: decisionPayload(sis, {
-            rejection_code: 'R-15',
-            rejection_reason: 'Durable SIS parser budget unavailable',
-            engine_justification:
-              'Classifier outcome was committed; parser was not invoked without a durable budget reservation.',
-          }),
         })
         return NextResponse.json({
           attempted: 1,
-          status: 'QUEUED',
+          status: completed.status === 'FAILED' ? 'FAILED' : 'QUEUED',
           stage: completed.stage ?? 'PARSER',
           diagnostic: completed.reason ?? null,
         })
@@ -309,12 +365,12 @@ export async function POST(request: Request): Promise<NextResponse> {
         callProviderJSON(
           ref,
           messages,
-          EnrichmentOutputSchema,
-          { maxTokens: DURABLE_SIS_V1_MAX_TOKENS, temperature: 0 },
+          DurableSisParserOutputSchema,
+          { maxTokens: DURABLE_SIS_V1_PARSER_MAX_TOKENS, temperature: 0 },
           deadlineAt,
         ),
       )
-      const enriched = EnrichmentOutputSchema.parse(enrichedResult)
+      const enriched = DurableSisParserOutputSchema.parse(enrichedResult)
       const { data: run } = await db
         .from('sis_execution_runs')
         .select('classifier_output')
@@ -379,35 +435,30 @@ export async function POST(request: Request): Promise<NextResponse> {
       const diagnostic = safeDiagnostic(error, ref)
       assertSafeDiagnostic(diagnostic)
       const chain = getModelChain(providerClaim.stage === 'CLASSIFIER' ? 'classifier' : 'parser')
-      const fallback = nextModel(chain, ref)
-      const fallbackReservation = fallback ? budgetReservationFor(messages, fallback) : null
-      const finalizationDecision = {
-        rejection_code: 'R-15',
-        rejection_reason: `Durable SIS ${providerClaim.stage.toLowerCase()} exhausted provider chain`,
-        engine_justification: 'All bounded provider attempts ended in typed failures.',
+      const fallback = nextRunnableModel(chain, ref, messages, outputBudget)
+      if (!fallback) {
+        await failStage(db, providerClaim, { status: 'TERMINAL', diagnostic })
+        return NextResponse.json({
+          attempted: 1,
+          status: 'FAILED',
+          stage: providerClaim.stage,
+          diagnostic: diagnostic.type,
+        })
       }
+      const fallbackReservation = budgetReservationFor(messages, fallback, outputBudget)
       const completed = await complete(db, providerClaim, {
-        p_status: fallback ? 'RETRYABLE' : 'TERMINAL',
+        p_status: 'RETRYABLE',
         p_safe_diagnostic: diagnostic,
-        p_budget_unavailable_decision: finalizationDecision,
-        ...(fallback
-          ? {
-              p_next_stage: providerClaim.stage,
-              p_next_provider: fallback.provider,
-              p_next_model: fallback.model,
-              p_next_units: fallbackReservation?.units,
-              p_next_unit_kind: fallbackReservation?.unitKind,
-            }
-          : {
-              p_finalization_outcome: 'DISCARD',
-              p_finalization_signal: {},
-              p_finalization_decision: finalizationDecision,
-            }),
+        p_next_stage: providerClaim.stage,
+        p_next_provider: fallback.provider,
+        p_next_model: fallback.model,
+        p_next_units: fallbackReservation.units,
+        p_next_unit_kind: fallbackReservation.unitKind,
       })
       return NextResponse.json({
         attempted: 1,
-        status: 'QUEUED',
-        stage: completed.stage ?? (fallback ? providerClaim.stage : 'FINALIZE'),
+        status: completed.status === 'FAILED' ? 'FAILED' : 'QUEUED',
+        stage: completed.stage ?? providerClaim.stage,
         diagnostic: completed.reason ?? diagnostic.type,
       })
     }
