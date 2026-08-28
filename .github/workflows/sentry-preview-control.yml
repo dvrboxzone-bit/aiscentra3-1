@@ -1,0 +1,135 @@
+name: Sentry Preview Control (manual, one event)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: read
+
+concurrency:
+  group: sentry-preview-controlled-event
+  cancel-in-progress: false
+
+jobs:
+  controlled-event:
+    name: Emit exactly one controlled Preview event
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      WORKFLOW_SHA: ${{ github.sha }}
+      ACTOR_NAME: ${{ github.actor }}
+      OWNER_NAME: ${{ github.repository_owner }}
+    steps:
+      - name: Resolve one latest successful Preview deployment for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "::error::workflow_dispatch is required"
+            exit 1
+          fi
+
+          if [[ "$ACTOR_NAME" != "$OWNER_NAME" ]]; then
+            echo "::error::Only the repository owner may dispatch this control"
+            exit 1
+          fi
+
+          if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::github.sha must be exactly 40 lowercase hexadecimal characters"
+            exit 1
+          fi
+
+          deployments="$(gh api --method GET \
+            "/repos/${GITHUB_REPOSITORY}/deployments" \
+            -f "sha=${WORKFLOW_SHA}" \
+            -f 'environment=Preview' \
+            -f 'per_page=100')"
+          jq -e 'type == "array"' <<<"$deployments" >/dev/null
+
+          candidates='[]'
+          while IFS= read -r deployment_id; do
+            statuses="$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/deployments/${deployment_id}/statuses" \
+              -f 'per_page=1')"
+
+            candidate="$(jq -c --argjson deployment_id "$deployment_id" '
+              if type == "array" and length == 1 and
+                .[0].state == "success" and
+                .[0].environment == "Preview" and
+                (.[0].environment_url | type) == "string"
+              then {
+                deployment_id: $deployment_id,
+                status_updated_at: .[0].updated_at,
+                preview_url: .[0].environment_url
+              }
+              else empty
+              end
+            ' <<<"$statuses")"
+
+            if [[ -n "$candidate" ]]; then
+              candidates="$(jq -c --argjson candidate "$candidate" '. + [$candidate]' <<<"$candidates")"
+            fi
+          done < <(jq -r '.[].id' <<<"$deployments")
+
+          latest_time="$(jq -r 'map(.status_updated_at) | max // empty' <<<"$candidates")"
+          latest_candidates="$(jq -c --arg latest_time "$latest_time" '
+            [.[] | select(.status_updated_at == $latest_time)]
+          ' <<<"$candidates")"
+
+          if [[ -z "$latest_time" ]] || [[ "$(jq 'length' <<<"$latest_candidates")" -ne 1 ]]; then
+            echo "::error::Expected one unambiguous latest successful Preview deployment for github.sha"
+            exit 1
+          fi
+
+          PREVIEW_URL="$(jq -r '.[0].preview_url' <<<"$latest_candidates")"
+          if ! [[ "$PREVIEW_URL" =~ ^https://aiscentra3-1-[a-z0-9]+-welvers-projects\.vercel\.app$ ]]; then
+            echo "::error::Resolved deployment URL is not an exact unique aiscentra3-1 HTTPS Preview origin"
+            exit 1
+          fi
+
+          echo "PREVIEW_URL=${PREVIEW_URL}" >>"$GITHUB_ENV"
+          echo "Fail-closed deployment gates passed for github.sha ${WORKFLOW_SHA}."
+
+      - name: POST exactly one fixed controlled event with no caller input
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SENTRY_PREVIEW_VERCEL_BYPASS_SECRET: ${{ secrets.SENTRY_PREVIEW_VERCEL_BYPASS_SECRET }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "${CRON_SECRET:-}" ]]; then
+            echo "::error::CRON_SECRET GitHub secret is not configured"
+            exit 1
+          fi
+
+          if [[ -z "${SENTRY_PREVIEW_VERCEL_BYPASS_SECRET:-}" ]]; then
+            echo "::error::SENTRY_PREVIEW_VERCEL_BYPASS_SECRET GitHub secret is not configured"
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          cleanup() { rm -f "$response_file"; }
+          trap cleanup EXIT
+
+          http_status="$(curl --silent --show-error --retry 0 --max-time 20 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --header "x-vercel-protection-bypass: ${SENTRY_PREVIEW_VERCEL_BYPASS_SECRET}" \
+            "${PREVIEW_URL}/api/internal/sentry-test")"
+
+          echo "Controlled endpoint HTTP status: ${http_status}"
+          if [[ "$http_status" != "202" ]]; then
+            echo "::error::Controlled endpoint did not return HTTP 202"
+            exit 1
+          fi
+
+          jq -e 'keys == ["sent"] and .sent == true' "$response_file" >/dev/null
+          echo "Exactly one controlled Preview event was accepted."

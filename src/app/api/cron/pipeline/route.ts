@@ -126,6 +126,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }).catch((e: unknown) => console.error('[pipeline] reports:', e))
   log.push('reports: fired')
 
+  // Step 6: Signals digest to email subscribers (explicit owner
+  // instruction, 2026-08-27). Fire-and-forget, same real pattern as
+  // events/reports above -- nothing downstream in this pipeline
+  // depends on it completing within this run. The route itself is
+  // fully idempotent-safe against re-firing: it queries for Signals
+  // created after its own last successful send and honestly sends
+  // nothing if there are none, so an extra/duplicate trigger of this
+  // step is never harmful.
+  fetch(`${appUrl}/api/cron/signals-digest`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${cronSecret}` },
+  }).catch((e: unknown) => console.error('[pipeline] signals-digest:', e))
+  log.push('signals-digest: fired')
+
   return NextResponse.json({
     status: 'pipeline_fired',
     timestamp: new Date().toISOString(),

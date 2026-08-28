@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface MemNode {
   id: string
@@ -8,6 +8,7 @@ interface MemNode {
   y: number
   label: string
   born: number
+  info: string
 }
 interface MemLink {
   a: string
@@ -17,17 +18,94 @@ interface MemLink {
 }
 
 const NODES: MemNode[] = [
-  { id: 'src', x: 100, y: 150, label: 'SOURCE', born: 0 },
-  { id: 's1', x: 100, y: 300, label: 'SIGNAL', born: 1 },
-  { id: 'e1', x: 300, y: 200, label: 'EVENT', born: 2 },
-  { id: 'en1', x: 300, y: 350, label: 'ENTITY', born: 2 },
-  { id: 'f1', x: 300, y: 450, label: 'FACT', born: 2.5 },
-  { id: 'en1_v2', x: 500, y: 400, label: 'ENTITY v2', born: 4 },
-  { id: 's2', x: 500, y: 250, label: 'SIGNAL', born: 3 },
-  { id: 'kg', x: 700, y: 300, label: 'KNOWLEDGE\nGRAPH', born: 4.5 },
-  { id: 's3', x: 700, y: 150, label: 'SIGNAL', born: 5 },
-  { id: 'e2', x: 900, y: 200, label: 'EVENT', born: 5.5 },
-  { id: 'src2', x: 900, y: 350, label: 'SOURCE', born: 6 },
+  {
+    id: 'src',
+    x: 100,
+    y: 150,
+    label: 'SOURCE',
+    born: 0,
+    info: 'A publication is added to monitoring, rated for independence and past reliability — not for popularity.',
+  },
+  {
+    id: 's1',
+    x: 100,
+    y: 300,
+    label: 'SIGNAL',
+    born: 1,
+    info: "The source's report clears deterministic pre-filtering and AI classification, becoming a scored, categorized Signal.",
+  },
+  {
+    id: 'e1',
+    x: 300,
+    y: 200,
+    label: 'EVENT',
+    born: 2,
+    info: "A discrete, dated occurrence is extracted from the Signal's own evidence — a fact with a timestamp, not a narrative.",
+  },
+  {
+    id: 'en1',
+    x: 300,
+    y: 350,
+    label: 'ENTITY',
+    born: 2,
+    info: 'A company, model, or person named in the Signal is linked as a tracked node in the graph.',
+  },
+  {
+    id: 'f1',
+    x: 300,
+    y: 450,
+    label: 'FACT',
+    born: 2.5,
+    info: 'A verifiable claim tied to this Signal is recorded with its own source excerpt — separate from interpretation.',
+  },
+  {
+    id: 'en1_v2',
+    x: 500,
+    y: 400,
+    label: 'ENTITY v2',
+    born: 4,
+    info: "New evidence updates what's known about this entity. The prior version stays intact — this is a revision, never an overwrite.",
+  },
+  {
+    id: 's2',
+    x: 500,
+    y: 250,
+    label: 'SIGNAL',
+    born: 3,
+    info: 'A second, independently-sourced report corroborates the same event — checked against the original source, not just counted.',
+  },
+  {
+    id: 'kg',
+    x: 700,
+    y: 300,
+    label: 'KNOWLEDGE\nGRAPH',
+    born: 4.5,
+    info: "The corroborated Signal and the revised entity merge into the versioned graph — the system's durable memory.",
+  },
+  {
+    id: 's3',
+    x: 700,
+    y: 150,
+    label: 'SIGNAL',
+    born: 5,
+    info: 'A later Signal is classified in the context of what the graph already knows, not from a blank slate.',
+  },
+  {
+    id: 'e2',
+    x: 900,
+    y: 200,
+    label: 'EVENT',
+    born: 5.5,
+    info: 'A new, later event follows from that downstream Signal — extending the same real timeline.',
+  },
+  {
+    id: 'src2',
+    x: 900,
+    y: 350,
+    label: 'SOURCE',
+    born: 6,
+    info: 'An independent source corroborates the new event with its own primary reporting — not a restatement of the first.',
+  },
 ]
 
 const LINKS: MemLink[] = [
@@ -47,40 +125,56 @@ const LINKS: MemLink[] = [
 
 const VW = 1000
 const VH = 500
-const CYCLE_DURATION_MS = 12000
+/** Slowed 50% from the original 12s (explicit owner instruction,
+ * 2026-08-26, after live review of an interactive prototype). */
+const CYCLE_DURATION_MS = 18000
 
 /**
  * AIscentra — vfinal Strategic Memory canvas (layer 3)
  *
- * Ported from AIscentra-vfinal-adapt.html's own inline canvas draw
- * logic (lines ~880-1000): a 12-second looping animation illustrating
- * the real Knowledge Graph evolution pipeline (Source -> Signal ->
- * Event/Entity/Fact -> re-verified Entity -> Knowledge Graph node ->
+ * Originally ported from AIscentra-vfinal-adapt.html's own inline
+ * canvas draw logic: a looping animation illustrating the real
+ * Knowledge Graph evolution pipeline (Source -> Signal -> Event/
+ * Entity/Fact -> re-verified Entity -> Knowledge Graph node ->
  * downstream Signal/Event/Source), with a moving timeline marker and
- * fade-in/settle coloring for newly-appeared nodes/links. Node
- * positions, labels, timings (`born` values), and the exact draw
- * order/styling (shadow blur, dash patterns, alpha) are copied
- * verbatim -- this is a genuine, real illustration of the actual
- * Knowledge Graph architecture, not fabricated data (distinct from
- * the fabricated live-metrics emulator in the older HTML, which is
- * deliberately NOT ported -- see the homepage migration in layer 4).
+ * fade-in/settle coloring for newly-appeared nodes/links.
  *
- * SSR-safe: 'use client', all canvas work inside useEffect.
+ * Visual/interaction upgrade (explicit owner instruction, 2026-08-26,
+ * approved after several rounds of live interactive prototyping):
+ * node LABELS are no longer drawn as canvas pixels (ctx.fillText) --
+ * a canvas pixel has no hover event and can't carry a real CSS
+ * border. Labels are now real, bordered DOM elements
+ * (`.memory-label`), positioned on top of the canvas using the exact
+ * same scale/offset transform math the canvas itself computes, kept
+ * in sync via a ResizeObserver-driven recompute. Each label's border/
+ * text color switches from dim gray to mint-signal the instant the
+ * animation reaches that node (`touched` class, toggled directly via
+ * ref/classList inside the animation loop -- NOT React state, to
+ * avoid a re-render on every animation frame; matches the canvas's
+ * own imperative, non-React-state animation style). Hovering a label
+ * opens a real tooltip immediately adjacent to that specific node
+ * (flips left/right depending on horizontal position so it never
+ * runs off the container).
+ *
+ * The canvas itself is UNCHANGED for everything else: the growing
+ * lines, the timeline axis with its real year marks (1950/1980/2000/
+ * 2026), and each node's own glowing point. Only the node label
+ * fillText calls were removed from the draw loop.
+ *
+ * The full animation cycle was slowed 12s -> 18s (+50%), per explicit
+ * owner instruction and a live-reviewed prototype.
+ *
+ * SSR-safe: 'use client', all canvas/DOM work inside useEffect.
  * IntersectionObserver genuinely STOPS scheduling requestAnimationFrame
- * entirely outside the viewport (cancelAnimationFrame + rafId reset to
- * 0) and RESTARTS the loop on re-entry (see draw()'s own comment for
- * the real incident this closes). Full cleanup on unmount:
- * cancelAnimationFrame, resize listener removed, observer disconnected.
- *
- * REAL BUG FIXED (Preview correction, root-cause pass against the
- * original AIscentra-vfinal-adapt.html reference): a prefers-reduced-
- * motion check previously rendered one static frame at the midpoint
- * instead of starting the loop -- not present in the reference HTML's
- * own draw() (lines ~909-999), which always runs. Removed to match the
- * reference exactly: the animation always loops.
+ * entirely outside the viewport and RESTARTS the loop on re-entry.
+ * Full cleanup on unmount: cancelAnimationFrame, resize/observers
+ * removed.
  */
 export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const labelRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -91,6 +185,19 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
 
     let w = 0
     let h = 0
+    let scale = 1
+    let offsetX = 0
+    let offsetY = 0
+
+    function positionLabels(): void {
+      for (const node of NODES) {
+        const el = labelRefs.current[node.id]
+        if (!el) continue
+        el.style.left = `${offsetX + node.x * scale}px`
+        el.style.top = `${offsetY + node.y * scale}px`
+      }
+    }
+
     function resizeCanvas(): void {
       if (!canvas || !parent || !ctx) return
       const rect = parent.getBoundingClientRect()
@@ -101,6 +208,10 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
       canvas.style.width = `${w}px`
       canvas.style.height = `${h}px`
       ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
+      scale = Math.min(w / VW, h / VH) * 0.95
+      offsetX = (w - VW * scale) / 2
+      offsetY = (h - VH * scale) / 2
+      positionLabels()
     }
     resizeCanvas()
     window.addEventListener('resize', resizeCanvas)
@@ -114,9 +225,6 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
     function drawFrame(stage: number): void {
       if (!ctx) return
       ctx.clearRect(0, 0, w, h)
-      const scale = Math.min(w / VW, h / VH) * 0.95
-      const offsetX = (w - VW * scale) / 2
-      const offsetY = (h - VH * scale) / 2
       ctx.save()
       ctx.translate(offsetX, offsetY)
       ctx.scale(scale, scale)
@@ -190,13 +298,12 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
           ctx.arc(node.x, node.y, 4, 0, Math.PI * 2)
           ctx.fill()
           ctx.shadowBlur = 0
-          ctx.font = '20px JetBrains Mono'
-          ctx.fillStyle = isNew ? '#8B9D83' : 'rgba(229, 231, 235, 0.6)'
-          ctx.textAlign = 'left'
-          node.label.split('\n').forEach((line, i) => {
-            ctx.fillText(line, node.x + 12, node.y + 6 + i * 22)
-          })
         }
+        // Real DOM label toggle (not canvas fillText, see docstring):
+        // direct classList mutation via ref, not React state, so this
+        // runs every animation frame without triggering a re-render.
+        const el = labelRefs.current[node.id]
+        if (el) el.classList.toggle('touched', stage > node.born)
       })
 
       ctx.restore()
@@ -204,13 +311,6 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
 
     let rafId = 0
 
-    // The prior version called requestAnimationFrame(draw) unconditionally
-    // as the first statement, before the visibility check, so the loop
-    // kept firing every frame even fully offscreen with only the draw
-    // work skipped. Fixed: requestAnimationFrame is scheduled from
-    // inside the frame body, so the loop genuinely stops calling itself
-    // when offscreen and is explicitly restarted by the
-    // IntersectionObserver callback below.
     function draw(): void {
       const elapsed = (Date.now() - animStart) % CYCLE_DURATION_MS
       const progress = elapsed / CYCLE_DURATION_MS
@@ -243,8 +343,42 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="memory-canvas-container">
+    <div className="memory-canvas-container" ref={overlayRef}>
       <canvas ref={canvasRef} id="memory-canvas" aria-hidden="true" />
+      {NODES.map((node) => {
+        const flipLeft = node.x > VW / 2
+        const flipUp = node.y > VH / 2
+        return (
+          <div
+            key={node.id}
+            ref={(el) => {
+              labelRefs.current[node.id] = el
+            }}
+            className="memory-label"
+            onMouseEnter={() => setHoveredId(node.id)}
+            onMouseLeave={() => setHoveredId((cur) => (cur === node.id ? null : cur))}
+          >
+            {node.label.split('\n').map((line, i) => (
+              <span key={i} style={{ display: 'block' }}>
+                {line}
+              </span>
+            ))}
+            {hoveredId === node.id && (
+              <div
+                className="memory-tooltip"
+                style={{
+                  ...(flipUp ? { bottom: 0 } : { top: 0 }),
+                  ...(flipLeft
+                    ? { right: '100%', marginRight: '8px' }
+                    : { left: '100%', marginLeft: '8px' }),
+                }}
+              >
+                {node.info}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

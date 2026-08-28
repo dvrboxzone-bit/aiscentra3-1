@@ -67,29 +67,29 @@ claim to.
 
 | Metric                                              | Value |
 | --------------------------------------------------- | ----: |
-| Total routes                                        |    20 |
-| Category: `public-read`                             |     3 |
+| Total routes                                        |    23 |
+| Category: `public-read`                             |     4 |
 | Category: `authenticated-user`                      |     0 |
 | Category: `admin`                                   |     1 |
-| Category: `cron`                                    |    12 |
-| Category: `internal-machine`                        |     4 |
+| Category: `cron`                                    |    13 |
+| Category: `internal-machine`                        |     5 |
 | Category: `disabled`                                |     0 |
 | Direct AI-calling routes                            |     9 |
 | Indirect AI-triggering routes                       |     5 |
-| Service-role routes                                 |    16 |
-| Database-read routes                                |    18 |
-| Database-write routes                               |    11 |
-| Literal rateLimit="missing" count                   |    15 |
-| Routes without a real caller-facing HTTP rate limit |    20 |
+| Service-role routes                                 |    17 |
+| Database-read routes                                |    19 |
+| Database-write routes                               |    12 |
+| Literal rateLimit="missing" count                   |    17 |
+| Routes without a real caller-facing HTTP rate limit |    23 |
 | Literal budgetGuard="missing" count                 |    15 |
 | Cost-sensitive routes                               |    14 |
-| External-network-call routes                        |    18 |
-| Weak shared-secret (non-constant-time) routes       |    11 |
+| External-network-call routes                        |    21 |
+| Weak shared-secret (non-constant-time) routes       |    12 |
 | Confirmed raw-error-exposure routes                 |     5 |
 | Risk: P0                                            |     0 |
 | Risk: P1                                            |    16 |
-| Risk: P2                                            |     2 |
-| Risk: P3                                            |     2 |
+| Risk: P2                                            |     3 |
+| Risk: P3                                            |     4 |
 
 <!-- API_INVENTORY_SUMMARY_END -->
 
@@ -161,24 +161,25 @@ reported as-is, not adjusted to preserve a prior narrative.
 
 ## Full route table
 
-| Path                            | Methods   | Category         | Guard                                        | AI mode  | Service-role | DB write | Weak secret | Risk |
-| ------------------------------- | --------- | ---------------- | -------------------------------------------- | -------- | :----------: | :------: | :---------: | :--: |
-| `/api/admin/simulate-engine-v2` | GET, POST | admin            | `checkAdminAccess`                           | direct   |      ✅      |    ✅    |      —      |  P1  |
-| `/api/agent`                    | GET, POST | internal-machine | `checkInternalAccess`                        | direct   |      ✅      |    —     |      —      |  P1  |
-| `/api/assistant`                | POST      | public-read      | `checkPublicAssistantAccess`                 | direct   |      —       |    —     |      —      |  P1  |
-| `/api/collect`                  | POST      | cron             | local `isAuthorized()`                       | none     |      ✅      |    ✅    |     ✅      |  P1  |
-| `/api/cron/collect`             | GET       | cron             | inline check                                 | none     |      ✅      |    —     |     ✅      |  P2  |
-| `/api/cron/enrich`              | GET       | cron             | inline check                                 | indirect |      ✅      |    —     |     ✅      |  P1  |
-| `/api/cron/events`              | GET       | cron             | inline check                                 | indirect |      —       |    —     |     ✅      |  P1  |
-| `/api/cron/momentum`            | GET       | cron             | inline check                                 | none     |      ✅      |    ✅    |     ✅      |  P1  |
-| `/api/cron/pipeline`            | GET       | cron             | inline check (fail-closed on missing secret) | indirect |      —       |    —     |     ✅      |  P1  |
-| `/api/cron/reports`             | GET       | cron             | inline check                                 | indirect |      ✅      |    —     |     ✅      |  P1  |
-| `/api/enrich/batch`             | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
-| `/api/internal/sis-replay`      | POST      | internal-machine | centralized `isAuthorizedCronRequest`        | direct   |      ✅      |    ✅    |      —      |  P1  |
-| `/api/enrich`                   | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
-| `/api/events/promote`           | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
-| `/api/health`                   | GET       | public-read      | none (intentional)                           | none     |      ✅      |    —     |      —      |  P2  |
-| `/api/reports/generate`         | POST      | cron             | local `isAuthorized()`                       | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| Path                            | Methods   | Category         | Guard                                           | AI mode  | Service-role | DB write | Weak secret | Risk |
+| ------------------------------- | --------- | ---------------- | ----------------------------------------------- | -------- | :----------: | :------: | :---------: | :--: |
+| `/api/admin/simulate-engine-v2` | GET, POST | admin            | `checkAdminAccess`                              | direct   |      ✅      |    ✅    |      —      |  P1  |
+| `/api/agent`                    | GET, POST | internal-machine | `checkInternalAccess`                           | direct   |      ✅      |    —     |      —      |  P1  |
+| `/api/assistant`                | POST      | public-read      | `checkPublicAssistantAccess`                    | direct   |      —       |    —     |      —      |  P1  |
+| `/api/collect`                  | POST      | cron             | local `isAuthorized()`                          | none     |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/cron/collect`             | GET       | cron             | inline check                                    | none     |      ✅      |    —     |     ✅      |  P2  |
+| `/api/cron/enrich`              | GET       | cron             | inline check                                    | indirect |      ✅      |    —     |     ✅      |  P1  |
+| `/api/cron/events`              | GET       | cron             | inline check                                    | indirect |      —       |    —     |     ✅      |  P1  |
+| `/api/cron/momentum`            | GET       | cron             | inline check                                    | none     |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/cron/pipeline`            | GET       | cron             | inline check (fail-closed on missing secret)    | indirect |      —       |    —     |     ✅      |  P1  |
+| `/api/cron/reports`             | GET       | cron             | inline check                                    | indirect |      ✅      |    —     |     ✅      |  P1  |
+| `/api/enrich/batch`             | POST      | cron             | local `isAuthorized()`                          | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/internal/sentry-test`     | POST      | internal-machine | preview + centralized `isAuthorizedCronRequest` | none     |      —       |    —     |      —      |  P3  |
+| `/api/internal/sis-replay`      | POST      | internal-machine | centralized `isAuthorizedCronRequest`           | direct   |      ✅      |    ✅    |      —      |  P1  |
+| `/api/enrich`                   | POST      | cron             | local `isAuthorized()`                          | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/events/promote`           | POST      | cron             | local `isAuthorized()`                          | direct   |      ✅      |    ✅    |     ✅      |  P1  |
+| `/api/health`                   | GET       | public-read      | none (intentional)                              | none     |      ✅      |    —     |      —      |  P2  |
+| `/api/reports/generate`         | POST      | cron             | local `isAuthorized()`                          | direct   |      ✅      |    ✅    |     ✅      |  P1  |
 
 ## AI call mode definitions
 
