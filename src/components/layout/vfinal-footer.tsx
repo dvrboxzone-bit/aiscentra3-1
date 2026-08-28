@@ -38,9 +38,9 @@ export function VfinalFooter(): React.JSX.Element {
           <div>
             <Link
               href="/"
-              className="mb-6 flex items-center gap-4 text-lg font-bold tracking-tight text-frost"
+              className="mb-6 flex items-center gap-4 text-xl font-bold tracking-tight text-frost"
             >
-              <svg width="48" height="48">
+              <svg width="40" height="40">
                 <use href="#aiscentra-logo" />
               </svg>
               <span>AIscentra</span>

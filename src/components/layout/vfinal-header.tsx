@@ -160,9 +160,9 @@ export function VfinalHeader(): React.JSX.Element {
         <nav className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-4">
           <Link
             href="/"
-            className="flex items-center gap-4 text-lg font-bold tracking-tight text-frost"
+            className="flex items-center gap-4 text-xl font-bold tracking-tight text-frost"
           >
-            <svg width="48" height="48">
+            <svg width="40" height="40">
               <use href="#aiscentra-logo" />
             </svg>
             <span>AIscentra</span>
