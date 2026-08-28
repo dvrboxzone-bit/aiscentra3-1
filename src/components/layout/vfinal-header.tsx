@@ -37,7 +37,12 @@
  * - "Assistant": #assistant anchor -> /assistant (real route).
  * - "Help the project": kept as-is (mailto:, a valid, real anchor
  *   target, not a fabricated page).
- * - "Enter" CTA (#signals anchor): -> /signals (real route).
+ * - "Subscribe" CTA (explicit owner instruction, 2026-08-27, real route
+ *   change): -> /subscribe (was "Enter" -> /signals; the direct link
+ *   to /signals itself is NOT lost -- it remains reachable via the
+ *   real "ALL" item inside the existing "Signals ▼" dropdown, and via
+ *   a separate plain link inside the mobile menu -- confirmed by
+ *   direct code read before this change was made).
  *
  * Lenis/scroll-linked backdrop behavior arrives in layer 3 -- this
  * component's own markup and static styling are complete now.
@@ -155,9 +160,9 @@ export function VfinalHeader(): React.JSX.Element {
         <nav className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-4">
           <Link
             href="/"
-            className="flex items-center gap-4 text-lg font-bold tracking-tight text-frost"
+            className="flex items-center gap-4 text-xl font-bold tracking-tight text-frost"
           >
-            <svg width="48" height="48">
+            <svg width="40" height="40">
               <use href="#aiscentra-logo" />
             </svg>
             <span>AIscentra</span>
@@ -241,8 +246,8 @@ export function VfinalHeader(): React.JSX.Element {
               Help the project
             </a>
 
-            <Link href="/signals" className="btn-pill magnetic hide-mobile text-sm">
-              Enter ↗
+            <Link href="/subscribe" className="btn-pill magnetic hide-mobile text-sm">
+              Subscribe ↗
             </Link>
 
             <button
@@ -336,11 +341,11 @@ export function VfinalHeader(): React.JSX.Element {
             Help the project
           </a>
           <Link
-            href="/signals"
+            href="/subscribe"
             className="btn-pill mt-4 justify-center"
             onClick={() => closeMobileMenu(false)}
           >
-            Enter ↗
+            Subscribe ↗
           </Link>
         </nav>
       </div>

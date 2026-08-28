@@ -51,6 +51,7 @@ TEST_DIRS=(
   "src/modules/observations/__tests__"
   "src/app/api/enrich/batch/__tests__"
   "src/app/api/cron/verify-urls/__tests__"
+  "src/app/api/cron/signals-digest/__tests__"
   "src/modules/assistant/__tests__"
   "src/app/signals/__tests__"
   "src/components/layout/__tests__"

@@ -239,18 +239,16 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
       <div className="section-gap" />
 
-      {/* ── 06 — Strategic Memory ────────────────────────────────────── */}
+      {/* ── 04 — Strategic Memory ────────────────────────────────────── */}
       <section id="memory" data-section="strategic-memory" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
+          <span className="font-caption mb-8 block text-silver-haze">04 — Strategic Memory</span>
+          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
+            Institutional memory.
+          </h2>
           <div className="grid items-center gap-12 md:grid-cols-2">
             <div>
-              <span className="font-caption mb-8 block text-silver-haze">
-                05 — Strategic Memory
-              </span>
-              <h2 className="font-heading mb-8 text-5xl text-frost md:text-6xl">
-                Institutional memory.
-              </h2>
               <p className="mb-8 max-w-md text-lg text-silver-haze">
                 AIscentra doesn&apos;t just collect signals; it builds a versioned Knowledge Graph.
                 Events, entities, and facts are linked over time, creating an evolving memory that
@@ -270,15 +268,19 @@ export default async function HomePage(): Promise<React.JSX.Element> {
 
       <div className="section-gap" />
 
-      {/* ── 04 — History ("Signal 001" — genuine static editorial content).
-          Renumbered from 07 after the Assistant section moved to the
-          real sliding side panel (VfinalAssistantPanel, triggered from
-          the header's own "Assistant" button on every page) --
-          independent-review correction, explicit owner instruction. ── */}
+      {/* ── 05 — History ("Signal 001" — genuine static editorial content).
+          Renumbered 04 -> 05 (independent-review correction, explicit
+          owner instruction, 2026-08-27): Strategic Memory's own label
+          was found reading 05/06 in two different places while
+          sitting BEFORE this section in the real page order -- fixed
+          to a real, consistent sequence: 01 Signals, 02 Forecasts,
+          03 Observations, 04 Strategic Memory, 05 this section. Only
+          this numbering label changed -- the protected "Convergence"
+          content below remains byte-identical, untouched. ── */}
       <section id="signal-001" data-section="history" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">04 — Signal 001</span>
+          <span className="font-caption mb-8 block text-silver-haze">05 — Signal 001</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             The Convergence.
           </h2>

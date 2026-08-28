@@ -27,9 +27,18 @@ export default function PrivacyPage(): React.JSX.Element {
           <p className="font-caption mb-12 text-silver-haze">Last updated: August 23, 2026</p>
           <div className="space-y-6 text-lg leading-relaxed text-silver-haze">
             <p>AIscentra is an independent online project operated by an individual.</p>
+            <p>AIscentra does not currently provide user accounts or paid subscriptions.</p>
             <p>
-              AIscentra does not currently provide user accounts, paid subscriptions, or email
-              newsletters.
+              If you subscribe to receive email updates (Signals, Forecasts, or project news), we
+              store your email address and your chosen list preferences solely to send these
+              updates. This is entirely free — no payment is required. Your email is processed by
+              Resend, our email delivery provider, acting on our behalf; we do not sell or share it
+              with any other third party. You can unsubscribe from any list at any time, with one
+              click, using the link included in every email you receive, or by contacting us at{' '}
+              <a href="mailto:aiscentra@gmail.com" className="text-mint-signal hover:underline">
+                aiscentra@gmail.com
+              </a>
+              .
             </p>
             <p>
               The website may process limited technical information required for its operation and

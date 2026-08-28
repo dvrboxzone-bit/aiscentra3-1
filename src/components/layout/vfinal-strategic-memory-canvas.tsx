@@ -347,6 +347,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
       <canvas ref={canvasRef} id="memory-canvas" aria-hidden="true" />
       {NODES.map((node) => {
         const flipLeft = node.x > VW / 2
+        const flipUp = node.y > VH / 2
         return (
           <div
             key={node.id}
@@ -366,7 +367,7 @@ export function VfinalStrategicMemoryCanvas(): React.JSX.Element {
               <div
                 className="memory-tooltip"
                 style={{
-                  top: 0,
+                  ...(flipUp ? { bottom: 0 } : { top: 0 }),
                   ...(flipLeft
                     ? { right: '100%', marginRight: '8px' }
                     : { left: '100%', marginLeft: '8px' }),
