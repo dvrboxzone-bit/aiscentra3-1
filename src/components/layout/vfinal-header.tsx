@@ -158,14 +158,10 @@ export function VfinalHeader(): React.JSX.Element {
         className="fixed left-0 right-0 top-0 z-50 border-b border-border-subtle bg-[rgba(3,3,3,0.8)] backdrop-blur-md"
       >
         <nav className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-4">
-          <Link
-            href="/"
-            className="flex items-center gap-4 text-xl font-bold tracking-tight text-frost"
-          >
-            <svg width="40" height="40">
+          <Link href="/" aria-label="AIscentra — home" className="flex items-center">
+            <svg width="140" height="56">
               <use href="#aiscentra-logo" />
             </svg>
-            <span>AIscentra</span>
           </Link>
 
           <div className="flex items-center gap-8">

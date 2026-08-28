@@ -184,7 +184,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
           <div className="relative z-10">
             {messages.length === 0 ? (
               <>
-                <svg width="56" height="56" className="mx-auto mb-6 block">
+                <svg width="140" height="56" className="mx-auto mb-6 block">
                   <use href="#aiscentra-logo" />
                 </svg>
                 <p className="text-sm leading-relaxed text-silver-haze">
