@@ -713,7 +713,7 @@ check "budget failure creates no FINALIZE or provider delivery" "0" \
   "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1;")"
 check "budget failure marks the run FAILED at the technical stage" "FAILED|PARSER" \
   "$($PG -c "SELECT status||'|'||current_stage FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
-check "budget failure leaves the observation unprocessed" "f||" \
+check "budget failure leaves the observation unprocessed" "false||" \
   "$($PG -c "SELECT processed||'|'||coalesce(qualification_result,'')||'|'||coalesce(rejection_code,'') FROM public.observations WHERE id='$DURABLE_OBS';")"
 check "budget failure writes no content decision or Signal" "0|0" \
   "$($PG -c "SELECT (SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS')||'|'||(SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids));")"
@@ -750,7 +750,7 @@ check "chain exhaustion marks the current run FAILED" "FAILED|output_truncated" 
   "$($PG -c "SELECT status||'|'||(safe_last_failure->>'type') FROM public.sis_execution_runs WHERE id='$DURABLE_RUN';")"
 check "chain exhaustion archives work and creates no FINALIZE" "0" \
   "$($PG -c "SELECT count(*) FROM pgmq.q_durable_sis_v1;")"
-check "chain exhaustion leaves observation and content ledgers untouched" "f|0|0" \
+check "chain exhaustion leaves observation and content ledgers untouched" "false|0|0" \
   "$($PG -c "SELECT processed||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS')||'|'||(SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids)) FROM public.observations WHERE id='$DURABLE_OBS';")"
 
 RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('groq','retry-classifier',100,'groq_tokens')->>'started')::boolean;")"
@@ -792,7 +792,7 @@ VALUES ('$DURABLE_RUN','$DURABLE_OBS','DISCARD',null,'$TECHNICAL_DECISION');
 SELECT public.recover_durable_sis_v1_technical_failure('$DURABLE_RUN','$TECHNICAL_DECISION');
 SQL
 
-check "recovery marks only the old run FAILED and restores the observation" "FAILED|f||" \
+check "recovery marks only the old run FAILED and restores the observation" "FAILED|false||" \
   "$($PG -c "SELECT run.status||'|'||observation.processed||'|'||coalesce(observation.qualification_result,'')||'|'||coalesce(observation.rejection_code,'') FROM public.sis_execution_runs run JOIN public.observations observation ON observation.id=run.observation_id WHERE run.id='$DURABLE_RUN';")"
 check "recovery preserves decision audit and records the explicit waiver" "1|1|0" \
   "$($PG -c "SELECT (SELECT count(*) FROM public.signal_decision_log WHERE id='$TECHNICAL_DECISION')||'|'||(SELECT count(*) FROM public.sis_execution_recoveries WHERE decision_log_id='$TECHNICAL_DECISION')||'|'||(SELECT count(*) FROM public.sis_execution_finalizations WHERE run_id='$DURABLE_RUN');")"
@@ -895,6 +895,7 @@ reset_signal_observation_fixtures() {
     public.sis_provider_budget_reservations,
     public.sis_execution_attempts,
     public.sis_execution_finalizations,
+    public.sis_execution_recoveries,
     public.sis_execution_runs,
     public.signals,
     public.observations;" >/dev/null
