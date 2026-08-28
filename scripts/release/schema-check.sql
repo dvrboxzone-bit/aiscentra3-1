@@ -67,6 +67,8 @@ required_functions(function_name) AS (
     ('claim_durable_sis_v1_attempt'),
     ('reserve_durable_sis_v1_budget'),
     ('complete_durable_sis_v1_attempt'),
+    ('fail_durable_sis_v1_stage'),
+    ('recover_durable_sis_v1_technical_failure'),
     ('finalize_durable_sis_v1')
 ),
 missing_functions AS (
@@ -82,6 +84,8 @@ required_function_signatures(function_signature) AS (
   VALUES
     ('claim_durable_sis_v1_attempt(integer)'),
     ('complete_durable_sis_v1_attempt(uuid,bigint,text,jsonb,jsonb,text,text,text,integer,text,text,jsonb,jsonb,jsonb)'),
+    ('fail_durable_sis_v1_stage(uuid,bigint,text,jsonb,jsonb)'),
+    ('recover_durable_sis_v1_technical_failure(uuid,uuid)'),
     ('finalize_durable_sis_v1(uuid,bigint)')
 ),
 missing_function_signatures AS (
@@ -97,7 +101,8 @@ required_tables(table_name) AS (
     ('sis_execution_runs'),
     ('sis_execution_attempts'),
     ('sis_provider_budget_reservations'),
-    ('sis_execution_finalizations')
+    ('sis_execution_finalizations'),
+    ('sis_execution_recoveries')
 ),
 missing_tables AS (
   SELECT 'MISSING TABLE: public.' || rt.table_name AS problem

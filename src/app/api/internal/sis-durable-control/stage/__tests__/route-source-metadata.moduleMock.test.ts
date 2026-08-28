@@ -112,8 +112,10 @@ test('real source type and trust score reach Durable SIS stage payloads without 
   assert.equal((await POST(request)).status, 200)
   assert.deepEqual(sourceSelects, ['name, type, trust_score', 'name, type, trust_score'])
 
-  const classifierPayload = reservations[0]?.content ?? ''
-  const parserPayload = reservations[1]?.content ?? ''
+  const classifierPayload =
+    reservations.find((reservation) => reservation.content.includes('(primary)'))?.content ?? ''
+  const parserPayload =
+    reservations.find((reservation) => reservation.content.includes('trust=0.91'))?.content ?? ''
   assert.match(classifierPayload, /SOURCE: Verified Source \(primary\)/)
   assert.match(parserPayload, /SOURCE: Verified Source \| trust=0\.91 \|/)
   assert.doesNotMatch(classifierPayload, /Unknown Source/)

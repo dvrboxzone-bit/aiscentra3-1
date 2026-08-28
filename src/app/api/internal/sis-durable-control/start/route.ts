@@ -5,7 +5,11 @@ import { getModelChain } from '@/lib/ai/models'
 import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 import { createAdminClient } from '@/lib/supabase/server'
 import { SIS_SYSTEM_PROMPT, buildSISPrompt } from '@/modules/signals/strategic-score'
-import { DURABLE_SIS_V1_CONTROL_ID, budgetReservationFor } from '@/modules/signals/durable-sis-v1'
+import {
+  DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
+  DURABLE_SIS_V1_CONTROL_ID,
+  budgetReservationFor,
+} from '@/modules/signals/durable-sis-v1'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +57,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         ),
       },
     ]
-    const reservation = budgetReservationFor(messages, classifier)
+    const reservation = budgetReservationFor(
+      messages,
+      classifier,
+      DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
+    )
     const { data, error } = await db.rpc('start_durable_sis_v1_control', {
       p_provider: classifier.provider,
       p_model: classifier.model,
