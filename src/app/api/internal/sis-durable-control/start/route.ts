@@ -38,7 +38,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     const { data: source } = await db
       .from('sources')
-      .select('name,source_type')
+      .select('name,type')
       .eq('id', observation.source_id)
       .single()
     const messages = [
@@ -49,7 +49,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           observation.title,
           observation.content,
           source?.name ?? 'Unknown Source',
-          source?.source_type ?? '',
+          source?.type ?? '',
         ),
       },
     ]

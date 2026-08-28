@@ -183,11 +183,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     const observation = observationData as ObservationRow
     const { data: source } = await db
       .from('sources')
-      .select('name, source_type, trust_score')
+      .select('name, type, trust_score')
       .eq('id', observation.source_id)
       .single()
     const sourceName = source?.name ?? 'Unknown Source'
-    const sourceType = source?.source_type ?? ''
+    const sourceType = source?.type ?? ''
 
     const classifierMessages: AIMessage[] = [
       { role: 'system', content: SIS_SYSTEM_PROMPT },
