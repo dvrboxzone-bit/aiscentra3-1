@@ -1,7 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
-  <rect width="180" height="180" fill="#030303"/>
-  <polygon points="90.21,15.0 59.07,72.73 90.21,72.73" fill="#ffffff"/>
-  <polygon points="90.21,15.0 90.21,72.73 121.29,72.73" fill="#8B9D83"/>
-  <polygon points="59.07,72.73 90.21,72.73 33.78,165.0 9.34,165.0" fill="#ffffff"/>
-  <polygon points="90.21,72.73 121.29,72.73 170.66,164.18 146.39,164.18" fill="#8B9D83"/>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="64" height="64" fill="#030303"/>
+  <rect x="4" y="4" width="56" height="56" fill="none" stroke="#8B9D83" stroke-width="3"/>
+  <text x="32" y="42" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="24" fill="#E5E7EB" letter-spacing="2">I.O</text>
 </svg>

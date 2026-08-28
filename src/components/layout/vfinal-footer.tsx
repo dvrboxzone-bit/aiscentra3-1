@@ -36,14 +36,10 @@ export function VfinalFooter(): React.JSX.Element {
       <div className="mx-auto max-w-[1200px]">
         <div className="mb-16 grid gap-12 md:grid-cols-4">
           <div>
-            <Link
-              href="/"
-              className="mb-6 flex items-center gap-4 text-xl font-bold tracking-tight text-frost"
-            >
-              <svg width="40" height="40">
+            <Link href="/" aria-label="AIscentra — home" className="mb-6 flex items-center">
+              <svg width="140" height="56">
                 <use href="#aiscentra-logo" />
               </svg>
-              <span>AIscentra</span>
             </Link>
             <p className="max-w-xs text-sm text-silver-haze opacity-70">
               The most reliable way to understand what has changed in the AI ecosystem and why it
