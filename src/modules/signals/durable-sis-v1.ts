@@ -9,7 +9,6 @@ import { AIStructuredOutputError } from '@/lib/ai/structured-output'
 import { checkTPMBudget, fitsWithinModelTPM } from '@/lib/ai/tpm-manager'
 import type { AIMessage } from '@/lib/ai/client'
 
-export const DURABLE_SIS_V1_CONTROL_ID = 'e4275483-39e4-4441-84a2-0a1df546cf07'
 export const DURABLE_SIS_V1_CONTROL_KEY = 'durable_sis_v1_control_20260825'
 export const DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS = 1024
 export const DURABLE_SIS_V1_STAGE_DEADLINE_MS = 45_000
