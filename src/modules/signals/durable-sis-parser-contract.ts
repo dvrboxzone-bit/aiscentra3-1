@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import type { AIOptions } from '@/lib/ai/client'
+import type { ProviderName } from '@/lib/ai/config'
 
 const TITLE_MAX_CHARS = 80
 const DESCRIPTION_MAX_CHARS = 400
@@ -83,7 +85,145 @@ export const DurableSisParserOutputSchema = z
 
 export type DurableSisParserOutput = z.infer<typeof DurableSisParserOutputSchema>
 
-export const DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION = `Return exactly one minified JSON object and nothing else. Do not include markdown, analysis, or extra keys. Hard limits: title 10-80 characters; description 50-400 characters; at most 6 entities; each entity name at most 48 characters; duplicate_note and novelty_prior_example must be null or at most 80 characters.`
+const CATEGORIES = [
+  'RESEARCH',
+  'MODELS',
+  'COMPANIES',
+  'INFRASTRUCTURE',
+  'OPEN_SOURCE',
+  'FUNDING',
+  'REGULATION',
+  'AGENTS',
+  'HARDWARE',
+] as const
+
+const ENTITY_TYPES = [
+  'COMPANY',
+  'MODEL',
+  'RESEARCH_PAPER',
+  'PERSON',
+  'PRODUCT',
+  'AGENT',
+  'ORGANIZATION',
+  'TECHNOLOGY',
+  'INFRASTRUCTURE',
+  'REGULATION',
+  'INVESTMENT',
+  'DATASET',
+  'TOOL',
+  'UNKNOWN',
+] as const
+
+const FACTOR_PROPERTIES = Object.fromEntries(
+  [
+    'impact_factor',
+    'actor_factor',
+    'novelty_factor',
+    'verifiability_factor',
+    'strategic_factor',
+    'authority_factor',
+    'corroboration_factor',
+    'specificity_factor',
+    'category_confidence_factor',
+  ].map((name) => [name, { type: 'integer', minimum: 0, maximum: 10 }]),
+)
+
+/** Provider-facing schema mirrors the strict Zod boundary without optional keys. */
+export const DURABLE_SIS_V1_PARSER_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    title: { type: 'string', minLength: 10, maxLength: TITLE_MAX_CHARS },
+    description: { type: 'string', minLength: 50, maxLength: DESCRIPTION_MAX_CHARS },
+    category: { type: 'string', enum: CATEGORIES },
+    ...FACTOR_PROPERTIES,
+    entities: {
+      type: 'array',
+      maxItems: ENTITY_MAX_ITEMS,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: ENTITY_NAME_MAX_CHARS },
+          type: { type: 'string', enum: ENTITY_TYPES },
+        },
+        required: ['name', 'type'],
+      },
+    },
+    is_duplicate: { type: 'boolean' },
+    duplicate_note: { type: ['string', 'null'], maxLength: NOTE_MAX_CHARS },
+    is_marketing: { type: 'boolean' },
+    novelty_prior_example: { type: ['string', 'null'], maxLength: NOTE_MAX_CHARS },
+  },
+  required: [
+    'title',
+    'description',
+    'category',
+    ...Object.keys(FACTOR_PROPERTIES),
+    'entities',
+    'is_duplicate',
+    'duplicate_note',
+    'is_marketing',
+    'novelty_prior_example',
+  ],
+} as const
+
+/**
+ * Groq GPT-OSS supports strict constrained decoding. Cloudflare accepts its
+ * provider-native JSON-schema shape. Other providers still get JSON object
+ * mode plus the same local Zod validation.
+ */
+export function durableSisParserRequestOptions(
+  provider: ProviderName,
+): Pick<AIOptions, 'responseFormat' | 'reasoningEffort'> {
+  const responseFormat =
+    provider === 'groq'
+      ? {
+          type: 'json_schema' as const,
+          json_schema: {
+            name: 'durable_sis_v1_parser',
+            strict: true,
+            schema: DURABLE_SIS_V1_PARSER_JSON_SCHEMA,
+          },
+        }
+      : provider === 'cloudflare'
+        ? {
+            type: 'json_schema' as const,
+            json_schema: DURABLE_SIS_V1_PARSER_JSON_SCHEMA,
+          }
+        : { type: 'json_object' as const }
+
+  return { responseFormat, reasoningEffort: 'low' }
+}
+
+export const DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION = `You are an evidence-bound signal parser, not a conversational assistant.
+Return exactly one minified JSON object that matches the supplied schema. Never emit markdown, analysis, reasoning, commentary, or extra keys.
+Use only facts and named entities present in SOURCE, TITLE, and CONTENT. Never invent numbers, benchmarks, actors, adoption, or corroboration.
+Write a factual 10-80 character title without hedging. Write a 50-400 character description in 2-3 short active-voice sentences; state what changed, why it matters, and only evidence-backed uncertainty. Do not begin with I, We, or Our.
+All nine factors are integers 0-10 and must not be inflated. One supplied source means corroboration_factor=2. Authority follows the supplied source type and trust. If novelty exceeds 7, novelty_prior_example must name a concrete prior example from the supplied evidence; otherwise cap novelty_factor at 7 and use null.
+Extract at most 6 specific entities. Set is_marketing only when promotion is the primary purpose. With no supplied comparison titles, set is_duplicate=false and duplicate_note=null.
+All fields are required. Notes are null or at most 80 characters.`
+
+function promptLine(value: string, maxChars: number): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, maxChars)
+}
+
+export function buildDurableSisParserPrompt(input: {
+  title: string
+  content: string
+  sourceName: string
+  sourceType: string
+  sourceTrustScore: number
+  candidateCategory: string
+}): string {
+  return `SOURCE: ${promptLine(input.sourceName, 120)} | type=${promptLine(input.sourceType, 48)} | trust=${input.sourceTrustScore} | candidate_category=${promptLine(input.candidateCategory, 32)}
+TITLE: ${promptLine(input.title, 300)}
+CONTENT: ${promptLine(input.content, 600)}`
+}
 
 /**
  * Maximum contract witness. U+0800 uses three UTF-8 bytes per JavaScript code

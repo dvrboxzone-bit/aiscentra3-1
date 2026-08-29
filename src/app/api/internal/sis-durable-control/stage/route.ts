@@ -15,15 +15,13 @@ import {
   nextRunnableModel,
   safeDiagnostic,
 } from '@/modules/signals/durable-sis-v1'
-import {
-  ENRICHMENT_SYSTEM_PROMPT,
-  buildEnrichmentPrompt,
-  type EnrichmentOutput,
-} from '@/modules/signals/enrichment-prompt'
+import { type EnrichmentOutput } from '@/modules/signals/enrichment-prompt'
 import {
   DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION,
   DURABLE_SIS_V1_PARSER_MAX_TOKENS,
   DurableSisParserOutputSchema,
+  buildDurableSisParserPrompt,
+  durableSisParserRequestOptions,
 } from '@/modules/signals/durable-sis-parser-contract'
 import { computeAllScores, computeMomentumScore } from '@/modules/signals/scoring'
 import {
@@ -225,18 +223,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     const parserMessages: AIMessage[] = [
       {
         role: 'system',
-        content: `${ENRICHMENT_SYSTEM_PROMPT}\n\n${DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION}`,
+        content: DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION,
       },
       {
         role: 'user',
-        content: buildEnrichmentPrompt({
+        content: buildDurableSisParserPrompt({
           title: observation.title,
           content: observation.content,
-          sourceUrl: observation.url,
           sourceName,
+          sourceType,
           sourceTrustScore: source?.trust_score ?? 0.5,
           candidateCategory: candidateCategory(observation.title, observation.content),
-          recentSignalTitles: [],
         }),
       },
     ]
@@ -366,7 +363,11 @@ export async function POST(request: Request): Promise<NextResponse> {
           ref,
           messages,
           DurableSisParserOutputSchema,
-          { maxTokens: DURABLE_SIS_V1_PARSER_MAX_TOKENS, temperature: 0 },
+          {
+            maxTokens: DURABLE_SIS_V1_PARSER_MAX_TOKENS,
+            temperature: 0,
+            ...durableSisParserRequestOptions(ref.provider),
+          },
           deadlineAt,
         ),
       )
