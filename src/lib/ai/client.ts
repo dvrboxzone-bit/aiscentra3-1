@@ -45,6 +45,121 @@ export type AIResult = {
   httpStatus: number
 }
 
+export const MAX_PROVIDER_ERROR_MESSAGE_LENGTH = 400
+
+export type SafeProviderErrorDetails = {
+  code?: string
+  type?: string
+  message?: string
+}
+
+const MAX_PROVIDER_ERROR_IDENTIFIER_LENGTH = 96
+const PROVIDER_ERROR_IDENTIFIER = /^[A-Za-z0-9._:/-]+$/
+
+function sanitizeProviderErrorIdentifier(
+  value: unknown,
+  sensitiveInputs: readonly string[],
+): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined
+  const normalized = String(value).trim()
+  if (
+    normalized.length === 0 ||
+    normalized.length > MAX_PROVIDER_ERROR_IDENTIFIER_LENGTH ||
+    !PROVIDER_ERROR_IDENTIFIER.test(normalized) ||
+    /[A-Za-z0-9+/_=-]{24,}/.test(normalized) ||
+    /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(normalized) ||
+    sensitiveInputs.some((input) => input.length >= 3 && normalized.includes(input))
+  ) {
+    return undefined
+  }
+  return normalized
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Produces a bounded, single-line provider message with request-derived data
+ * removed. Quoted values and common credential/PII shapes are redacted
+ * fail-closed; the raw response body is never attached to an Error object.
+ */
+export function sanitizeProviderErrorMessage(
+  value: unknown,
+  sensitiveInputs: readonly string[],
+): string | undefined {
+  if (typeof value !== 'string') return undefined
+
+  let sanitized = value
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+    .trim()
+  if (!sanitized) return undefined
+
+  const fragments = new Set<string>()
+  for (const input of sensitiveInputs) {
+    const trimmed = input.trim()
+    if (trimmed.length >= 3) fragments.add(trimmed)
+    for (const line of trimmed.split(/\r?\n/)) {
+      const lineValue = line.trim()
+      if (lineValue.length >= 3) fragments.add(lineValue)
+    }
+    for (const token of trimmed.match(/[A-Za-z0-9_@./:-]{4,}/g) ?? []) fragments.add(token)
+  }
+  for (const fragment of [...fragments].sort((a, b) => b.length - a.length)) {
+    sanitized = sanitized.replace(new RegExp(escapeRegExp(fragment), 'gi'), '[redacted]')
+  }
+
+  sanitized = sanitized
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(
+      /\b(?:authorization|api[_-]?key|token|secret|dsn|prompt|metadata|observation|body|content)\s*[:=]\s*\S+/gi,
+      '[redacted]',
+    )
+    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[redacted-ip]')
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi,
+      '[redacted-id]',
+    )
+    .replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '[redacted]')
+    .replace(/\b[A-Za-z0-9+/_=-]{24,}\b/g, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!sanitized) return undefined
+  return sanitized.slice(0, MAX_PROVIDER_ERROR_MESSAGE_LENGTH)
+}
+
+function safeProviderErrorDetails(
+  body: string,
+  sensitiveInputs: readonly string[],
+): SafeProviderErrorDetails | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object') return undefined
+
+  const root = parsed as Record<string, unknown>
+  const candidate =
+    root['error'] && typeof root['error'] === 'object'
+      ? (root['error'] as Record<string, unknown>)
+      : root
+  const code = sanitizeProviderErrorIdentifier(candidate['code'], sensitiveInputs)
+  const type = sanitizeProviderErrorIdentifier(candidate['type'], sensitiveInputs)
+  const message = sanitizeProviderErrorMessage(candidate['message'], sensitiveInputs)
+  const details: SafeProviderErrorDetails = {
+    ...(code === undefined ? {} : { code }),
+    ...(type === undefined ? {} : { type }),
+    ...(message === undefined ? {} : { message }),
+  }
+  return Object.keys(details).length === 0 ? undefined : details
+}
+
 // ── Error ─────────────────────────────────────────────────────────────────────
 
 export class AIProviderError extends Error {
@@ -53,6 +168,7 @@ export class AIProviderError extends Error {
     public readonly provider: ProviderName,
     public readonly statusCode: number,
     public readonly retryAfterMs?: number, // from Retry-After header
+    public readonly safeDetails?: SafeProviderErrorDetails,
   ) {
     super(message)
     this.name = 'AIProviderError'
@@ -305,11 +421,23 @@ export async function callProvider(
       ? Math.ceil(parseFloat(retryAfterHeader) * 1000)
       : undefined
 
+    const safeDetails =
+      statusCode >= 400 && statusCode < 500
+        ? safeProviderErrorDetails(body, [apiKey, ...messages.map((message) => message.content)])
+        : undefined
+    const safeSummary = [
+      `${ref.provider} API error: ${statusCode}`,
+      safeDetails?.code ? `code=${safeDetails.code}` : undefined,
+      safeDetails?.type ? `type=${safeDetails.type}` : undefined,
+    ]
+      .filter((value): value is string => value !== undefined)
+      .join(' ')
     const err = new AIProviderError(
-      `${ref.provider} API error: ${statusCode} ${response.statusText}\n${body}`,
+      safeSummary,
       ref.provider,
       statusCode,
       retryAfterMs,
+      safeDetails,
     )
     throw err
   }
