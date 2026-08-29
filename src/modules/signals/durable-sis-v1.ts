@@ -2,6 +2,7 @@ import type { ModelRef, ProviderName } from '@/lib/ai/config'
 import {
   AIInvalidResponseEnvelopeError,
   AIProviderError,
+  MAX_PROVIDER_ERROR_MESSAGE_LENGTH,
   estimateRequestTokens,
 } from '@/lib/ai/client'
 import { AIDeadlineExceededError } from '@/lib/ai/deadline'
@@ -31,6 +32,11 @@ export interface SafeDurableDiagnostic {
   finish_reason: string | null
   content_length: number
   retry_after_ms?: number
+  error?: {
+    code?: string
+    type?: string
+    message?: string
+  }
 }
 
 export type DurableBudgetReservation =
@@ -146,6 +152,9 @@ export function safeDiagnostic(error: unknown, ref: ModelRef): SafeDurableDiagno
       finish_reason: null,
       content_length: 0,
       ...(error.retryAfterMs === undefined ? {} : { retry_after_ms: error.retryAfterMs }),
+      ...(error.statusCode >= 400 && error.statusCode < 500 && error.safeDetails
+        ? { error: error.safeDetails }
+        : {}),
     }
   }
   return {
@@ -159,8 +168,23 @@ export function safeDiagnostic(error: unknown, ref: ModelRef): SafeDurableDiagno
 }
 
 export function assertSafeDiagnostic(value: SafeDurableDiagnostic): void {
-  const keys = Object.keys(value)
+  const serialized = JSON.stringify(value)
   for (const forbidden of ['raw_prompt', 'raw_response', 'content', 'reasoning']) {
-    if (keys.includes(forbidden)) throw new Error(`Unsafe diagnostic key: ${forbidden}`)
+    if (serialized.includes(`"${forbidden}"`)) {
+      throw new Error(`Unsafe diagnostic key: ${forbidden}`)
+    }
+  }
+  if (value.error) {
+    for (const key of Object.keys(value.error)) {
+      if (!['code', 'type', 'message'].includes(key)) {
+        throw new Error(`Unsafe provider error key: ${key}`)
+      }
+    }
+    if (
+      value.error.message !== undefined &&
+      value.error.message.length > MAX_PROVIDER_ERROR_MESSAGE_LENGTH
+    ) {
+      throw new Error('Unsafe provider error message length')
+    }
   }
 }

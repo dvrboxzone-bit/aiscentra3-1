@@ -2,8 +2,15 @@ import { afterEach, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { z } from 'zod'
 
-import { AIInvalidResponseEnvelopeError, callProvider, callProviderJSON } from '../client'
+import {
+  AIInvalidResponseEnvelopeError,
+  AIProviderError,
+  MAX_PROVIDER_ERROR_MESSAGE_LENGTH,
+  callProvider,
+  callProviderJSON,
+} from '../client'
 import { AIStructuredOutputError } from '../structured-output'
+import { assertSafeDiagnostic, safeDiagnostic } from '@/modules/signals/durable-sis-v1'
 
 const originalFetch = globalThis.fetch
 const originalApiKey = process.env['GROQ_API_KEY']
@@ -158,6 +165,60 @@ describe('structured AI diagnostics', () => {
         })
         assert.doesNotMatch(error.message, /must-not-leak|private_response_fragment/)
         assert.doesNotMatch(JSON.stringify(error.diagnostic), /must-not-leak/)
+        return true
+      },
+    )
+  })
+
+  test('HTTP 400 retains only sanitized provider fields for attempt storage and logs', async () => {
+    const apiKey = 'gsk_test_secret_value_that_must_never_be_retained'
+    const prompt = 'PRIVATE_OBSERVATION_TITLE observation-id=0b0550cd-77d8-4a47-b7b2-749e354b4bf4'
+    const rawBodyMarker = 'RAW_RESPONSE_BODY_MUST_NOT_BE_RETAINED'
+    const oversizedSafeText = ' additional technical detail'.repeat(40)
+    process.env['GROQ_API_KEY'] = apiKey
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'invalid_request_error',
+            type: 'invalid_request_error',
+            message: `Invalid schema for response_format. prompt=${prompt}; authorization=Bearer ${apiKey}; email=private@example.com; ${rawBodyMarker}${oversizedSafeText}`,
+            metadata: { prompt, apiKey },
+          },
+          raw: rawBodyMarker,
+        }),
+        { status: 400, headers: { 'content-type': 'application/json' } },
+      )
+
+    await assert.rejects(
+      callProvider(model, [{ role: 'user', content: prompt }], {}, Date.now() + 30_000),
+      (error: unknown) => {
+        assert.ok(error instanceof AIProviderError)
+        assert.equal(error.statusCode, 400)
+        assert.equal(error.safeDetails?.code, 'invalid_request_error')
+        assert.equal(error.safeDetails?.type, 'invalid_request_error')
+        assert.ok(error.safeDetails?.message)
+        assert.equal(error.safeDetails?.message.length, MAX_PROVIDER_ERROR_MESSAGE_LENGTH)
+
+        const storedAttemptDiagnostic = safeDiagnostic(error, model)
+        assertSafeDiagnostic(storedAttemptDiagnostic)
+        assert.deepEqual(storedAttemptDiagnostic.error?.code, 'invalid_request_error')
+        assert.deepEqual(storedAttemptDiagnostic.error?.type, 'invalid_request_error')
+
+        const persisted = JSON.stringify(storedAttemptDiagnostic)
+        const loggable = error.message
+        for (const forbidden of [apiKey, prompt, rawBodyMarker, 'private@example.com']) {
+          assert.doesNotMatch(
+            persisted,
+            new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+          )
+          assert.doesNotMatch(
+            loggable,
+            new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+          )
+        }
+        assert.doesNotMatch(persisted, /metadata|authorization|raw_response|raw_prompt/i)
+        assert.doesNotMatch(loggable, /prompt|metadata|authorization/i)
         return true
       },
     )
