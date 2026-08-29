@@ -38,6 +38,11 @@ WITH required_columns(table_name, column_name) AS (
     ('pipeline_metrics', 'oldest_pending_age_seconds'),
     ('pipeline_metrics', 'items_rejected'),
     ('pipeline_metrics', 'items_retried'),
+    ('sis_execution_controls', 'execution_enabled'),
+    ('sis_execution_controls', 'control_observation_id'),
+    ('sis_execution_controls', 'groq_daily_token_limit'),
+    ('sis_execution_controls', 'cloudflare_daily_request_limit'),
+    ('sis_execution_controls', 'max_attempts_per_stage'),
     ('sis_execution_runs', 'finalization_outcome'),
     ('sis_execution_runs', 'finalization_signal'),
     ('sis_execution_runs', 'finalization_decision'),
@@ -82,6 +87,7 @@ missing_functions AS (
 ),
 required_function_signatures(function_signature) AS (
   VALUES
+    ('start_durable_sis_v1_control(uuid,text,text,integer,text)'),
     ('claim_durable_sis_v1_attempt(integer)'),
     ('complete_durable_sis_v1_attempt(uuid,bigint,text,jsonb,jsonb,text,text,text,integer,text,text,jsonb,jsonb,jsonb)'),
     ('fail_durable_sis_v1_stage(uuid,bigint,text,jsonb,jsonb)'),
@@ -147,7 +153,10 @@ missing_enum_values AS (
 required_constraints(table_name, constraint_name) AS (
   VALUES
     ('signals', 'signals_quality_state_metadata_check'),
-    ('signals', 'signals_quality_approved_v2_invariants_check')
+    ('signals', 'signals_quality_approved_v2_invariants_check'),
+    ('sis_execution_controls', 'sis_execution_controls_groq_daily_token_limit_check'),
+    ('sis_execution_controls', 'sis_execution_controls_cloudflare_daily_request_limit_check'),
+    ('sis_execution_controls', 'sis_execution_controls_max_attempts_per_stage_check')
 ),
 missing_constraints AS (
   SELECT 'MISSING CONSTRAINT: public.' || rc.table_name || '.' || rc.constraint_name AS problem
@@ -195,6 +204,41 @@ missing_extensions AS (
 missing_queues AS (
   SELECT 'MISSING QUEUE: durable_sis_v1' AS problem
   WHERE to_regclass('pgmq.q_durable_sis_v1') IS NULL
+),
+durable_sis_invariant_problems AS (
+  SELECT 'FORBIDDEN FIXED-ID CONSTRAINT: public.' || rel.relname || '.' || constraint_row.conname AS problem
+  FROM pg_constraint constraint_row
+  JOIN pg_class rel ON rel.oid = constraint_row.conrelid
+  JOIN pg_namespace namespace_row ON namespace_row.oid = rel.relnamespace
+  WHERE namespace_row.nspname = 'public'
+    AND constraint_row.conname IN (
+      'sis_execution_controls_control_observation_id_check',
+      'sis_execution_runs_observation_id_check'
+    )
+  UNION ALL
+  SELECT 'MISSING INVARIANT: one nonfailed Durable SIS run per observation'
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM pg_index index_row
+    JOIN pg_class index_relation ON index_relation.oid = index_row.indexrelid
+    JOIN pg_class table_relation ON table_relation.oid = index_row.indrelid
+    JOIN pg_namespace namespace_row ON namespace_row.oid = table_relation.relnamespace
+    WHERE namespace_row.nspname = 'public'
+      AND table_relation.relname = 'sis_execution_runs'
+      AND index_relation.relname = 'sis_execution_runs_one_nonfailed_per_observation_idx'
+      AND index_row.indisunique
+      AND index_row.indnkeyatts = 1
+      AND (
+        SELECT attribute_row.attname
+        FROM pg_attribute attribute_row
+        WHERE attribute_row.attrelid = table_relation.oid
+          AND attribute_row.attnum = index_row.indkey[0]
+      ) = 'observation_id'
+      AND pg_get_expr(index_row.indpred, index_row.indrelid) = '(status <> ''FAILED''::text)'
+  )
+  UNION ALL
+  SELECT 'FORBIDDEN LEGACY FUNCTION SIGNATURE: public.start_durable_sis_v1_control(text,text,integer,text)'
+  WHERE to_regprocedure('public.start_durable_sis_v1_control(text,text,integer,text)') IS NOT NULL
 )
 SELECT problem FROM missing_tables
 UNION ALL
@@ -214,4 +258,6 @@ SELECT problem FROM missing_triggers
 UNION ALL
 SELECT problem FROM missing_extensions
 UNION ALL
-SELECT problem FROM missing_queues;
+SELECT problem FROM missing_queues
+UNION ALL
+SELECT problem FROM durable_sis_invariant_problems;

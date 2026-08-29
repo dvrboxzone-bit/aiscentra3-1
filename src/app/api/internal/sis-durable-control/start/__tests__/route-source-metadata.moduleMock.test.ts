@@ -22,7 +22,6 @@ test('real source type reaches the Durable SIS start payload without fallback', 
   })
   const durableMock = mock.module('@/modules/signals/durable-sis-v1', {
     namedExports: {
-      DURABLE_SIS_V1_CONTROL_ID: 'e4275483-39e4-4441-84a2-0a1df546cf07',
       budgetReservationFor: (messages: Array<{ content: string }>) => {
         reservations.push(messages[1]?.content ?? '')
         return { unitKind: 'groq_tokens', units: 123 }
@@ -36,7 +35,7 @@ test('real source type reaches the Durable SIS start payload without fallback', 
     title: 'Control observation',
     content: 'Verified primary evidence',
   }
-  const source = { name: 'ArXiv CS.AI', type: 'research' }
+  const source = { name: 'ArXiv CS.AI', type: 'research', status: 'ACTIVE' }
   const db = {
     rpc: async (name: string, args: Record<string, unknown>) => {
       rpcCalls.push({ name, args })
@@ -71,17 +70,20 @@ test('real source type reaches the Durable SIS start payload without fallback', 
   const response = await POST(
     new Request('https://aiscentra.test/api/internal/sis-durable-control/start', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ observation_id: observation.id }),
     }),
   )
 
   assert.equal(response.status, 200)
-  assert.deepEqual(sourceSelects, ['name,type'])
+  assert.deepEqual(sourceSelects, ['name,type,status'])
   assert.match(reservations[0] ?? '', /SOURCE: ArXiv CS\.AI \(research\)/)
   assert.doesNotMatch(reservations[0] ?? '', /Unknown Source/)
   assert.deepEqual(rpcCalls, [
     {
       name: 'start_durable_sis_v1_control',
       args: {
+        p_observation_id: observation.id,
         p_provider: 'groq',
         p_model: 'classifier-primary',
         p_units: 123,

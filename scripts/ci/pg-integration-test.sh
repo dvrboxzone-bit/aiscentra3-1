@@ -59,6 +59,8 @@ DURABLE_SIS_MIGRATION="supabase/migrations/20260825121411_add_durable_sis_v1_pgm
 [[ -f "$DURABLE_SIS_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_MIGRATION not found (run from repo root)"; exit 1; }
 DURABLE_SIS_REPAIR_MIGRATION="supabase/migrations/20260828143422_fix_durable_sis_parser_technical_failure.sql"
 [[ -f "$DURABLE_SIS_REPAIR_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_REPAIR_MIGRATION not found (run from repo root)"; exit 1; }
+DURABLE_SIS_CANARY_MIGRATION="supabase/migrations/20260829035009_unlock_durable_sis_canary.sql"
+[[ -f "$DURABLE_SIS_CANARY_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_CANARY_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -138,8 +140,20 @@ CREATE TABLE public.signals (
   validation_flags TEXT[] NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE public.sources (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  trust_score NUMERIC NOT NULL DEFAULT 0.8,
+  status TEXT NOT NULL DEFAULT 'ACTIVE'
+);
+INSERT INTO public.sources(id,name,type,status)
+VALUES ('12121212-1212-4212-8212-121212121212','Primary fixture source','research','ACTIVE');
 CREATE TABLE public.observations (
   id UUID PRIMARY KEY,
+  source_id UUID NOT NULL DEFAULT '12121212-1212-4212-8212-121212121212' REFERENCES public.sources(id),
+  title TEXT NOT NULL DEFAULT 'Eligible durable SIS fixture observation',
+  content TEXT NOT NULL DEFAULT 'Primary-source evidence for a bounded Durable SIS canary.',
   processed BOOLEAN NOT NULL DEFAULT false,
   qualification_result TEXT,
   qualification_score NUMERIC,
@@ -576,6 +590,7 @@ echo "  -- applying Phase 1 and Durable SIS after earlier mutation tests, then c
 $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_REPAIR_MIGRATION" >/dev/null
+$PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_CANARY_MIGRATION" >/dev/null
 FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
 
@@ -586,7 +601,7 @@ DURABLE_RUN="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
 DURABLE_ATTEMPT="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"
 
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
-INSERT INTO public.observations(id, processed) VALUES ('$DURABLE_OBS', false);
+INSERT INTO public.observations(id, processed, url_verified_ok) VALUES ('$DURABLE_OBS', false, true);
 UPDATE public.sis_execution_controls
 SET execution_enabled=true, groq_daily_token_limit=30000
 WHERE control_key='durable_sis_v1_control_20260825';
@@ -753,7 +768,7 @@ check "chain exhaustion archives work and creates no FINALIZE" "0" \
 check "chain exhaustion leaves observation and content ledgers untouched" "false|0|0" \
   "$($PG -c "SELECT processed||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS')||'|'||(SELECT count(*) FROM public.signals WHERE '$DURABLE_OBS'=ANY(observation_ids)) FROM public.observations WHERE id='$DURABLE_OBS';")"
 
-RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('groq','retry-classifier',100,'groq_tokens')->>'started')::boolean;")"
+RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('$DURABLE_OBS','groq','retry-classifier',100,'groq_tokens')->>'started')::boolean;")"
 check "the next start after FAILED creates a new run" "t" "$RESTART_RESULT"
 check "FAILED audit run and new active run coexist" "2|1" \
   "$($PG -c "SELECT count(*)||'|'||count(*) FILTER (WHERE status<>'FAILED') FROM public.sis_execution_runs WHERE observation_id='$DURABLE_OBS';")"
@@ -797,16 +812,86 @@ check "recovery marks only the old run FAILED and restores the observation" "FAI
 check "recovery preserves decision audit and records the explicit waiver" "1|1|0" \
   "$($PG -c "SELECT (SELECT count(*) FROM public.signal_decision_log WHERE id='$TECHNICAL_DECISION')||'|'||(SELECT count(*) FROM public.sis_execution_recoveries WHERE decision_log_id='$TECHNICAL_DECISION')||'|'||(SELECT count(*) FROM public.sis_execution_finalizations WHERE run_id='$DURABLE_RUN');")"
 $PG -c "UPDATE public.sis_execution_controls SET execution_enabled=true WHERE control_key='durable_sis_v1_control_20260825';" >/dev/null
-RECOVERED_RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('groq','recovered-classifier',100,'groq_tokens')->>'started')::boolean;")"
+RECOVERED_RESTART_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('$DURABLE_OBS','groq','recovered-classifier',100,'groq_tokens')->>'started')::boolean;")"
 check "the recovered observation can create a fresh run without hiding its old decision" "t" "$RECOVERED_RESTART_RESULT"
 check "recovery never deletes the append-only technical decision" "1" \
   "$($PG -c "SELECT count(*) FROM public.signal_decision_log WHERE id='$TECHNICAL_DECISION';")"
+
+echo ""
+echo "TEST 17e — ordinary observation canary invariants"
+CANARY_ELIGIBLE="31313131-3131-4313-8313-313131313131"
+CANARY_PROCESSED="32323232-3232-4323-8323-323232323232"
+CANARY_REJECTED="33333333-3333-4333-8333-333333333333"
+CANARY_INACTIVE="34343434-3434-4343-8343-343434343434"
+INACTIVE_SOURCE="35353535-3535-4353-8353-353535353535"
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
+DELETE FROM pgmq.q_durable_sis_v1;
+INSERT INTO public.sources(id,name,type,status)
+VALUES ('$INACTIVE_SOURCE','Inactive fixture source','research','INACTIVE');
+INSERT INTO public.observations(id,processed,url_verified_ok) VALUES
+  ('$CANARY_ELIGIBLE',false,true),
+  ('$CANARY_PROCESSED',true,true),
+  ('$CANARY_REJECTED',false,true);
+INSERT INTO public.observations(id,source_id,processed,url_verified_ok)
+VALUES ('$CANARY_INACTIVE','$INACTIVE_SOURCE',false,true);
+UPDATE public.observations
+SET qualification_result='DISCARD', rejection_code='R-14', rejection_reason='fixture rejection'
+WHERE id='$CANARY_REJECTED';
+UPDATE public.sis_execution_controls
+SET execution_enabled=false, groq_daily_token_limit=30000,
+    cloudflare_daily_request_limit=20, max_attempts_per_stage=3
+WHERE control_key='durable_sis_v1_control_20260825';
+SQL
+
+KILL_SWITCH_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('$CANARY_ELIGIBLE','groq','canary-classifier',100,'groq_tokens')->>'status');")"
+check "kill switch blocks an otherwise eligible ordinary observation" "PAUSED" "$KILL_SWITCH_RESULT"
+check "disabled start creates no run or queue delivery" "0|0" \
+  "$($PG -c "SELECT (SELECT count(*) FROM public.sis_execution_runs WHERE observation_id='$CANARY_ELIGIBLE')||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1);")"
+
+$PG -c "UPDATE public.sis_execution_controls SET execution_enabled=true WHERE control_key='durable_sis_v1_control_20260825';" >/dev/null
+ELIGIBLE_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('$CANARY_ELIGIBLE','groq','canary-classifier',100,'groq_tokens')->>'status')||'|'||(public.sis_execution_controls.execution_enabled::text) FROM public.sis_execution_controls WHERE control_key='durable_sis_v1_control_20260825';")"
+check "ordinary active-source verified observation is admitted" "QUEUED|true" "$ELIGIBLE_RESULT"
+check "the exact ordinary observation receives one active run" "1" \
+  "$($PG -c "SELECT count(*) FROM public.sis_execution_runs WHERE observation_id='$CANARY_ELIGIBLE' AND status<>'FAILED';")"
+
+set +e
+DUPLICATE_ACTIVE_ERROR="$($PG -v ON_ERROR_STOP=1 -c "INSERT INTO public.sis_execution_runs(control_key,observation_id,status) VALUES ('durable_sis_v1_control_20260825','$CANARY_ELIGIBLE','QUEUED');" 2>&1)"
+DUPLICATE_ACTIVE_CODE=$?
+set -e
+check "two nonfailed runs for one observation are rejected by the unique index" "1" \
+  "$([[ "$DUPLICATE_ACTIVE_CODE" -ne 0 && "$DUPLICATE_ACTIVE_ERROR" == *"sis_execution_runs_one_nonfailed_per_observation_idx"* ]] && echo 1 || echo 0)"
+
+for blocked in "$CANARY_PROCESSED" "$CANARY_REJECTED" "$CANARY_INACTIVE"; do
+  BLOCKED_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('$blocked','groq','canary-classifier',100,'groq_tokens')->>'status');")"
+  check "processed/rejected/inactive-source observation $blocked is ineligible" "INELIGIBLE" "$BLOCKED_RESULT"
+done
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+UPDATE public.sis_execution_attempts SET status='TERMINAL', completed_at=now()
+WHERE run_id=(SELECT id FROM public.sis_execution_runs WHERE observation_id='$CANARY_ELIGIBLE' AND status<>'FAILED');
+UPDATE public.sis_provider_budget_reservations SET status='CONSUMED', settled_at=now()
+WHERE attempt_id IN (SELECT id FROM public.sis_execution_attempts WHERE run_id IN (SELECT id FROM public.sis_execution_runs WHERE observation_id='$CANARY_ELIGIBLE'));
+DELETE FROM pgmq.q_durable_sis_v1
+WHERE message->>'attempt_id' IN (SELECT id::text FROM public.sis_execution_attempts WHERE run_id IN (SELECT id FROM public.sis_execution_runs WHERE observation_id='$CANARY_ELIGIBLE'));
+UPDATE public.sis_execution_runs SET status='FAILED', updated_at=now()
+WHERE observation_id='$CANARY_ELIGIBLE' AND status<>'FAILED';
+SQL
+FAILED_RETRY_RESULT="$($PG -c "SELECT (public.start_durable_sis_v1_control('$CANARY_ELIGIBLE','groq','retry-classifier',100,'groq_tokens')->>'started')::boolean;")"
+check "FAILED ordinary run permits one fresh retry" "t" "$FAILED_RETRY_RESULT"
+check "FAILED audit and exactly one nonfailed retry coexist" "2|1" \
+  "$($PG -c "SELECT count(*)||'|'||count(*) FILTER (WHERE status<>'FAILED') FROM public.sis_execution_runs WHERE observation_id='$CANARY_ELIGIBLE';")"
+check "provider limits remain the configured production bounds" "30000|20|3" \
+  "$($PG -c "SELECT groq_daily_token_limit||'|'||cloudflare_daily_request_limit||'|'||max_attempts_per_stage FROM public.sis_execution_controls WHERE control_key='durable_sis_v1_control_20260825';")"
 
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
   public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
 DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
-DELETE FROM public.observations WHERE id='$DURABLE_OBS';
+DELETE FROM public.signal_decision_log WHERE observation_id IN ('$CANARY_ELIGIBLE','$CANARY_PROCESSED','$CANARY_REJECTED','$CANARY_INACTIVE');
+DELETE FROM public.observations WHERE id IN ('$DURABLE_OBS','$CANARY_ELIGIBLE','$CANARY_PROCESSED','$CANARY_REJECTED','$CANARY_INACTIVE');
+DELETE FROM public.sources WHERE id='$INACTIVE_SOURCE';
 DELETE FROM pgmq.q_durable_sis_v1;
 UPDATE public.sis_execution_controls
 SET execution_enabled=false, groq_daily_token_limit=30000

@@ -7,7 +7,6 @@ import type { ModelRef } from '@/lib/ai/config'
 
 import {
   DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
-  DURABLE_SIS_V1_CONTROL_ID,
   assertSafeDiagnostic,
   budgetReservationFor,
   firstRunnableModel,
@@ -27,8 +26,10 @@ const repairMigration = (): string =>
     'utf8',
   )
 
-test('control is fixed to the approved observation and preserves separate provider units', () => {
-  assert.equal(DURABLE_SIS_V1_CONTROL_ID, 'e4275483-39e4-4441-84a2-0a1df546cf07')
+const canaryMigration = (): string =>
+  readFileSync('supabase/migrations/20260829035009_unlock_durable_sis_canary.sql', 'utf8')
+
+test('canary preserves separate provider reservation units and exact parser budget', () => {
   const messages = [{ role: 'user' as const, content: 'classify this observation' }]
   assert.equal(
     budgetReservationFor(
@@ -195,16 +196,49 @@ test('FAILED runs are retryable through a generic recovery ledger without hardco
   assert.doesNotMatch(sql, /delete from public\.signal_decision_log/i)
 })
 
-test('manual workflow is bounded, one environment, and cannot call batch/replay/cron', () => {
+test('ordinary canary migration replaces fixed-ID checks with production invariants', () => {
+  const sql = canaryMigration()
+  assert.match(
+    sql,
+    /drop constraint if exists sis_execution_controls_control_observation_id_check/i,
+  )
+  assert.match(sql, /drop constraint if exists sis_execution_runs_observation_id_check/i)
+  assert.match(
+    sql,
+    /create unique index sis_execution_runs_one_nonfailed_per_observation_idx\s+on public\.sis_execution_runs\(observation_id\)\s+where status <> 'FAILED'/i,
+  )
+  assert.match(
+    sql,
+    /start_durable_sis_v1_control\(\s*p_observation_id uuid,[\s\S]*?execution_enabled[\s\S]*?observation\.processed is false[\s\S]*?observation\.signal_id is null[\s\S]*?observation\.qualification_result is null[\s\S]*?observation\.rejection_code is null[\s\S]*?observation\.url_verified_ok is true[\s\S]*?source\.status = 'ACTIVE'/i,
+  )
+  assert.match(sql, /not exists \([\s\S]*?sis_execution_recoveries recovery/i)
+  assert.match(sql, /reserve_durable_sis_v1_budget\(v_attempt_id, p_units, p_unit_kind\)/i)
+  assert.doesNotMatch(sql, /e4275483-39e4-4441-84a2-0a1df546cf07/i)
+  assert.doesNotMatch(
+    sql,
+    /delete from public\.(sis_execution_recoveries|signal_decision_log|signals)/i,
+  )
+})
+
+test('manual canary workflow is owner-only, bounded, one-ID, and cannot call batch/replay/cron', () => {
   const workflow = readFileSync('.github/workflows/targeted-sis-durable-v1-control.yml', 'utf8')
   const parsed = parseYaml(workflow) as Record<string, unknown>
   assert.equal(typeof parsed, 'object')
-  assert.match(workflow, /workflow_dispatch:\s*$/m)
-  assert.doesNotMatch(workflow, /schedule:|inputs:/)
+  assert.match(workflow, /workflow_dispatch:\s*\n\s+inputs:/m)
+  assert.match(workflow, /observation_id:/)
+  assert.match(workflow, /confirmation:/)
+  assert.match(workflow, /github\.actor/)
+  assert.match(workflow, /github\.repository_owner/)
+  assert.match(workflow, /test "\$REF_NAME" = "main"/)
+  assert.match(workflow, /RUN_ONE_DURABLE_SIS_CANARY/)
+  assert.doesNotMatch(workflow, /schedule:/)
   assert.match(workflow, /environment: production/)
   assert.match(workflow, /group: enrich-batch/)
   assert.equal((workflow.match(/--retry 0/g) ?? []).length, 2)
+  assert.equal((workflow.match(/--request POST/g) ?? []).length, 2)
   assert.match(workflow, /for pass in 1 2 3 4 5 6 7 8 9 10 11 12/)
+  assert.match(workflow, /\{observation_id:\$observation_id\}/)
+  assert.match(workflow, /test "\$started" = 1/)
   assert.match(workflow, /api\/internal\/sis-durable-control\/start/)
   assert.match(workflow, /api\/internal\/sis-durable-control\/stage/)
   assert.doesNotMatch(workflow, /api\/enrich\/batch|api\/internal\/sis-replay|api\/cron\//)
@@ -224,6 +258,7 @@ test('production schema gate requires PGMQ and every durable SIS contract', () =
     'finalize_durable_sis_v1',
     'finalization_outcome',
     'finalization_message_id',
+    'start_durable_sis_v1_control\\(uuid,text,text,integer,text\\)',
     'finalize_durable_sis_v1\\(uuid,bigint\\)',
   ]) {
     assert.match(gate, new RegExp(object))

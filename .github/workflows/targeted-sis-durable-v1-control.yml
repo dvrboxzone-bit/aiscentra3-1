@@ -1,7 +1,19 @@
-name: Durable SIS V1 Control (manual, one ID only)
+name: Durable SIS V1 Canary (manual, one ID only)
 
 on:
   workflow_dispatch:
+    inputs:
+      observation_id:
+        description: Exact eligible observation UUID
+        required: true
+        type: string
+      confirmation:
+        description: Type RUN_ONE_DURABLE_SIS_CANARY
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
   group: enrich-batch
@@ -13,15 +25,33 @@ jobs:
     environment: production
     timeout-minutes: 12
     steps:
-      - name: Start fixed server-side control
+      - name: Fail closed on actor, ref and one-ID input
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REF_NAME: ${{ github.ref_name }}
+          OBSERVATION_ID: ${{ inputs.observation_id }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$ACTOR" = "$OWNER"
+          test "$REF_NAME" = "main"
+          test "$CONFIRMATION" = "RUN_ONE_DURABLE_SIS_CANARY"
+          [[ "$OBSERVATION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]
+
+      - name: Start exact server-side canary
         id: start
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          OBSERVATION_ID: ${{ inputs.observation_id }}
         run: |
           set -euo pipefail
+          payload=$(jq -cn --arg observation_id "$OBSERVATION_ID" '{observation_id:$observation_id}')
           status=$(curl --silent --show-error --output start.json --write-out '%{http_code}' \
             --request POST \
             --header "x-cron-secret: ${CRON_SECRET}" \
+            --header 'content-type: application/json' \
+            --data-binary "$payload" \
             --retry 0 \
             --max-time 55 \
             https://aiscentra.com/api/internal/sis-durable-control/start)
@@ -29,6 +59,7 @@ jobs:
           state=$(jq -r '.status // "MALFORMED"' start.json)
           printf 'start_http=%s started=%s status=%s\n' "$status" "$started" "$state"
           test "$status" = 200
+          test "$started" = 1
           test "$state" = QUEUED
 
       - name: Execute bounded durable stages
