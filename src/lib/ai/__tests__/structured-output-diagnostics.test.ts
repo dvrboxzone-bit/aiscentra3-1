@@ -10,10 +10,12 @@ const originalApiKey = process.env['GROQ_API_KEY']
 const model = { provider: 'groq' as const, model: 'openai/gpt-oss-20b' }
 const schema = z.object({ ok: z.boolean() })
 let requestedMaxTokens: number | undefined
+let requestedBody: Record<string, unknown> | undefined
 
 afterEach(() => {
   globalThis.fetch = originalFetch
   requestedMaxTokens = undefined
+  requestedBody = undefined
   if (originalApiKey === undefined) delete process.env['GROQ_API_KEY']
   else process.env['GROQ_API_KEY'] = originalApiKey
 })
@@ -21,7 +23,10 @@ afterEach(() => {
 function respond(content: string, finishReason: string): void {
   process.env['GROQ_API_KEY'] = 'test-key-not-real'
   globalThis.fetch = async (_input, init) => {
-    const body = JSON.parse(String(init?.body ?? '{}')) as { max_tokens?: number }
+    const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> & {
+      max_tokens?: number
+    }
+    requestedBody = body
     requestedMaxTokens = body.max_tokens
     return new Response(
       JSON.stringify({
@@ -99,6 +104,34 @@ describe('structured AI diagnostics', () => {
     )
 
     assert.deepEqual(result, { ok: true })
+  })
+
+  test('structured-output request options reach the provider envelope exactly', async () => {
+    respond(JSON.stringify({ ok: true }), 'stop')
+    const responseFormat = {
+      type: 'json_schema' as const,
+      json_schema: {
+        name: 'safe_contract',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+          required: ['ok'],
+          additionalProperties: false,
+        },
+      },
+    }
+
+    await callProviderJSON(
+      model,
+      [{ role: 'user', content: 'return JSON' }],
+      schema,
+      { maxTokens: 400, responseFormat, reasoningEffort: 'low' },
+      Date.now() + 30_000,
+    )
+
+    assert.deepEqual(requestedBody?.['response_format'], responseFormat)
+    assert.equal(requestedBody?.['reasoning_effort'], 'low')
   })
 
   test('invalid provider envelope reports safe typed metadata and never retains raw content', async () => {

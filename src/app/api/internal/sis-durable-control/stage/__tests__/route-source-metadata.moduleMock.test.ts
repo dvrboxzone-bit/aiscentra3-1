@@ -117,7 +117,7 @@ test('real source type and trust score reach Durable SIS stage payloads without 
   const parserPayload =
     reservations.find((reservation) => reservation.content.includes('trust=0.91'))?.content ?? ''
   assert.match(classifierPayload, /SOURCE: Verified Source \(primary\)/)
-  assert.match(parserPayload, /SOURCE: Verified Source \| trust=0\.91 \|/)
+  assert.match(parserPayload, /SOURCE: Verified Source \| type=primary \| trust=0\.91 \|/)
   assert.doesNotMatch(classifierPayload, /Unknown Source/)
   assert.doesNotMatch(parserPayload, /Unknown Source|trust=0\.5/)
 })

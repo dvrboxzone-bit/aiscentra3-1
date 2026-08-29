@@ -29,6 +29,10 @@ export type AIMessage = {
 export type AIOptions = {
   maxTokens?: number
   temperature?: number
+  responseFormat?:
+    | { type: 'json_object' }
+    | { type: 'json_schema'; json_schema: Record<string, unknown> }
+  reasoningEffort?: 'low' | 'medium' | 'high'
 }
 
 export type AIResult = {
@@ -265,6 +269,12 @@ export async function callProvider(
         messages,
         max_tokens: maxTokens,
         temperature,
+        ...(options.responseFormat === undefined
+          ? {}
+          : { response_format: options.responseFormat }),
+        ...(options.reasoningEffort === undefined
+          ? {}
+          : { reasoning_effort: options.reasoningEffort }),
       }),
       signal,
     })

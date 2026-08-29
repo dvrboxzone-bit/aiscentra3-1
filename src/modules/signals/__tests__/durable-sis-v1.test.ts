@@ -15,8 +15,12 @@ import {
   nextRunnableModel,
 } from '../durable-sis-v1'
 import {
+  DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION,
+  DURABLE_SIS_V1_PARSER_JSON_SCHEMA,
   DURABLE_SIS_V1_PARSER_MAX_TOKENS,
   DurableSisParserOutputSchema,
+  buildDurableSisParserPrompt,
+  durableSisParserRequestOptions,
   maximalDurableParserOutput,
 } from '../durable-sis-parser-contract'
 
@@ -69,6 +73,78 @@ test('maximum strict parser JSON contract fits the derived 2048-token output bud
     DurableSisParserOutputSchema.safeParse({ ...maximum, unbounded_extra: 'forbidden' }).success,
     false,
   )
+})
+
+test('production Groq schema-validation case is closed by strict constrained decoding', () => {
+  const productionDiagnostic = {
+    run_id: '4f017a68-a7c2-4347-9388-9c3750e99bb6',
+    provider: 'groq',
+    model: 'openai/gpt-oss-120b',
+    type: 'schema_validation',
+    http_status: 200,
+    finish_reason: 'stop',
+    content_length: 796,
+  }
+  const options = durableSisParserRequestOptions('groq')
+
+  assert.equal(productionDiagnostic.type, 'schema_validation')
+  assert.deepEqual(options, {
+    reasoningEffort: 'low',
+    responseFormat: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'durable_sis_v1_parser',
+        strict: true,
+        schema: DURABLE_SIS_V1_PARSER_JSON_SCHEMA,
+      },
+    },
+  })
+  assert.equal(DURABLE_SIS_V1_PARSER_JSON_SCHEMA.additionalProperties, false)
+  assert.deepEqual(
+    new Set(DURABLE_SIS_V1_PARSER_JSON_SCHEMA.required),
+    new Set(Object.keys(DURABLE_SIS_V1_PARSER_JSON_SCHEMA.properties)),
+  )
+})
+
+test('production Cloudflare truncated-envelope case gets bounded JSON schema and reasoning', () => {
+  const productionDiagnostic = {
+    run_id: '4f017a68-a7c2-4347-9388-9c3750e99bb6',
+    provider: 'cloudflare',
+    model: '@cf/zai-org/glm-4.7-flash',
+    type: 'invalid_response_envelope',
+    http_status: 200,
+    finish_reason: 'length',
+    content_length: 17_268,
+  }
+  const options = durableSisParserRequestOptions('cloudflare')
+
+  assert.equal(productionDiagnostic.finish_reason, 'length')
+  assert.deepEqual(options, {
+    reasoningEffort: 'low',
+    responseFormat: {
+      type: 'json_schema',
+      json_schema: DURABLE_SIS_V1_PARSER_JSON_SCHEMA,
+    },
+  })
+  assert.equal(DURABLE_SIS_V1_PARSER_MAX_TOKENS, 2048)
+})
+
+test('durable parser prompt is bounded and keeps evidence and quality rules content-independent', () => {
+  const prompt = buildDurableSisParserPrompt({
+    title: `Title ${'x'.repeat(2_000)}`,
+    content: `Evidence ${'y'.repeat(20_000)}`,
+    sourceName: `Source ${'z'.repeat(1_000)}`,
+    sourceType: 'research',
+    sourceTrustScore: 0.8,
+    candidateCategory: 'RESEARCH',
+  })
+
+  assert.ok(prompt.length < 1_200)
+  assert.match(prompt, /type=research \| trust=0\.8/)
+  assert.match(DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION, /Never invent numbers/)
+  assert.match(DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION, /corroboration_factor=2/)
+  assert.match(DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION, /cap novelty_factor at 7/)
+  assert.doesNotMatch(DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION, /EXAMPLE INPUT|worked examples/i)
 })
 
 test('one failed stage advances exactly one model and diagnostics reject raw fields', () => {
