@@ -3,7 +3,7 @@ import type { AIOptions } from '@/lib/ai/client'
 import type { ProviderName } from '@/lib/ai/config'
 
 const TITLE_MAX_CHARS = 80
-const DESCRIPTION_MAX_CHARS = 400
+const DESCRIPTION_MAX_CHARS = 512
 const ENTITY_NAME_MAX_CHARS = 48
 const ENTITY_MAX_ITEMS = 6
 const NOTE_MAX_CHARS = 80
@@ -199,7 +199,7 @@ export function durableSisParserRequestOptions(
 export const DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION = `You are an evidence-bound signal parser, not a conversational assistant.
 Return exactly one minified JSON object that matches the supplied schema. Never emit markdown, analysis, reasoning, commentary, or extra keys.
 Use only facts and named entities present in SOURCE, TITLE, and CONTENT. Never invent numbers, benchmarks, actors, adoption, or corroboration.
-Write a factual 10-80 character title without hedging. Write a 50-400 character description in 2-3 short active-voice sentences; state what changed, why it matters, and only evidence-backed uncertainty. Do not begin with I, We, or Our.
+Write a factual 10-80 character title without hedging. Write a 50-512 character description in 2-3 short active-voice sentences; state what changed, why it matters, and only evidence-backed uncertainty. Do not begin with I, We, or Our.
 All nine factors are integers 0-10 and must not be inflated. One supplied source means corroboration_factor=2. Authority follows the supplied source type and trust. If novelty exceeds 7, novelty_prior_example must name a concrete prior example from the supplied evidence; otherwise cap novelty_factor at 7 and use null.
 Extract at most 6 specific entities. Set is_marketing only when promotion is the primary purpose. With no supplied comparison titles, set is_duplicate=false and duplicate_note=null.
 All fields are required. Notes are null or at most 80 characters.`
