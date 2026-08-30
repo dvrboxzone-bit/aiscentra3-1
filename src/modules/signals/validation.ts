@@ -18,16 +18,26 @@ export interface ValidationInput {
 
 export interface ValidationResult {
   valid: boolean
-  flags: string[]           // Warning flags (ACTIVE with warning)
-  rejectionReason?: string  // If set, signal must be REJECTED
-  canRetry: boolean         // true = re-enrich; false = hard reject
+  flags: string[] // Warning flags (ACTIVE with warning)
+  rejectionReason?: string // If set, signal must be REJECTED
+  canRetry: boolean // true = re-enrich; false = hard reject
 }
 
 // Terms that indicate hedging — forbidden in titles (VAL-09)
 const HEDGING_TERMS = [
-  'reportedly', 'possibly', 'allegedly', 'rumored', 'rumoured',
-  'i think', 'we think', 'may have', 'might have', 'could have',
-  'sources say', 'sources claim', 'unconfirmed',
+  'reportedly',
+  'possibly',
+  'allegedly',
+  'rumored',
+  'rumoured',
+  'i think',
+  'we think',
+  'may have',
+  'might have',
+  'could have',
+  'sources say',
+  'sources claim',
+  'unconfirmed',
 ]
 
 // First-person starts forbidden in description (VAL-12)
@@ -46,12 +56,12 @@ export function validateSignal(input: ValidationInput): ValidationResult {
     }
   }
 
-  // VAL-02: description length 50–500 characters
-  if (input.description.length < 50 || input.description.length > 500) {
+  // VAL-02: description length 50–512 characters
+  if (input.description.length < 50 || input.description.length > 512) {
     return {
       valid: false,
       flags: [],
-      rejectionReason: `VAL-02: description length ${input.description.length} (required 50–500)`,
+      rejectionReason: `VAL-02: description length ${input.description.length} (required 50–512)`,
       canRetry: true,
     }
   }
@@ -65,7 +75,11 @@ export function validateSignal(input: ValidationInput): ValidationResult {
       canRetry: false,
     }
   }
-  if (!Number.isInteger(input.confidence_score) || input.confidence_score < 0 || input.confidence_score > 100) {
+  if (
+    !Number.isInteger(input.confidence_score) ||
+    input.confidence_score < 0 ||
+    input.confidence_score > 100
+  ) {
     return {
       valid: false,
       flags: [],
@@ -96,8 +110,15 @@ export function validateSignal(input: ValidationInput): ValidationResult {
 
   // VAL-07: category must be one of nine approved values
   const VALID_CATEGORIES: SignalCategory[] = [
-    'RESEARCH', 'MODELS', 'COMPANIES', 'INFRASTRUCTURE',
-    'OPEN_SOURCE', 'FUNDING', 'REGULATION', 'AGENTS', 'HARDWARE',
+    'RESEARCH',
+    'MODELS',
+    'COMPANIES',
+    'INFRASTRUCTURE',
+    'OPEN_SOURCE',
+    'FUNDING',
+    'REGULATION',
+    'AGENTS',
+    'HARDWARE',
   ]
   if (!VALID_CATEGORIES.includes(input.category)) {
     return {
@@ -139,9 +160,7 @@ export function validateSignal(input: ValidationInput): ValidationResult {
   // Checked in deduplication before enrichment — if it reaches here, it passed
 
   // VAL-12: description must not begin with first-person
-  const startsFirstPerson = FIRST_PERSON_STARTS.some((start) =>
-    input.description.startsWith(start),
-  )
+  const startsFirstPerson = FIRST_PERSON_STARTS.some((start) => input.description.startsWith(start))
   if (startsFirstPerson) {
     return {
       valid: false,

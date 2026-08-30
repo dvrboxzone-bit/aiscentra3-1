@@ -4,6 +4,7 @@ import test from 'node:test'
 import { parse as parseYaml } from 'yaml'
 import { estimateRequestTokens } from '@/lib/ai/client'
 import type { ModelRef } from '@/lib/ai/config'
+import { validateSignal } from '../validation'
 
 import {
   DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
@@ -72,6 +73,36 @@ test('maximum strict parser JSON contract fits the derived 2048-token output bud
   assert.equal(
     DurableSisParserOutputSchema.safeParse({ ...maximum, unbounded_extra: 'forbidden' }).success,
     false,
+  )
+})
+
+test('durable parser and local signal validation share the 512-character description boundary', () => {
+  const maximum = maximalDurableParserOutput()
+  const description416 = 'x'.repeat(416)
+  const description513 = 'x'.repeat(513)
+
+  assert.equal(DURABLE_SIS_V1_PARSER_JSON_SCHEMA.properties.description.maxLength, 512)
+  assert.equal(
+    DurableSisParserOutputSchema.safeParse({ ...maximum, description: description416 }).success,
+    true,
+  )
+  assert.equal(
+    DurableSisParserOutputSchema.safeParse({ ...maximum, description: description513 }).success,
+    false,
+  )
+
+  const validationInput = {
+    title: 'Bounded parser contract',
+    signal_score: 70,
+    confidence_score: 70,
+    category: 'RESEARCH' as const,
+    observation_ids: ['synthetic-observation'],
+    entities: [{ name: 'Synthetic Entity', type: 'TECHNOLOGY' }],
+  }
+  assert.equal(validateSignal({ ...validationInput, description: description416 }).valid, true)
+  assert.match(
+    validateSignal({ ...validationInput, description: description513 }).rejectionReason ?? '',
+    /required 50–512/,
   )
 })
 
