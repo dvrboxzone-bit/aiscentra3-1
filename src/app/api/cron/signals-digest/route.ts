@@ -8,7 +8,10 @@
  * publicly-visible Signals (status IN ('ACTIVE','PROMOTED') -- the
  * exact same real filter getSignals() itself already uses for the
  * public /signals catalog, reused here rather than reinvented)
- * created since the last successful send.
+ * created since the last successful send. The first run initializes
+ * a baseline at the newest existing public Signal and sends nothing,
+ * so enabling delivery can never turn the historical catalog into an
+ * accidental first broadcast.
  *
  * State is tracked in a new, additive-only table
  * (`signal_digest_state`, single row, id=1) recording only
@@ -79,22 +82,15 @@ function buildDigestHtml(signals: DigestSignal[], appUrl: string): string {
 
 export async function GET(request: Request): Promise<NextResponse> {
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env['CRON_SECRET']}`) {
+  const cronSecret = process.env['CRON_SECRET']
+  if (!cronSecret) {
+    return NextResponse.json({ ok: false, reason: 'cron_not_configured' }, { status: 503 })
+  }
+  if (authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const apiKey = process.env['RESEND_API_KEY']
-  const segmentId = process.env['RESEND_SEGMENT_ALL_SUBSCRIBERS_ID']
-  const topicId = process.env['RESEND_TOPIC_SIGNALS_ID']
   const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
-
-  if (!apiKey || !segmentId || !topicId) {
-    console.error(
-      '[cron/signals-digest] Missing required env var(s): RESEND_API_KEY / RESEND_SEGMENT_ALL_SUBSCRIBERS_ID / RESEND_TOPIC_SIGNALS_ID',
-    )
-    return NextResponse.json({ ok: false, reason: 'not_configured' }, { status: 503 })
-  }
-
   const supabase = createAdminClient()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -109,7 +105,47 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, reason: 'state_read_failed' }, { status: 500 })
   }
 
-  const lastSentAt: string = stateRow?.last_sent_at ?? new Date(0).toISOString()
+  if (!stateRow) {
+    // First-run safety: establish the newest already-public Signal as
+    // the delivery baseline. Historical Signals are intentionally not
+    // returned to the sender and no Resend configuration is read here.
+    // If the public catalog is empty, the current instant is the only
+    // safe baseline: a future public Signal remains newer and eligible.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: newestPublicSignal, error: baselineQueryError } = await (supabase as any)
+      .from('signals')
+      .select('created_at')
+      .in('status', ['ACTIVE', 'PROMOTED'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (baselineQueryError) {
+      console.error(
+        '[cron/signals-digest] Failed to query baseline Signal:',
+        baselineQueryError.message,
+      )
+      return NextResponse.json({ ok: false, reason: 'baseline_query_failed' }, { status: 500 })
+    }
+
+    const baselineCreatedAt: string = newestPublicSignal?.created_at ?? new Date().toISOString()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: baselineWriteError } = await (supabase as any)
+      .from('signal_digest_state')
+      .upsert({ id: 1, last_sent_at: baselineCreatedAt })
+
+    if (baselineWriteError) {
+      console.error(
+        '[cron/signals-digest] Failed to initialize digest baseline:',
+        baselineWriteError.message,
+      )
+      return NextResponse.json({ ok: false, reason: 'baseline_write_failed' }, { status: 500 })
+    }
+
+    return NextResponse.json({ ok: true, sent: false, reason: 'baseline_initialized' })
+  }
+
+  const lastSentAt: string = stateRow.last_sent_at
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: signals, error: signalsError } = await (supabase as any)
@@ -127,6 +163,17 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   if (!signals || signals.length === 0) {
     return NextResponse.json({ ok: true, sent: false, reason: 'no_new_signals' })
+  }
+
+  const apiKey = process.env['RESEND_API_KEY']
+  const segmentId = process.env['RESEND_SEGMENT_ALL_SUBSCRIBERS_ID']
+  const topicId = process.env['RESEND_TOPIC_SIGNALS_ID']
+
+  if (!apiKey || !segmentId || !topicId) {
+    console.error(
+      '[cron/signals-digest] Missing required env var(s): RESEND_API_KEY / RESEND_SEGMENT_ALL_SUBSCRIBERS_ID / RESEND_TOPIC_SIGNALS_ID',
+    )
+    return NextResponse.json({ ok: false, reason: 'not_configured' }, { status: 503 })
   }
 
   const digestSignals = signals as Array<DigestSignal & { created_at: string }>
