@@ -15,12 +15,28 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const src = (): string => readFileSync('src/app/api/cron/signals-digest/route.ts', 'utf8')
+const pipelineSrc = (): string => readFileSync('src/app/api/cron/pipeline/route.ts', 'utf8')
+const migrationSrc = (): string =>
+  readFileSync('supabase/migrations/20260827143320_add_signal_digest_state.sql', 'utf8')
 
 describe('/api/cron/signals-digest route — security and correctness invariants', () => {
   test('requires the real CRON_SECRET shared-secret guard before any work', () => {
     const s = src()
-    assert.match(s, /authHeader !== `Bearer \$\{process\.env\['CRON_SECRET'\]\}`/)
+    assert.match(s, /const cronSecret = process\.env\['CRON_SECRET'\]/)
+    assert.match(s, /if \(!cronSecret\)/)
+    assert.match(s, /authHeader !== `Bearer \$\{cronSecret\}`/)
     assert.match(s, /status: 401/)
+  })
+
+  test('has one dedicated daily scheduler after pipeline and no duplicate pipeline dispatch', () => {
+    const vercel = JSON.parse(readFileSync('vercel.json', 'utf8')) as {
+      crons: Array<{ path: string; schedule: string }>
+    }
+    assert.deepEqual(vercel.crons, [
+      { path: '/api/cron/pipeline', schedule: '0 10 * * *' },
+      { path: '/api/cron/signals-digest', schedule: '0 11 * * *' },
+    ])
+    assert.doesNotMatch(pipelineSrc(), /\/api\/cron\/signals-digest/)
   })
 
   test('uses the exact same real public-visibility filter getSignals() itself uses -- status IN (ACTIVE, PROMOTED)', () => {
@@ -53,10 +69,16 @@ describe('/api/cron/signals-digest route — security and correctness invariants
   test('digest state advances only to the newest INCLUDED signal, and only after a real successful send', () => {
     const s = src()
     const sendIdx = s.indexOf("fetch('https://api.resend.com/broadcasts'")
-    const upsertIdx = s.indexOf("from('signal_digest_state')\n    .upsert")
-    assert.ok(sendIdx > -1 && upsertIdx > -1, 'both the send call and the state upsert must exist')
+    const upsertIndexes = [...s.matchAll(/\.from\('signal_digest_state'\)\s*\.upsert/g)].map(
+      (match) => match.index,
+    )
+    const postSendUpsertIdx = upsertIndexes.find((index) => index > sendIdx) ?? -1
     assert.ok(
-      upsertIdx > sendIdx,
+      sendIdx > -1 && postSendUpsertIdx > -1,
+      'both the send call and its later state upsert must exist',
+    )
+    assert.ok(
+      postSendUpsertIdx > sendIdx,
       'the state upsert must occur textually after the send call, not before it',
     )
   })
@@ -64,6 +86,16 @@ describe('/api/cron/signals-digest route — security and correctness invariants
   test('a failed state-update after a successful send is logged loudly, not silently swallowed', () => {
     const s = src()
     assert.match(s, /CRITICAL: broadcast sent but state update failed/)
+  })
+
+  test('digest state has RLS and no anon/authenticated policy or grant', () => {
+    const migration = migrationSrc()
+    assert.match(migration, /ALTER TABLE public\.signal_digest_state ENABLE ROW LEVEL SECURITY;/)
+    assert.doesNotMatch(migration, /CREATE POLICY[\s\S]*signal_digest_state/i)
+    assert.doesNotMatch(
+      migration,
+      /GRANT\s+.+\s+ON\s+(?:TABLE\s+)?public\.signal_digest_state\s+TO\s+(?:anon|authenticated)/i,
+    )
   })
 
   test('missing required Resend configuration produces an honest 503, not a silent no-op or a crash', () => {
