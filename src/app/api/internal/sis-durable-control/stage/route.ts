@@ -297,7 +297,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         )
         const raw = SISOutputSchema.parse(rawResult)
         const sis = computeSIS(raw, observation.title, observation.content)
-        if (sis.decision === 'DISCARD' || sis.decision === 'ARCHIVE') {
+        if (sis.decision === 'DISCARD') {
           await complete(db, providerClaim, {
             p_validated_output: sis,
             p_finalization_outcome: 'DISCARD',
@@ -411,7 +411,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         })
         return NextResponse.json({ attempted: 1, status: 'QUEUED', stage: 'FINALIZE' })
       }
-      const outcome = sis?.decision === 'WEAK_SIGNAL' ? 'WEAK_SIGNAL' : 'SIGNAL'
+      const outcome =
+        sis?.decision === 'WEAK_SIGNAL' || sis?.decision === 'ARCHIVE' ? 'WEAK_SIGNAL' : 'SIGNAL'
       const signal = {
         ...enriched,
         ...scores,
