@@ -344,21 +344,32 @@
   visibility: visible;
   transform: translateY(0);
 }
-.dropdown-content a {
+.dropdown-content a,
+.dropdown-content button {
   display: block;
+  width: 100%;
   padding: 12px 20px;
   font-size: 14px;
   font-weight: 500;
   color: var(--color-silver-haze);
   border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
   transition:
     background 0.2s,
     color 0.2s;
 }
-.dropdown-content a:last-child {
+.dropdown-content a:last-child,
+.dropdown-content button:last-child {
   border-bottom: none;
 }
-.dropdown-content a:hover {
+.dropdown-content a:hover,
+.dropdown-content button:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--color-mint-signal);
 }
@@ -496,6 +507,92 @@
   visibility: visible;
 }
 
+/* AIscentra — Assistant edge tab (explicit owner instruction).
+   ВАЖНО (owner's own explicit rule): no third-party/foreign colors --
+   only this site's real, existing main + accent palette variables.
+   Structure/sizing/spacing below still follows the owner's own full
+   dated spec verbatim; only the color values are mapped to real site
+   variables instead of that spec's own separate fixed hex codes. */
+.assistant-tab {
+  --tab-bg: var(--color-deep-obsidian);
+  --tab-bg-hover: var(--color-surface-tonal);
+  --tab-border: var(--color-mint-signal);
+  --tab-border-hover: var(--color-frost);
+
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 55;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 56px;
+  padding: 18px 0;
+
+  background: var(--tab-bg);
+  border: 1px solid var(--tab-border);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.assistant-tab:hover {
+  background: var(--tab-bg-hover);
+  border-color: var(--tab-border-hover);
+}
+.assistant-tab:focus-visible {
+  outline: 2px solid var(--color-mint-signal);
+  outline-offset: 2px;
+}
+.assistant-tab__io {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: var(--color-frost);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+.assistant-tab__divider {
+  width: 24px;
+  height: 1px;
+  background: var(--color-border-subtle);
+  flex-shrink: 0;
+}
+.assistant-tab__label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: var(--color-mint-signal);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+/* Synchronized 1:1 with .assistant-panel's own real open transition
+   (same 0.35s cubic-bezier(0.16, 1, 0.3, 1)) -- the tab slides off
+   the same edge, at the same moment, the panel's own logo becomes
+   visible from it, matching the owner's own "continuous single
+   object" motion brief. */
+.assistant-tab.is-hidden {
+  transform: translateY(-50%) translateX(120%);
+  opacity: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-tab {
+    transition-duration: 0.01ms;
+  }
+}
+
 .mobile-menu-head {
   display: flex;
   align-items: center;
@@ -517,13 +614,22 @@
   overflow-y: auto;
   padding: 1.5rem;
 }
-.mobile-menu-scroll > a:not(.btn-pill) {
+.mobile-menu-scroll > a:not(.btn-pill),
+.mobile-menu-scroll > button:not(.btn-pill) {
+  display: block;
+  width: 100%;
   padding: 0.65rem 0;
   color: var(--color-frost);
   font-size: 15px;
+  text-align: left;
+  background: transparent;
+  border: none;
   border-bottom: 1px solid var(--color-border-subtle);
+  font-family: inherit;
+  cursor: pointer;
 }
-.mobile-menu-scroll > a:hover {
+.mobile-menu-scroll > a:hover,
+.mobile-menu-scroll > button:hover {
   color: var(--color-mint-signal);
 }
 .mobile-menu-group-label {

@@ -71,7 +71,7 @@ export const metadata: Metadata = {
     type: 'website',
     siteName: 'AIscentra',
     title: 'AIscentra — Intelligence Observatory',
-    description: 'Observe. Analyze. Accelerate the Future.',
+    description: 'An independent, evidence-first AI intelligence observatory.',
   },
   twitter: { card: 'summary_large_image', title: 'AIscentra — Intelligence Observatory' },
   robots: { index: true, follow: true },

@@ -188,13 +188,9 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                   validation.
                 </p>
               </div>
-              <span
-                className="arrow-link opacity-40"
-                data-field="forecasts-link"
-                title="Not yet available"
-              >
+              <Link href="/forecasts" className="arrow-link" data-field="forecasts-link">
                 EXPLORE FORECASTS <span>→</span>
-              </span>
+              </Link>
             </div>
             <div className="reveal grid grid-cols-2 gap-6">
               <VfinalImageSlot

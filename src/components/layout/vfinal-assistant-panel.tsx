@@ -163,6 +163,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
       <div className="absolute inset-0" onClick={close} />
 
       <aside
+        id="assistant-panel"
         role="dialog"
         aria-label="Observatory Assistant"
         className={`assistant-panel relative flex flex-col ${isOpen ? 'open' : ''}`}
@@ -175,7 +176,18 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             aria-label="Close Assistant"
             className="text-silver-haze hover:text-mint-signal"
           >
-            ✕
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect
+                x="3"
+                y="4"
+                width="18"
+                height="16"
+                rx="2"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <line x1="15" y1="4" x2="15" y2="20" stroke="currentColor" strokeWidth="2" />
+            </svg>
           </button>
         </div>
 
@@ -250,7 +262,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask the Observatory anything about the AI ecosystem…"
-            className="observatory-input font-body flex-1 border-none bg-transparent px-2 py-2 text-sm text-frost"
+            className="observatory-input font-body flex-1 rounded-md border border-border-subtle bg-surface-tonal px-3 py-2 text-sm text-frost"
           />
           <button
             type="submit"

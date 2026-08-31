@@ -6,6 +6,7 @@ import { VfinalProgressAndBackToTop } from './vfinal-progress-back-to-top'
 import { VfinalInteractionController } from './vfinal-interaction-controller'
 import { VfinalAssistantPanelProvider } from './vfinal-assistant-context'
 import { VfinalAssistantPanel } from './vfinal-assistant-panel'
+import { VfinalAssistantTab } from './vfinal-assistant-tab'
 
 /**
  * AIscentra — vfinal public shell (Frontend Design Foundation, layer 2
@@ -50,6 +51,7 @@ export function VfinalPublicShell({ children }: { children: React.ReactNode }): 
         <main>{children}</main>
         <VfinalFooter />
         <VfinalAssistantPanel />
+        <VfinalAssistantTab />
       </div>
     </VfinalAssistantPanelProvider>
   )

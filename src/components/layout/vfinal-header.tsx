@@ -190,12 +190,21 @@ export function VfinalHeader(): React.JSX.Element {
               Observations
             </Link>
 
-            <Link
-              href="/trajectories"
-              className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
-            >
-              Trajectories
-            </Link>
+            <div className="dropdown hide-mobile">
+              <button
+                type="button"
+                className="flex items-center gap-1 text-sm font-medium text-frost underline-offset-4 hover:underline"
+                aria-haspopup="true"
+              >
+                Research <span className="text-xs">▼</span>
+              </button>
+              <div className="dropdown-content">
+                <Link href="/trajectories">Trajectories</Link>
+                <Link href="/forecasts">Forecasts</Link>
+                <Link href="/editorial">Editorial</Link>
+                <Link href="/emerging-patterns">Emerging Patterns</Link>
+              </div>
+            </div>
 
             <div className="dropdown hide-mobile">
               <button
@@ -209,6 +218,9 @@ export function VfinalHeader(): React.JSX.Element {
                 <Link href="/about">About</Link>
                 <Link href="/about#team">Team</Link>
                 <Link href="/contact">Contact</Link>
+                <button type="button" onClick={handleAssistantClick}>
+                  Assistant
+                </button>
               </div>
             </div>
 
@@ -226,14 +238,6 @@ export function VfinalHeader(): React.JSX.Element {
                 <Link href="/about#roadmap">Roadmap</Link>
               </div>
             </div>
-
-            <button
-              type="button"
-              onClick={handleAssistantClick}
-              className="hide-mobile text-sm font-medium text-frost underline-offset-4 hover:underline"
-            >
-              Assistant
-            </button>
 
             <a
               href="mailto:aiscentra@gmail.com"
@@ -308,12 +312,23 @@ export function VfinalHeader(): React.JSX.Element {
             </Link>
           ))}
 
+          <span className="mobile-menu-group-label">RESEARCH</span>
+          <Link href="/trajectories" onClick={() => closeMobileMenu(false)}>
+            Trajectories
+          </Link>
+          <Link href="/forecasts" onClick={() => closeMobileMenu(false)}>
+            Forecasts
+          </Link>
+          <Link href="/editorial" onClick={() => closeMobileMenu(false)}>
+            Editorial
+          </Link>
+          <Link href="/emerging-patterns" onClick={() => closeMobileMenu(false)}>
+            Emerging Patterns
+          </Link>
+
           <span className="mobile-menu-group-label">EXPLORE</span>
           <Link href="/observatory" onClick={() => closeMobileMenu(false)}>
             Observations
-          </Link>
-          <Link href="/trajectories" onClick={() => closeMobileMenu(false)}>
-            Trajectories
           </Link>
           <button type="button" onClick={handleAssistantClick}>
             Assistant
