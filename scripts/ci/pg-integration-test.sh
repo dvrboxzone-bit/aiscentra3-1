@@ -126,18 +126,49 @@ $PG -v ON_ERROR_STOP=1 -f "$HARDENING_MIGRATION" >/dev/null
 # production schema in a throwaway test cluster.
 echo "Creating minimal fixture tables for signal-corroboration atomicity tests..."
 $PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TYPE public.signal_status AS ENUM (
+  'CANDIDATE', 'DRAFT', 'WEAK', 'ACTIVE', 'PROMOTED', 'EXPIRED', 'DORMANT', 'REJECTED'
+);
+CREATE TYPE public.signal_category AS ENUM (
+  'RESEARCH', 'MODELS', 'COMPANIES', 'INFRASTRUCTURE', 'OPEN_SOURCE',
+  'FUNDING', 'REGULATION', 'AGENTS', 'HARDWARE'
+);
 CREATE TABLE public.signals (
   id UUID PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT 'Durable SIS fixture Signal',
+  description TEXT NOT NULL DEFAULT 'Primary-source evidence supports this Durable SIS fixture Signal.',
+  category public.signal_category NOT NULL DEFAULT 'RESEARCH',
   observation_ids UUID[] NOT NULL DEFAULT '{}',
+  impact_factor SMALLINT NOT NULL DEFAULT 0,
+  actor_factor SMALLINT NOT NULL DEFAULT 0,
+  novelty_factor SMALLINT NOT NULL DEFAULT 0,
+  verifiability_factor SMALLINT NOT NULL DEFAULT 0,
+  strategic_factor SMALLINT NOT NULL DEFAULT 0,
+  authority_factor SMALLINT NOT NULL DEFAULT 0,
+  corroboration_factor SMALLINT NOT NULL DEFAULT 0,
+  specificity_factor SMALLINT NOT NULL DEFAULT 0,
+  category_confidence_factor SMALLINT NOT NULL DEFAULT 0,
+  consistency_factor SMALLINT NOT NULL DEFAULT 7,
+  signal_score INT NOT NULL DEFAULT 0,
   confidence_score INT NOT NULL DEFAULT 60,
   qualification_score NUMERIC,
   momentum_score INT NOT NULL DEFAULT 0,
   momentum_last_calculated TIMESTAMPTZ,
-  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  status public.signal_status NOT NULL DEFAULT 'ACTIVE',
   intelligence_type TEXT,
+  sis_novelty NUMERIC,
+  sis_importance NUMERIC,
+  sis_urgency NUMERIC,
+  sis_confidence NUMERIC,
   sis_final NUMERIC,
+  human_relevance_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
   anti_hype_score NUMERIC,
+  anti_hype_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+  relevance_horizon TEXT,
+  lifecycle_state TEXT,
+  engine_version TEXT,
   validation_flags TEXT[] NOT NULL DEFAULT '{}',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE public.sources (
