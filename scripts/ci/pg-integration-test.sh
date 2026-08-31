@@ -134,7 +134,7 @@ CREATE TYPE public.signal_category AS ENUM (
   'FUNDING', 'REGULATION', 'AGENTS', 'HARDWARE'
 );
 CREATE TABLE public.signals (
-  id UUID PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL DEFAULT 'Durable SIS fixture Signal',
   description TEXT NOT NULL DEFAULT 'Primary-source evidence supports this Durable SIS fixture Signal.',
   category public.signal_category NOT NULL DEFAULT 'RESEARCH',
