@@ -974,8 +974,14 @@ check "repeated qualified finalization creates no second Signal or content decis
 
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
-  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs,
-  public.signal_quality_decisions, public.signal_decision_log, public.signals, public.observations;
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
+DELETE FROM public.signal_decision_log
+WHERE observation_id IN (
+  '$DURABLE_OBS','$CANARY_ELIGIBLE','$CANARY_PROCESSED','$CANARY_REJECTED','$CANARY_INACTIVE',
+  '$WEAK_OBS','$SIGNAL_OBS'
+);
+DELETE FROM public.observations
+WHERE id IN ('$DURABLE_OBS','$CANARY_ELIGIBLE','$CANARY_PROCESSED','$CANARY_REJECTED','$CANARY_INACTIVE');
 DELETE FROM public.sources WHERE id='$INACTIVE_SOURCE';
 DELETE FROM pgmq.q_durable_sis_v1;
 UPDATE public.sis_execution_controls
