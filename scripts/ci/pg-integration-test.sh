@@ -885,12 +885,66 @@ check "FAILED audit and exactly one nonfailed retry coexist" "2|1" \
 check "provider limits remain the configured production bounds" "30000|20|3" \
   "$($PG -c "SELECT groq_daily_token_limit||'|'||cloudflare_daily_request_limit||'|'||max_attempts_per_stage FROM public.sis_execution_controls WHERE control_key='durable_sis_v1_control_20260825';")"
 
+echo ""
+echo "TEST 17f — qualified Durable SIS outcomes are non-public and idempotent"
+WEAK_OBS="36363636-3636-4363-8363-363636363636"
+WEAK_RUN="36363636-3636-4363-8363-363636363631"
+SIGNAL_OBS="37373737-3737-4373-8373-373737373737"
+SIGNAL_RUN="37373737-3737-4373-8373-373737373731"
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+INSERT INTO public.observations(id,processed,url_verified_ok) VALUES
+  ('$WEAK_OBS',false,true),
+  ('$SIGNAL_OBS',false,true);
+INSERT INTO public.sis_execution_runs(
+  id,control_key,observation_id,status,current_stage,
+  finalization_outcome,finalization_signal,finalization_decision
+) VALUES
+  (
+    '$WEAK_RUN','durable_sis_v1_control_20260825','$WEAK_OBS','READY_TO_FINALIZE','FINALIZE',
+    'WEAK_SIGNAL',
+    '{"title":"Bounded technical change","description":"Primary evidence supports a bounded non-public weak Signal.","category":"RESEARCH","impact_factor":6,"actor_factor":6,"novelty_factor":6,"verifiability_factor":7,"strategic_factor":6,"authority_factor":7,"corroboration_factor":2,"specificity_factor":7,"category_confidence_factor":7,"signal_score":60,"confidence_score":58,"momentum_score":20}'::jsonb,
+    '{"sis_novelty":6,"sis_importance":6,"sis_urgency":5,"sis_confidence":6,"sis_final":4.8,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Fixture weak decision."}'::jsonb
+  ),
+  (
+    '$SIGNAL_RUN','durable_sis_v1_control_20260825','$SIGNAL_OBS','READY_TO_FINALIZE','FINALIZE',
+    'SIGNAL',
+    '{"title":"Material technical change","description":"Primary evidence supports a draft Signal pending explicit quality approval.","category":"MODELS","impact_factor":8,"actor_factor":8,"novelty_factor":8,"verifiability_factor":8,"strategic_factor":8,"authority_factor":8,"corroboration_factor":2,"specificity_factor":8,"category_confidence_factor":8,"signal_score":80,"confidence_score":78,"momentum_score":40}'::jsonb,
+    '{"sis_novelty":7,"sis_importance":8,"sis_urgency":8,"sis_confidence":8,"sis_final":6.75,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Fixture Signal decision."}'::jsonb
+  );
+WITH messages AS (
+  SELECT '$WEAK_RUN'::uuid AS run_id,
+         pgmq.send('durable_sis_v1',jsonb_build_object('stage','FINALIZE','run_id','$WEAK_RUN')) AS message_id
+  UNION ALL
+  SELECT '$SIGNAL_RUN'::uuid,
+         pgmq.send('durable_sis_v1',jsonb_build_object('stage','FINALIZE','run_id','$SIGNAL_RUN'))
+)
+UPDATE public.sis_execution_runs AS run
+SET finalization_message_id=messages.message_id
+FROM messages
+WHERE run.id=messages.run_id;
+SELECT public.finalize_durable_sis_v1('$WEAK_RUN',
+  (SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$WEAK_RUN'));
+SELECT public.finalize_durable_sis_v1('$SIGNAL_RUN',
+  (SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$SIGNAL_RUN'));
+SQL
+
+check "WEAK_SIGNAL finalizes as exactly one non-public WEAK/PENDING Signal" "WEAK|PENDING|false|1|1" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.has_verified_source||'|'||(SELECT count(*) FROM public.signals WHERE '$WEAK_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$WEAK_OBS') FROM public.signals signal WHERE '$WEAK_OBS'=ANY(signal.observation_ids);")"
+check "SIGNAL finalizes as exactly one non-public DRAFT/PENDING Signal" "DRAFT|PENDING|false|1|1" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.has_verified_source||'|'||(SELECT count(*) FROM public.signals WHERE '$SIGNAL_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$SIGNAL_OBS') FROM public.signals signal WHERE '$SIGNAL_OBS'=ANY(signal.observation_ids);")"
+check "qualified finalization marks each observation processed with its exact outcome" "true|WEAK_SIGNAL|true|SIGNAL" \
+  "$($PG -c "SELECT weak.processed||'|'||weak.qualification_result||'|'||signal.processed||'|'||signal.qualification_result FROM public.observations weak CROSS JOIN public.observations signal WHERE weak.id='$WEAK_OBS' AND signal.id='$SIGNAL_OBS';")"
+
+WEAK_DUPLICATE="$($PG -c "SELECT (public.finalize_durable_sis_v1('$WEAK_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$WEAK_RUN'))->>'duplicate')::boolean;")"
+SIGNAL_DUPLICATE="$($PG -c "SELECT (public.finalize_durable_sis_v1('$SIGNAL_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$SIGNAL_RUN'))->>'duplicate')::boolean;")"
+check "repeated WEAK_SIGNAL and SIGNAL finalization are both idempotent" "t|t" "$WEAK_DUPLICATE|$SIGNAL_DUPLICATE"
+check "repeated qualified finalization creates no second Signal or content decision" "1|1|1|1" \
+  "$($PG -c "SELECT (SELECT count(*) FROM public.signals WHERE '$WEAK_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$WEAK_OBS')||'|'||(SELECT count(*) FROM public.signals WHERE '$SIGNAL_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM public.signal_decision_log WHERE observation_id='$SIGNAL_OBS');")"
+
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 TRUNCATE public.sis_provider_budget_reservations, public.sis_execution_attempts,
-  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs;
-DELETE FROM public.signal_decision_log WHERE observation_id='$DURABLE_OBS';
-DELETE FROM public.signal_decision_log WHERE observation_id IN ('$CANARY_ELIGIBLE','$CANARY_PROCESSED','$CANARY_REJECTED','$CANARY_INACTIVE');
-DELETE FROM public.observations WHERE id IN ('$DURABLE_OBS','$CANARY_ELIGIBLE','$CANARY_PROCESSED','$CANARY_REJECTED','$CANARY_INACTIVE');
+  public.sis_execution_finalizations, public.sis_execution_recoveries, public.sis_execution_runs,
+  public.signal_quality_decisions, public.signal_decision_log, public.signals, public.observations;
 DELETE FROM public.sources WHERE id='$INACTIVE_SOURCE';
 DELETE FROM pgmq.q_durable_sis_v1;
 UPDATE public.sis_execution_controls

@@ -7,7 +7,7 @@ interface TestSignal {
   description: string
   category: string
   created_at: string
-  status: 'ACTIVE' | 'PROMOTED' | 'DRAFT' | 'WEAK'
+  status: 'ACTIVE' | 'PROMOTED' | 'DRAFT' | 'WEAK' | 'DISCARD' | 'FAILED'
 }
 
 interface QueryResult {
@@ -214,12 +214,14 @@ describe('/api/cron/signals-digest delivery behavior', { concurrency: false }, (
     assert.equal(activeDatabase.stateLastSentAt, '2026-08-21T00:00:00.000Z')
   })
 
-  test('DRAFT and WEAK Signals are never sent', async (t) => {
+  test('DRAFT, WEAK, DISCARD, and FAILED lifecycle outcomes are never sent', async (t) => {
     configureEnvironment(t)
     activeDatabase = new FakeDigestDatabase(
       [
         signal('draft', '2026-08-21T00:00:00.000Z', 'DRAFT'),
         signal('weak', '2026-08-22T00:00:00.000Z', 'WEAK'),
+        signal('discard', '2026-08-23T00:00:00.000Z', 'DISCARD'),
+        signal('failed', '2026-08-24T00:00:00.000Z', 'FAILED'),
       ],
       '2026-08-20T00:00:00.000Z',
     )
@@ -237,6 +239,29 @@ describe('/api/cron/signals-digest delivery behavior', { concurrency: false }, (
       reason: 'no_new_signals',
     })
     assert.equal(resend.mock.callCount(), 0)
+    assert.equal(activeDatabase.stateLastSentAt, '2026-08-20T00:00:00.000Z')
+  })
+
+  test('failed email delivery does not advance digest state', async (t) => {
+    configureEnvironment(t)
+    activeDatabase = new FakeDigestDatabase(
+      [signal('new-public', '2026-08-21T00:00:00.000Z')],
+      '2026-08-20T00:00:00.000Z',
+    )
+    const resend = t.mock.method(
+      globalThis,
+      'fetch',
+      async () => new Response('{"message":"fixture rejection"}', { status: 422 }),
+    )
+
+    const response = await GET(request())
+
+    assert.equal(response.status, 502)
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      reason: 'resend_broadcast_failed',
+    })
+    assert.equal(resend.mock.callCount(), 1)
     assert.equal(activeDatabase.stateLastSentAt, '2026-08-20T00:00:00.000Z')
   })
 
