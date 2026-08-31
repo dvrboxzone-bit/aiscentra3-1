@@ -37,8 +37,8 @@ const supabaseMock = mock.module('@/lib/supabase/server', {
   },
 })
 
-let getSignals: typeof import('../queries').getSignals
-let getSignalsCount: typeof import('../queries').getSignalsCount
+let getSignals: () => Promise<unknown[]>
+let getSignalsCount: () => Promise<number>
 
 before(async () => {
   const queries = await import('../queries')
