@@ -344,21 +344,32 @@
   visibility: visible;
   transform: translateY(0);
 }
-.dropdown-content a {
+.dropdown-content a,
+.dropdown-content button {
   display: block;
+  width: 100%;
   padding: 12px 20px;
   font-size: 14px;
   font-weight: 500;
   color: var(--color-silver-haze);
   border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
   transition:
     background 0.2s,
     color 0.2s;
 }
-.dropdown-content a:last-child {
+.dropdown-content a:last-child,
+.dropdown-content button:last-child {
   border-bottom: none;
 }
-.dropdown-content a:hover {
+.dropdown-content a:hover,
+.dropdown-content button:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--color-mint-signal);
 }
@@ -496,6 +507,75 @@
   visibility: visible;
 }
 
+/* AIscentra — Assistant edge tab (explicit owner instruction).
+   Colors reference the site's own real existing palette variables,
+   not the reference component's own placeholder hex values. */
+.assistant-tab {
+  --tab-bg: var(--color-deep-obsidian);
+  --tab-bg-hover: var(--color-surface-tonal);
+  --tab-border: var(--color-border-subtle);
+  --tab-border-hover: var(--color-mint-signal);
+  --tab-text: var(--color-mint-signal);
+
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 55;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 44px;
+  padding: 16px 0;
+
+  background: var(--tab-bg);
+  color: var(--tab-text);
+  border: 1px solid var(--tab-border);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.assistant-tab:hover {
+  background: var(--tab-bg-hover);
+  border-color: var(--tab-border-hover);
+}
+.assistant-tab:focus-visible {
+  outline: 2px solid var(--color-mint-signal);
+  outline-offset: 2px;
+}
+.assistant-tab__label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  white-space: nowrap;
+}
+/* Synchronized 1:1 with .assistant-panel's own real open transition
+   (same 0.35s cubic-bezier(0.16, 1, 0.3, 1)) -- the tab slides off
+   the same edge, at the same moment, the panel's own logo becomes
+   visible from it, matching the owner's own "continuous single
+   object" motion brief. */
+.assistant-tab.is-hidden {
+  transform: translateY(-50%) translateX(120%);
+  opacity: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-tab {
+    transition-duration: 0.01ms;
+  }
+}
+
 .mobile-menu-head {
   display: flex;
   align-items: center;
@@ -517,13 +597,22 @@
   overflow-y: auto;
   padding: 1.5rem;
 }
-.mobile-menu-scroll > a:not(.btn-pill) {
+.mobile-menu-scroll > a:not(.btn-pill),
+.mobile-menu-scroll > button:not(.btn-pill) {
+  display: block;
+  width: 100%;
   padding: 0.65rem 0;
   color: var(--color-frost);
   font-size: 15px;
+  text-align: left;
+  background: transparent;
+  border: none;
   border-bottom: 1px solid var(--color-border-subtle);
+  font-family: inherit;
+  cursor: pointer;
 }
-.mobile-menu-scroll > a:hover {
+.mobile-menu-scroll > a:hover,
+.mobile-menu-scroll > button:hover {
   color: var(--color-mint-signal);
 }
 .mobile-menu-group-label {
