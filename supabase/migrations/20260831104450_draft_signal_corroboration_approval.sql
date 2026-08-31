@@ -30,7 +30,68 @@ END
 WHERE provenance_root IS NULL;
 
 COMMENT ON COLUMN public.sources.provenance_root IS
-  'Canonical publisher/ownership root used for provenance independence. NULL is unknown and never counts as independent corroboration.';
+  'Canonical source/publisher root used as a secondary provenance guard. NULL is unknown and never counts as independent corroboration.';
+
+-- Observation-level ownership is explicit and append-only. Source hostnames,
+-- titles, and similarity are deliberately not used to infer origin ownership.
+CREATE TABLE public.observation_provenance_assessments (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  observation_id UUID NOT NULL REFERENCES public.observations(id) ON DELETE RESTRICT,
+  origin_owner TEXT,
+  independence_status TEXT NOT NULL CHECK (
+    independence_status IN (
+      'UNKNOWN', 'ORIGIN_CONFIRMED', 'SAME_ORIGIN', 'INDEPENDENTLY_VERIFIED'
+    )
+  ),
+  assessment_basis TEXT NOT NULL CHECK (btrim(assessment_basis) <> ''),
+  rule_version TEXT NOT NULL CHECK (btrim(rule_version) <> ''),
+  actor TEXT NOT NULL DEFAULT current_user,
+  assessed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (
+    (
+      independence_status = 'UNKNOWN'
+      AND origin_owner IS NULL
+    )
+    OR (
+      independence_status <> 'UNKNOWN'
+      AND origin_owner IS NOT NULL
+      AND origin_owner ~ '^[a-z0-9][a-z0-9._:-]*$'
+    )
+  )
+);
+
+CREATE INDEX observation_provenance_assessments_latest_idx
+  ON public.observation_provenance_assessments (observation_id, assessed_at DESC, id DESC);
+
+ALTER TABLE public.observation_provenance_assessments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.observation_provenance_assessments
+  FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON SEQUENCE public.observation_provenance_assessments_id_seq
+  FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT ON TABLE public.observation_provenance_assessments TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.observation_provenance_assessments_id_seq
+  TO service_role;
+
+CREATE OR REPLACE FUNCTION public.prevent_observation_provenance_assessment_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  RAISE EXCEPTION 'observation_provenance_assessments is append-only: % is forbidden', TG_OP;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.prevent_observation_provenance_assessment_mutation()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE TRIGGER observation_provenance_assessments_no_update_delete
+  BEFORE UPDATE OR DELETE ON public.observation_provenance_assessments
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_observation_provenance_assessment_mutation();
+CREATE TRIGGER observation_provenance_assessments_no_truncate
+  BEFORE TRUNCATE ON public.observation_provenance_assessments
+  FOR EACH STATEMENT EXECUTE FUNCTION public.prevent_observation_provenance_assessment_mutation();
 
 CREATE TABLE public.signal_corroboration_audits (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -38,6 +99,7 @@ CREATE TABLE public.signal_corroboration_audits (
   observation_id UUID NOT NULL REFERENCES public.observations(id) ON DELETE RESTRICT,
   evidence_observation_ids UUID[] NOT NULL,
   evidence_provenance_roots TEXT[] NOT NULL,
+  provenance_assessments JSONB NOT NULL,
   rule_version TEXT NOT NULL,
   actor TEXT NOT NULL DEFAULT current_user,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -117,6 +179,7 @@ SET search_path = pg_catalog, public
 AS $$
 DECLARE
   v_roots TEXT[];
+  v_assessments JSONB;
 BEGIN
   SELECT COALESCE(array_agg(DISTINCT src.provenance_root ORDER BY src.provenance_root), '{}'::TEXT[])
   INTO v_roots
@@ -124,6 +187,38 @@ BEGIN
   JOIN public.sources src ON src.id = obs.source_id
   WHERE obs.id = ANY(NEW.observation_ids)
     AND src.provenance_root IS NOT NULL;
+
+  WITH latest_assessments AS (
+    SELECT DISTINCT ON (assessment.observation_id)
+      assessment.id,
+      assessment.observation_id,
+      assessment.origin_owner,
+      assessment.independence_status,
+      assessment.assessment_basis,
+      assessment.rule_version,
+      assessment.actor,
+      assessment.assessed_at
+    FROM public.observation_provenance_assessments assessment
+    WHERE assessment.observation_id = ANY(NEW.observation_ids)
+    ORDER BY assessment.observation_id, assessment.assessed_at DESC, assessment.id DESC
+  )
+  SELECT COALESCE(
+    jsonb_agg(
+      jsonb_build_object(
+        'assessment_id', id,
+        'observation_id', observation_id,
+        'origin_owner', origin_owner,
+        'independence_status', independence_status,
+        'assessment_basis', assessment_basis,
+        'rule_version', rule_version,
+        'actor', actor,
+        'assessed_at', assessed_at
+      ) ORDER BY observation_id
+    ),
+    '[]'::JSONB
+  )
+  INTO v_assessments
+  FROM latest_assessments;
 
   INSERT INTO public.signal_quality_decisions (
     signal_id, from_state, to_state, reason_codes, rule_version, evidence, decided_by
@@ -143,7 +238,8 @@ BEGIN
       'anti_hype_score', NEW.anti_hype_score,
       'validation_flags', NEW.validation_flags,
       'observation_ids', NEW.observation_ids,
-      'provenance_roots', v_roots
+      'provenance_roots', v_roots,
+      'provenance_assessments', v_assessments
     ),
     current_user
   );
@@ -165,6 +261,11 @@ DECLARE
   v_observation public.observations%ROWTYPE;
   v_observation_ids UUID[];
   v_roots TEXT[];
+  v_assessments JSONB;
+  v_assessment_count INTEGER;
+  v_origin_owner_count INTEGER;
+  v_invalid_assessment_count INTEGER;
+  v_corroborating_status TEXT;
 BEGIN
   SELECT * INTO v_signal
   FROM public.signals
@@ -209,6 +310,10 @@ BEGIN
 
   v_observation_ids := array_append(v_signal.observation_ids, p_observation_id);
 
+  IF cardinality(v_observation_ids) < 2 THEN
+    RAISE EXCEPTION 'corroborate_draft_signal: two different observations are required';
+  END IF;
+
   SELECT array_agg(DISTINCT src.provenance_root ORDER BY src.provenance_root)
   INTO v_roots
   FROM public.observations obs
@@ -220,16 +325,76 @@ BEGIN
     RAISE EXCEPTION 'corroborate_draft_signal: two distinct known provenance roots are required';
   END IF;
 
+  WITH latest_assessments AS (
+    SELECT DISTINCT ON (assessment.observation_id)
+      assessment.id,
+      assessment.observation_id,
+      assessment.origin_owner,
+      assessment.independence_status,
+      assessment.assessment_basis,
+      assessment.rule_version,
+      assessment.actor,
+      assessment.assessed_at
+    FROM public.observation_provenance_assessments assessment
+    WHERE assessment.observation_id = ANY(v_observation_ids)
+    ORDER BY assessment.observation_id, assessment.assessed_at DESC, assessment.id DESC
+  )
+  SELECT
+    count(*)::INTEGER,
+    count(DISTINCT origin_owner)::INTEGER,
+    count(*) FILTER (
+      WHERE independence_status NOT IN ('ORIGIN_CONFIRMED', 'INDEPENDENTLY_VERIFIED')
+    )::INTEGER,
+    max(independence_status) FILTER (WHERE observation_id = p_observation_id),
+    COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'assessment_id', id,
+          'observation_id', observation_id,
+          'origin_owner', origin_owner,
+          'independence_status', independence_status,
+          'assessment_basis', assessment_basis,
+          'rule_version', rule_version,
+          'actor', actor,
+          'assessed_at', assessed_at
+        ) ORDER BY observation_id
+      ),
+      '[]'::JSONB
+    )
+  INTO
+    v_assessment_count,
+    v_origin_owner_count,
+    v_invalid_assessment_count,
+    v_corroborating_status,
+    v_assessments
+  FROM latest_assessments;
+
+  IF v_assessment_count <> cardinality(v_observation_ids) THEN
+    RAISE EXCEPTION 'corroborate_draft_signal: every observation requires an explicit provenance assessment';
+  END IF;
+
+  IF v_invalid_assessment_count > 0 THEN
+    RAISE EXCEPTION 'corroborate_draft_signal: UNKNOWN or SAME_ORIGIN evidence cannot corroborate';
+  END IF;
+
+  IF v_corroborating_status <> 'INDEPENDENTLY_VERIFIED' THEN
+    RAISE EXCEPTION 'corroborate_draft_signal: corroborating evidence is not independently verified';
+  END IF;
+
+  IF v_origin_owner_count < 2 THEN
+    RAISE EXCEPTION 'corroborate_draft_signal: two distinct confirmed origin owners are required';
+  END IF;
+
   v_signal.observation_ids := v_observation_ids;
   v_signal.verification_state := CASE
-    WHEN cardinality(v_roots) >= 3 THEN 'VERIFIED'
+    WHEN v_origin_owner_count >= 3 THEN 'VERIFIED'
     ELSE 'CORROBORATED'
   END;
   v_signal.has_verified_source := public.compute_has_verified_source(v_observation_ids);
   v_signal.status := 'ACTIVE';
   v_signal.quality_state := 'APPROVED';
   v_signal.quality_reason_codes := '{}'::TEXT[];
-  v_signal.quality_rule_version := 'draft-corroboration-approval-v1';
+  v_signal.quality_rule_version := 'draft-corroboration-approval-v2';
   v_signal.quality_evaluated_at := now();
   v_signal.quarantined_at := NULL;
 
@@ -256,10 +421,10 @@ BEGIN
 
   INSERT INTO public.signal_corroboration_audits (
     signal_id, observation_id, evidence_observation_ids,
-    evidence_provenance_roots, rule_version
+    evidence_provenance_roots, provenance_assessments, rule_version
   ) VALUES (
     p_signal_id, p_observation_id, v_observation_ids,
-    v_roots, 'draft-corroboration-approval-v1'
+    v_roots, v_assessments, 'draft-corroboration-approval-v2'
   );
 
   RETURN jsonb_build_object(
@@ -278,4 +443,4 @@ GRANT EXECUTE ON FUNCTION public.corroborate_draft_signal(UUID, UUID)
   TO service_role;
 
 COMMENT ON FUNCTION public.corroborate_draft_signal(UUID, UUID) IS
-  'Service-role-only, explicit DRAFT approval operation. Atomically links one existing eligible observation, requires two known independent provenance roots, appends audit records, and transitions to APPROVED/ACTIVE. No provider or automatic invocation.';
+  'Service-role-only, explicit DRAFT approval operation. Atomically links one existing eligible observation, requires two explicit independently assessed origin owners plus distinct source roots, appends audit records, and transitions to APPROVED/ACTIVE. No provider or automatic invocation.';

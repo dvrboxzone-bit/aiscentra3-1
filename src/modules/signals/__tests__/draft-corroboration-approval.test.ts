@@ -25,12 +25,41 @@ describe('DRAFT corroboration approval contract', () => {
     assert.doesNotMatch(migration, /CREATE\s+(OR\s+REPLACE\s+)?(PROCEDURE|FUNCTION)[\s\S]*cron/i)
   })
 
-  test('uses canonical provenance roots and unknown roots never count', () => {
+  test('uses source roots only as a secondary guard', () => {
     assert.match(migration, /ADD COLUMN IF NOT EXISTS provenance_root TEXT/)
     assert.match(migration, /ELSE NULL/)
     assert.match(migration, /src\.provenance_root IS NOT NULL/)
     assert.match(migration, /cardinality\(v_roots\), 0\) < 2/)
     assert.match(migration, /array_agg\(DISTINCT src\.provenance_root/)
+  })
+
+  test('requires explicit append-only observation provenance assessments', () => {
+    assert.match(migration, /CREATE TABLE public\.observation_provenance_assessments/)
+    assert.match(migration, /origin_owner TEXT/)
+    assert.match(
+      migration,
+      /'UNKNOWN', 'ORIGIN_CONFIRMED', 'SAME_ORIGIN', 'INDEPENDENTLY_VERIFIED'/,
+    )
+    assert.match(migration, /assessment_basis TEXT NOT NULL/)
+    assert.match(migration, /rule_version TEXT NOT NULL/)
+    assert.match(migration, /actor TEXT NOT NULL DEFAULT current_user/)
+    assert.match(migration, /assessed_at TIMESTAMPTZ NOT NULL DEFAULT now\(\)/)
+    assert.match(migration, /observation_provenance_assessments is append-only/)
+    assert.match(
+      migration,
+      /REVOKE ALL ON TABLE public\.observation_provenance_assessments[\s\S]*?FROM PUBLIC, anon, authenticated/,
+    )
+  })
+
+  test('fails closed on missing, unknown, same-origin, or unverified corroboration', () => {
+    assert.match(migration, /v_assessment_count <> cardinality\(v_observation_ids\)/)
+    assert.match(
+      migration,
+      /independence_status NOT IN \('ORIGIN_CONFIRMED', 'INDEPENDENTLY_VERIFIED'\)/,
+    )
+    assert.match(migration, /v_corroborating_status <> 'INDEPENDENTLY_VERIFIED'/)
+    assert.match(migration, /v_origin_owner_count < 2/)
+    assert.doesNotMatch(migration, /origin_owner\s*:=?[\s\S]{0,80}(hostname|title|similarity)/i)
   })
 
   test('centralizes approval predicates and preserves the existing thresholds', () => {
@@ -55,9 +84,11 @@ describe('DRAFT corroboration approval contract', () => {
     assert.match(migration, /UNIQUE \(signal_id, observation_id\)/)
     assert.match(migration, /evidence_observation_ids UUID\[\]/)
     assert.match(migration, /evidence_provenance_roots TEXT\[\]/)
+    assert.match(migration, /provenance_assessments JSONB NOT NULL/)
     assert.match(migration, /signal_corroboration_audits is append-only/)
     assert.match(migration, /'observation_ids', NEW\.observation_ids/)
     assert.match(migration, /'provenance_roots', v_roots/)
+    assert.match(migration, /'provenance_assessments', v_assessments/)
     assert.match(migration, /'duplicate', true/)
   })
 

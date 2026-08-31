@@ -1176,10 +1176,19 @@ $PG -v ON_ERROR_STOP=1 -f "$DRAFT_CORROBORATION_MIGRATION" >/dev/null
 ROOT_A="41414141-4141-4414-8414-414141414141"
 ROOT_A_COPY="42424242-4242-4424-8424-424242424242"
 ROOT_B="43434343-4343-4434-8434-434343434343"
+ROOT_A_SAME="44444444-4444-4444-8444-444444444444"
+ROOT_UNKNOWN="45454545-4545-4454-8454-454545454545"
+ROOT_C="46464646-4646-4464-8464-464646464646"
 OBS_A="51515151-5151-4515-8515-515151515151"
 OBS_A_COPY="52525252-5252-4525-8525-525252525252"
 OBS_B="53535353-5353-4535-8535-535353535353"
 OBS_UNKNOWN="54545454-5454-4545-8545-545454545454"
+OBS_NOT_VERIFIED="55555555-5555-4555-8555-555555555555"
+OBS_SAME_ROOT="56565656-5656-4565-8565-565656565656"
+OBS_UNKNOWN_ROOT="57575757-5757-4575-8575-575757575757"
+OBS_ROLLBACK="58585858-5858-4585-8585-585858585858"
+OBS_MISSING_ASSESSMENT="59595959-5959-4595-8595-595959595959"
+OBS_SAME_ORIGIN="5a5a5a5a-5a5a-45a5-85a5-5a5a5a5a5a5a"
 SIG_OK="61616161-6161-4616-8616-616161616161"
 SIG_LOW="62626262-6262-4626-8626-626262626262"
 SIG_WEAK="63636363-6363-4636-8636-636363636363"
@@ -1187,14 +1196,35 @@ SIG_ROLLBACK="64646464-6464-4646-8646-646464646464"
 
 $PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
 INSERT INTO public.sources(id,name,type,url,status,provenance_root) VALUES
-  ('$ROOT_A','Owner A','research','https://owner-a.example','ACTIVE','owner-a.example'),
-  ('$ROOT_A_COPY','Owner A mirror','technical','https://mirror.owner-a.example','ACTIVE','owner-a.example'),
-  ('$ROOT_B','Owner B','research','https://owner-b.example','ACTIVE','owner-b.example');
+  ('$ROOT_A','Google DeepMind','company_blog','https://deepmind.google','ACTIVE','google'),
+  ('$ROOT_A_COPY','ArXiv','research','https://arxiv.org','ACTIVE','arxiv.org'),
+  ('$ROOT_B','Owner B','research','https://owner-b.example','ACTIVE','owner-b.example'),
+  ('$ROOT_A_SAME','Google mirror','technical','https://mirror.google.example','ACTIVE','google'),
+  ('$ROOT_UNKNOWN','Unknown-root source','research','https://unknown.example','ACTIVE',NULL),
+  ('$ROOT_C','Owner C','research','https://owner-c.example','ACTIVE','owner-c.example');
 INSERT INTO public.observations(id,source_id,processed,url_verified_ok,url) VALUES
   ('$OBS_A','$ROOT_A',true,true,'https://owner-a.example/a'),
-  ('$OBS_A_COPY','$ROOT_A_COPY',false,true,'https://mirror.owner-a.example/a'),
+  ('$OBS_A_COPY','$ROOT_A_COPY',false,true,'https://arxiv.org/abs/google-origin'),
   ('$OBS_B','$ROOT_B',false,true,'https://owner-b.example/a'),
-  ('$OBS_UNKNOWN','12121212-1212-4212-8212-121212121212',false,true,'https://unknown.example/a');
+  ('$OBS_UNKNOWN','$ROOT_B',false,true,'https://owner-b.example/unknown-owner'),
+  ('$OBS_NOT_VERIFIED','$ROOT_B',false,true,'https://owner-b.example/not-verified'),
+  ('$OBS_SAME_ROOT','$ROOT_A_SAME',false,true,'https://mirror.google.example/owner-b'),
+  ('$OBS_UNKNOWN_ROOT','$ROOT_UNKNOWN',false,true,'https://unknown.example/owner-b'),
+  ('$OBS_ROLLBACK','$ROOT_C',false,true,'https://owner-c.example/rollback'),
+  ('$OBS_MISSING_ASSESSMENT','$ROOT_B',false,true,'https://owner-b.example/missing-assessment'),
+  ('$OBS_SAME_ORIGIN','$ROOT_B',false,true,'https://owner-b.example/same-origin');
+INSERT INTO public.observation_provenance_assessments(
+  observation_id,origin_owner,independence_status,assessment_basis,rule_version,actor
+) VALUES
+  ('$OBS_A','google','ORIGIN_CONFIRMED','Primary artifact ownership was explicitly reviewed.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_A_COPY','google','INDEPENDENTLY_VERIFIED','ArXiv artifact has the same confirmed Google origin.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_B','owner-b','INDEPENDENTLY_VERIFIED','Independent publisher and origin were explicitly verified.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_UNKNOWN',NULL,'UNKNOWN','No honest origin-owner determination is available.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_NOT_VERIFIED','owner-b','ORIGIN_CONFIRMED','Origin is known but independence has not been verified.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_SAME_ROOT','owner-b','INDEPENDENTLY_VERIFIED','Owner differs but source root intentionally matches the primary fixture.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_UNKNOWN_ROOT','owner-b','INDEPENDENTLY_VERIFIED','Owner independence is verified but source root is unknown.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_ROLLBACK','owner-c','INDEPENDENTLY_VERIFIED','Independent owner fixture for transaction rollback.','observation-provenance-v1','fixture-reviewer'),
+  ('$OBS_SAME_ORIGIN','google','SAME_ORIGIN','Explicit review found the same originating owner.','observation-provenance-v1','fixture-reviewer');
 INSERT INTO public.signals(
   id,status,intelligence_type,observation_ids,qualification_score,sis_final,
   anti_hype_score,validation_flags,has_verified_source,verification_state
@@ -1206,24 +1236,43 @@ INSERT INTO public.signals(
 UPDATE public.observations SET signal_id='$SIG_OK' WHERE id='$OBS_A';
 SQL
 
-check "one observation/unknown root is rejected without state change" "DRAFT|PENDING|1|false" \
+check "DeepMind plus ArXiv with the same confirmed Google owner is rejected" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_A_COPY') FROM signals WHERE id='$SIG_OK';")"
+
+check "unknown observation origin owner is rejected" "DRAFT|PENDING|1|false" \
   "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_UNKNOWN');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_UNKNOWN') FROM signals WHERE id='$SIG_OK';")"
 
-check "two source IDs sharing one provenance root are rejected" "DRAFT|PENDING|1|false" \
-  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_A_COPY') FROM signals WHERE id='$SIG_OK';")"
+check "different owners without independently-verified corroboration are rejected" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_NOT_VERIFIED');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_NOT_VERIFIED') FROM signals WHERE id='$SIG_OK';")"
+
+check "missing observation provenance assessment is rejected" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_MISSING_ASSESSMENT');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_MISSING_ASSESSMENT') FROM signals WHERE id='$SIG_OK';")"
+
+check "explicit SAME_ORIGIN assessment is rejected" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_SAME_ORIGIN');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_SAME_ORIGIN') FROM signals WHERE id='$SIG_OK';")"
+
+check "different owners sharing one source root are still rejected" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_SAME_ROOT');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_SAME_ROOT') FROM signals WHERE id='$SIG_OK';")"
+
+check "unknown source root remains a fail-closed secondary guard" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_UNKNOWN_ROOT');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_UNKNOWN_ROOT') FROM signals WHERE id='$SIG_OK';")"
 
 CORROBORATED_RESULT="$($PG -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_B')->>'applied';")"
 check "independent roots atomically approve and activate" "true|ACTIVE|APPROVED|CORROBORATED|2|true" \
   "$CORROBORATED_RESULT|$($PG -c "SELECT status||'|'||quality_state||'|'||verification_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_B') FROM signals WHERE id='$SIG_OK';")"
-check "approval audit contains exact evidence IDs, roots, rule and actor" "2|2|draft-corroboration-approval-v1|1" \
-  "$($PG -c "SELECT cardinality(evidence_observation_ids)||'|'||cardinality(evidence_provenance_roots)||'|'||rule_version||'|'||count(*) OVER () FROM signal_corroboration_audits WHERE signal_id='$SIG_OK';")"
-check "append-only quality decision records the exact roots" "2" \
-  "$($PG -c "SELECT jsonb_array_length(evidence->'provenance_roots') FROM signal_quality_decisions WHERE signal_id='$SIG_OK' AND to_state='APPROVED';")"
+check "approval audit snapshots exact evidence, assessments, roots, rule and actor" "2|2|2|draft-corroboration-approval-v2|1" \
+  "$($PG -c "SELECT cardinality(evidence_observation_ids)||'|'||cardinality(evidence_provenance_roots)||'|'||jsonb_array_length(provenance_assessments)||'|'||rule_version||'|'||count(*) OVER () FROM signal_corroboration_audits WHERE signal_id='$SIG_OK';")"
+check "assessment snapshot is sufficient to reproduce the accepted decision" "2" \
+  "$($PG -c "SELECT count(*) FROM signal_corroboration_audits audit CROSS JOIN LATERAL jsonb_array_elements(audit.provenance_assessments) item WHERE audit.signal_id='$SIG_OK' AND item ?& ARRAY['assessment_id','observation_id','origin_owner','independence_status','assessment_basis','rule_version','actor','assessed_at'];")"
+check "rejected evidence retains auditable assessments and exact rejection basis" "4" \
+  "$($PG -c "SELECT count(*) FROM observation_provenance_assessments WHERE observation_id IN ('$OBS_A_COPY','$OBS_UNKNOWN','$OBS_NOT_VERIFIED','$OBS_SAME_ORIGIN') AND assessment_basis <> '' AND rule_version='observation-provenance-v1' AND actor='fixture-reviewer';")"
+check "append-only quality decision records roots and exact assessment snapshots" "2|2" \
+  "$($PG -c "SELECT jsonb_array_length(evidence->'provenance_roots')||'|'||jsonb_array_length(evidence->'provenance_assessments') FROM signal_quality_decisions WHERE signal_id='$SIG_OK' AND to_state='APPROVED';")"
 
 check "WEAK/ARCHIVE class cannot enter DRAFT approval path" "WEAK|PENDING|1" \
-  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_WEAK','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids) FROM signals WHERE id='$SIG_WEAK';")"
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_WEAK','$OBS_ROLLBACK');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids) FROM signals WHERE id='$SIG_WEAK';")"
 check "DRAFT below existing SIS threshold is rejected unchanged" "DRAFT|PENDING|1" \
-  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_LOW','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids) FROM signals WHERE id='$SIG_LOW';")"
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_LOW','$OBS_ROLLBACK');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids) FROM signals WHERE id='$SIG_LOW';")"
 
 check "repeated corroboration is idempotent with no duplicate audit or link" "true|2|1" \
   "$($PG -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_B')->>'duplicate';")|$($PG -c "SELECT cardinality(observation_ids)||'|'||(SELECT count(*) FROM signal_corroboration_audits WHERE signal_id='$SIG_OK') FROM signals WHERE id='$SIG_OK';")"
@@ -1238,9 +1287,9 @@ CREATE TRIGGER fail_fixture_corroboration_audit
   BEFORE INSERT ON public.signal_corroboration_audits
   FOR EACH ROW EXECUTE FUNCTION public.fail_fixture_corroboration_audit();
 SQL
-$PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_ROLLBACK','$OBS_A_COPY');" >/dev/null 2>&1 || true
+$PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_ROLLBACK','$OBS_ROLLBACK');" >/dev/null 2>&1 || true
 check "injected transaction error rolls back Signal, observation, and quality decision" "DRAFT|PENDING|1|false|0|0" \
-  "$($PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_A_COPY')||'|'||(SELECT count(*) FROM signal_corroboration_audits WHERE signal_id='$SIG_ROLLBACK')||'|'||(SELECT count(*) FROM signal_quality_decisions WHERE signal_id='$SIG_ROLLBACK' AND to_state='APPROVED') FROM signals WHERE id='$SIG_ROLLBACK';")"
+  "$($PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_ROLLBACK')||'|'||(SELECT count(*) FROM signal_corroboration_audits WHERE signal_id='$SIG_ROLLBACK')||'|'||(SELECT count(*) FROM signal_quality_decisions WHERE signal_id='$SIG_ROLLBACK' AND to_state='APPROVED') FROM signals WHERE id='$SIG_ROLLBACK';")"
 $PG -c "DROP TRIGGER fail_fixture_corroboration_audit ON public.signal_corroboration_audits; DROP FUNCTION public.fail_fixture_corroboration_audit();" >/dev/null
 
 check "existing public selection includes only the successful ACTIVE Signal" "$SIG_OK" \
