@@ -22,11 +22,15 @@ import { useAssistantPanel } from './vfinal-assistant-context'
  * genuinely synchronized.
  *
  * Two real text blocks (not one icon + one label): "I.O" (bold,
- * warm-white #f2f0ea, the heavier visual anchor) and "Assistant"
- * (regular weight, olive #8fa17e, the supporting label) -- separated
- * by a real thin divider line (#4d5643), both vertical (bottom-to-top
- * reading direction), matching the spec's own real composition
- * diagram exactly.
+ * the site's real --color-frost, the heavier visual anchor) and
+ * "Assistant" (regular weight, the site's real --color-mint-signal,
+ * the supporting label) -- separated by a real thin divider line
+ * (the site's real --color-border-subtle), both vertical (bottom-to-
+ * top reading direction), matching the spec's own real composition
+ * diagram exactly. Colors deliberately use this site's own real,
+ * existing main/accent palette variables -- explicit owner rule
+ * ("ВАЖНО"): no third-party/foreign colors outside that palette, not
+ * even values from the owner's own supplied reference spec.
  */
 export function VfinalAssistantTab(): React.JSX.Element {
   const { isOpen, open } = useAssistantPanel()

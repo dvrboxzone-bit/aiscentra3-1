@@ -507,14 +507,17 @@
   visibility: visible;
 }
 
-/* AIscentra — Assistant edge tab (explicit owner instruction, full
-   dated spec supplied verbatim -- every value below is taken directly
-   from that spec, not approximated). */
+/* AIscentra — Assistant edge tab (explicit owner instruction).
+   ВАЖНО (owner's own explicit rule): no third-party/foreign colors --
+   only this site's real, existing main + accent palette variables.
+   Structure/sizing/spacing below still follows the owner's own full
+   dated spec verbatim; only the color values are mapped to real site
+   variables instead of that spec's own separate fixed hex codes. */
 .assistant-tab {
-  --tab-bg: #000000;
-  --tab-bg-hover: #0a0a08;
-  --tab-border: #8fa17e;
-  --tab-border-hover: #a3b491;
+  --tab-bg: var(--color-deep-obsidian);
+  --tab-bg-hover: var(--color-surface-tonal);
+  --tab-border: var(--color-mint-signal);
+  --tab-border-hover: var(--color-frost);
 
   position: fixed;
   top: 50%;
@@ -547,13 +550,13 @@
   border-color: var(--tab-border-hover);
 }
 .assistant-tab:focus-visible {
-  outline: 2px solid var(--tab-border);
+  outline: 2px solid var(--color-mint-signal);
   outline-offset: 2px;
 }
 .assistant-tab__io {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  color: #f2f0ea;
+  color: var(--color-frost);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -562,13 +565,13 @@
 .assistant-tab__divider {
   width: 24px;
   height: 1px;
-  background: #4d5643;
+  background: var(--color-border-subtle);
   flex-shrink: 0;
 }
 .assistant-tab__label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  color: #8fa17e;
+  color: var(--color-mint-signal);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: 0.12em;
