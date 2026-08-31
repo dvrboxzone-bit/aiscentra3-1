@@ -262,7 +262,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask the Observatory anything about the AI ecosystem…"
-            className="observatory-input font-body flex-1 rounded-md border-none bg-transparent px-2 py-2 text-sm text-frost"
+            className="observatory-input font-body flex-1 rounded-md border border-border-subtle bg-surface-tonal px-3 py-2 text-sm text-frost"
           />
           <button
             type="submit"

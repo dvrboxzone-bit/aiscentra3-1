@@ -507,15 +507,14 @@
   visibility: visible;
 }
 
-/* AIscentra — Assistant edge tab (explicit owner instruction).
-   Colors reference the site's own real existing palette variables,
-   not the reference component's own placeholder hex values. */
+/* AIscentra — Assistant edge tab (explicit owner instruction, full
+   dated spec supplied verbatim -- every value below is taken directly
+   from that spec, not approximated). */
 .assistant-tab {
-  --tab-bg: var(--color-deep-obsidian);
-  --tab-bg-hover: var(--color-surface-tonal);
-  --tab-border: var(--color-border-subtle);
-  --tab-border-hover: var(--color-mint-signal);
-  --tab-text: var(--color-mint-signal);
+  --tab-bg: #000000;
+  --tab-bg-hover: #0a0a08;
+  --tab-border: #8fa17e;
+  --tab-border-hover: #a3b491;
 
   position: fixed;
   top: 50%;
@@ -526,12 +525,11 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  width: 44px;
-  padding: 16px 0;
+  gap: 14px;
+  width: 56px;
+  padding: 18px 0;
 
   background: var(--tab-bg);
-  color: var(--tab-text);
   border: 1px solid var(--tab-border);
   border-right: none;
   border-radius: 10px 0 0 10px;
@@ -549,15 +547,31 @@
   border-color: var(--tab-border-hover);
 }
 .assistant-tab:focus-visible {
-  outline: 2px solid var(--color-mint-signal);
+  outline: 2px solid var(--tab-border);
   outline-offset: 2px;
+}
+.assistant-tab__io {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: #f2f0ea;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+.assistant-tab__divider {
+  width: 24px;
+  height: 1px;
+  background: #4d5643;
+  flex-shrink: 0;
 }
 .assistant-tab__label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.28em;
+  color: #8fa17e;
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
   white-space: nowrap;
 }
 /* Synchronized 1:1 with .assistant-panel's own real open transition
