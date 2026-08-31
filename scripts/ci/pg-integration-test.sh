@@ -55,6 +55,8 @@ METRICS_REJECTED_RETRIED_MIGRATION="supabase/migrations/20260811130000_extend_pi
 [[ -f "$METRICS_REJECTED_RETRIED_MIGRATION" ]] || { echo "FATAL: $METRICS_REJECTED_RETRIED_MIGRATION not found (run from repo root)"; exit 1; }
 QUALITY_FOUNDATION_MIGRATION="supabase/migrations/20260821023045_add_signal_quality_foundation.sql"
 [[ -f "$QUALITY_FOUNDATION_MIGRATION" ]] || { echo "FATAL: $QUALITY_FOUNDATION_MIGRATION not found (run from repo root)"; exit 1; }
+DRAFT_CORROBORATION_MIGRATION="supabase/migrations/20260831104450_draft_signal_corroboration_approval.sql"
+[[ -f "$DRAFT_CORROBORATION_MIGRATION" ]] || { echo "FATAL: $DRAFT_CORROBORATION_MIGRATION not found (run from repo root)"; exit 1; }
 DURABLE_SIS_MIGRATION="supabase/migrations/20260825121411_add_durable_sis_v1_pgmq_control.sql"
 [[ -f "$DURABLE_SIS_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_MIGRATION not found (run from repo root)"; exit 1; }
 DURABLE_SIS_REPAIR_MIGRATION="supabase/migrations/20260828143422_fix_durable_sis_parser_technical_failure.sql"
@@ -175,6 +177,7 @@ CREATE TABLE public.sources (
   id UUID PRIMARY KEY,
   name TEXT NOT NULL,
   type TEXT NOT NULL,
+  url TEXT NOT NULL DEFAULT 'https://fixture.invalid',
   trust_score NUMERIC NOT NULL DEFAULT 0.8,
   status TEXT NOT NULL DEFAULT 'ACTIVE'
 );
@@ -1165,6 +1168,85 @@ echo "  -- final restore: apply Phase 1 after all tests that intentionally mutat
 $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
 check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
+
+echo ""
+echo "TEST 19 — DRAFT corroboration/approval is provenance-aware, atomic, and idempotent"
+$PG -v ON_ERROR_STOP=1 -f "$DRAFT_CORROBORATION_MIGRATION" >/dev/null
+
+ROOT_A="41414141-4141-4414-8414-414141414141"
+ROOT_A_COPY="42424242-4242-4424-8424-424242424242"
+ROOT_B="43434343-4343-4434-8434-434343434343"
+OBS_A="51515151-5151-4515-8515-515151515151"
+OBS_A_COPY="52525252-5252-4525-8525-525252525252"
+OBS_B="53535353-5353-4535-8535-535353535353"
+OBS_UNKNOWN="54545454-5454-4545-8545-545454545454"
+SIG_OK="61616161-6161-4616-8616-616161616161"
+SIG_LOW="62626262-6262-4626-8626-626262626262"
+SIG_WEAK="63636363-6363-4636-8636-636363636363"
+SIG_ROLLBACK="64646464-6464-4646-8646-646464646464"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+INSERT INTO public.sources(id,name,type,url,status,provenance_root) VALUES
+  ('$ROOT_A','Owner A','research','https://owner-a.example','ACTIVE','owner-a.example'),
+  ('$ROOT_A_COPY','Owner A mirror','technical','https://mirror.owner-a.example','ACTIVE','owner-a.example'),
+  ('$ROOT_B','Owner B','research','https://owner-b.example','ACTIVE','owner-b.example');
+INSERT INTO public.observations(id,source_id,processed,url_verified_ok,url) VALUES
+  ('$OBS_A','$ROOT_A',true,true,'https://owner-a.example/a'),
+  ('$OBS_A_COPY','$ROOT_A_COPY',false,true,'https://mirror.owner-a.example/a'),
+  ('$OBS_B','$ROOT_B',false,true,'https://owner-b.example/a'),
+  ('$OBS_UNKNOWN','12121212-1212-4212-8212-121212121212',false,true,'https://unknown.example/a');
+INSERT INTO public.signals(
+  id,status,intelligence_type,observation_ids,qualification_score,sis_final,
+  anti_hype_score,validation_flags,has_verified_source,verification_state
+) VALUES
+  ('$SIG_OK','DRAFT','SIGNAL',ARRAY['$OBS_A']::uuid[],7,7,7,'{}',true,'SINGLE_SOURCE_UNVERIFIED'),
+  ('$SIG_LOW','DRAFT','SIGNAL',ARRAY['$OBS_A']::uuid[],5.9,5.9,7,'{}',true,'SINGLE_SOURCE_UNVERIFIED'),
+  ('$SIG_WEAK','WEAK','WEAK_SIGNAL',ARRAY['$OBS_A']::uuid[],7,7,7,'{}',true,'SINGLE_SOURCE_UNVERIFIED'),
+  ('$SIG_ROLLBACK','DRAFT','SIGNAL',ARRAY['$OBS_A']::uuid[],7,7,7,'{}',true,'SINGLE_SOURCE_UNVERIFIED');
+UPDATE public.observations SET signal_id='$SIG_OK' WHERE id='$OBS_A';
+SQL
+
+check "one observation/unknown root is rejected without state change" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_UNKNOWN');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_UNKNOWN') FROM signals WHERE id='$SIG_OK';")"
+
+check "two source IDs sharing one provenance root are rejected" "DRAFT|PENDING|1|false" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_A_COPY') FROM signals WHERE id='$SIG_OK';")"
+
+CORROBORATED_RESULT="$($PG -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_B')->>'applied';")"
+check "independent roots atomically approve and activate" "true|ACTIVE|APPROVED|CORROBORATED|2|true" \
+  "$CORROBORATED_RESULT|$($PG -c "SELECT status||'|'||quality_state||'|'||verification_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_B') FROM signals WHERE id='$SIG_OK';")"
+check "approval audit contains exact evidence IDs, roots, rule and actor" "2|2|draft-corroboration-approval-v1|1" \
+  "$($PG -c "SELECT cardinality(evidence_observation_ids)||'|'||cardinality(evidence_provenance_roots)||'|'||rule_version||'|'||count(*) OVER () FROM signal_corroboration_audits WHERE signal_id='$SIG_OK';")"
+check "append-only quality decision records the exact roots" "2" \
+  "$($PG -c "SELECT jsonb_array_length(evidence->'provenance_roots') FROM signal_quality_decisions WHERE signal_id='$SIG_OK' AND to_state='APPROVED';")"
+
+check "WEAK/ARCHIVE class cannot enter DRAFT approval path" "WEAK|PENDING|1" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_WEAK','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids) FROM signals WHERE id='$SIG_WEAK';")"
+check "DRAFT below existing SIS threshold is rejected unchanged" "DRAFT|PENDING|1" \
+  "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_LOW','$OBS_A_COPY');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids) FROM signals WHERE id='$SIG_LOW';")"
+
+check "repeated corroboration is idempotent with no duplicate audit or link" "true|2|1" \
+  "$($PG -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_B')->>'duplicate';")|$($PG -c "SELECT cardinality(observation_ids)||'|'||(SELECT count(*) FROM signal_corroboration_audits WHERE signal_id='$SIG_OK') FROM signals WHERE id='$SIG_OK';")"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+CREATE FUNCTION public.fail_fixture_corroboration_audit() RETURNS trigger LANGUAGE plpgsql AS \$\$
+BEGIN
+  IF NEW.signal_id='$SIG_ROLLBACK' THEN RAISE EXCEPTION 'fixture injected failure'; END IF;
+  RETURN NEW;
+END \$\$;
+CREATE TRIGGER fail_fixture_corroboration_audit
+  BEFORE INSERT ON public.signal_corroboration_audits
+  FOR EACH ROW EXECUTE FUNCTION public.fail_fixture_corroboration_audit();
+SQL
+$PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_ROLLBACK','$OBS_A_COPY');" >/dev/null 2>&1 || true
+check "injected transaction error rolls back Signal, observation, and quality decision" "DRAFT|PENDING|1|false|0|0" \
+  "$($PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_A_COPY')||'|'||(SELECT count(*) FROM signal_corroboration_audits WHERE signal_id='$SIG_ROLLBACK')||'|'||(SELECT count(*) FROM signal_quality_decisions WHERE signal_id='$SIG_ROLLBACK' AND to_state='APPROVED') FROM signals WHERE id='$SIG_ROLLBACK';")"
+$PG -c "DROP TRIGGER fail_fixture_corroboration_audit ON public.signal_corroboration_audits; DROP FUNCTION public.fail_fixture_corroboration_audit();" >/dev/null
+
+check "existing public selection includes only the successful ACTIVE Signal" "$SIG_OK" \
+  "$($PG -c "SELECT id FROM signals WHERE status IN ('ACTIVE','PROMOTED') AND has_verified_source=true AND id IN ('$SIG_OK','$SIG_LOW','$SIG_WEAK','$SIG_ROLLBACK') ORDER BY id;")"
+check "existing digest cutoff selects the newly ACTIVE Signal" "$SIG_OK" \
+  "$($PG -c "SELECT id FROM signals WHERE status IN ('ACTIVE','PROMOTED') AND created_at > now()-interval '1 hour' AND id IN ('$SIG_OK','$SIG_LOW','$SIG_WEAK','$SIG_ROLLBACK') ORDER BY created_at,id LIMIT 3;")"
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then
