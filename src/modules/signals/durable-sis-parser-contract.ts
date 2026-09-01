@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { AIOptions } from '@/lib/ai/client'
 import type { ProviderName } from '@/lib/ai/config'
+import { EVIDENCE_PROCESSING_CONTRACT_V1 } from './primary-evidence-policy'
 
 const TITLE_MAX_CHARS = 80
 const DESCRIPTION_MAX_CHARS = 512
@@ -198,9 +199,10 @@ export function durableSisParserRequestOptions(
 
 export const DURABLE_SIS_V1_COMPACT_PARSER_INSTRUCTION = `You are an evidence-bound signal parser, not a conversational assistant.
 Return exactly one minified JSON object that matches the supplied schema. Never emit markdown, analysis, reasoning, commentary, or extra keys.
+${EVIDENCE_PROCESSING_CONTRACT_V1}
 Use only facts and named entities present in SOURCE, TITLE, and CONTENT. Never invent numbers, benchmarks, actors, adoption, or corroboration.
-Write a factual 10-80 character title without hedging. Write a 50-512 character description in 2-3 short active-voice sentences; state what changed, why it matters, and only evidence-backed uncertainty. Do not begin with I, We, or Our.
-All nine factors are integers 0-10 and must not be inflated. One supplied source means corroboration_factor=2. Authority follows the supplied source type and trust. If novelty exceeds 7, novelty_prior_example must name a concrete prior example from the supplied evidence; otherwise cap novelty_factor at 7 and use null.
+Write a factual 10-80 character title without hedging. Write a 50-512 character description in 2-3 short active-voice sentences; state what changed, why it matters, and only evidence-backed uncertainty. When EVIDENCE_POLICY is eligible, the first sentence MUST begin with its exact required_attribution phrase. Do not begin with I, We, or Our.
+All nine factors are integers 0-10 and must not be inflated. One supplied source means corroboration_factor=2. Source type and trust may inform authority_factor but can never grant primary status or independence. If novelty exceeds 7, novelty_prior_example must name a concrete prior example from the supplied evidence; otherwise cap novelty_factor at 7 and use null.
 Extract at most 6 specific entities. Set is_marketing only when promotion is the primary purpose. With no supplied comparison titles, set is_duplicate=false and duplicate_note=null.
 All fields are required. Notes are null or at most 80 characters.`
 
@@ -219,10 +221,14 @@ export function buildDurableSisParserPrompt(input: {
   sourceType: string
   sourceTrustScore: number
   candidateCategory: string
+  evidencePolicy?: string
 }): string {
-  return `SOURCE: ${promptLine(input.sourceName, 120)} | type=${promptLine(input.sourceType, 48)} | trust=${input.sourceTrustScore} | candidate_category=${promptLine(input.candidateCategory, 32)}
+  return `${input.evidencePolicy ?? 'EVIDENCE_POLICY: eligible=false; reason=NOT_EVALUATED'}
+<UNTRUSTED_SOURCE>
+SOURCE: ${promptLine(input.sourceName, 120)} | type=${promptLine(input.sourceType, 48)} | trust=${input.sourceTrustScore} | candidate_category=${promptLine(input.candidateCategory, 32)}
 TITLE: ${promptLine(input.title, 300)}
-CONTENT: ${promptLine(input.content, 600)}`
+CONTENT: ${promptLine(input.content, 600)}
+</UNTRUSTED_SOURCE>`
 }
 
 /**

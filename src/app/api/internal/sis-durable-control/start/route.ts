@@ -9,6 +9,10 @@ import {
   DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
   budgetReservationFor,
 } from '@/modules/signals/durable-sis-v1'
+import {
+  assessPrimaryEvidencePolicyV1,
+  primaryEvidencePromptContext,
+} from '@/modules/signals/primary-evidence-policy'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,7 +52,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const { data: observation, error: observationError } = await db
       .from('observations')
-      .select('id,source_id,title,content')
+      .select('id,source_id,title,content,url')
       .eq('id', observationId)
       .single()
     if (observationError || !observation) {
@@ -56,17 +60,30 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     const { data: source, error: sourceError } = await db
       .from('sources')
-      .select('name,type,status')
+      .select('name,type,status,url')
       .eq('id', observation.source_id)
       .single()
     if (sourceError || !source || source.status !== 'ACTIVE') {
       return NextResponse.json({ error: 'Canary source unavailable' }, { status: 503 })
     }
+    const evidencePolicy = primaryEvidencePromptContext(
+      assessPrimaryEvidencePolicyV1({
+        sourceId: observation.source_id,
+        sourceUrl: source.url,
+        observationUrl: observation.url,
+      }),
+    )
     const messages = [
       { role: 'system' as const, content: SIS_SYSTEM_PROMPT },
       {
         role: 'user' as const,
-        content: buildSISPrompt(observation.title, observation.content, source.name, source.type),
+        content: buildSISPrompt(
+          observation.title,
+          observation.content,
+          source.name,
+          source.type,
+          evidencePolicy,
+        ),
       },
     ]
     const reservation = budgetReservationFor(

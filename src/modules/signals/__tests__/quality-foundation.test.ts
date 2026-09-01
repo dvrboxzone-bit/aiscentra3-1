@@ -50,6 +50,7 @@ function makeSignal(overrides: Partial<Signal> = {}): Signal {
     dormant_reason: null,
     reactivate_after: null,
     quality_state: 'APPROVED',
+    evidence_tier: 'UNASSESSED',
     quality_reason_codes: [],
     quality_rule_version: 'quality-foundation-v1',
     quality_evaluated_at: new Date().toISOString(),
