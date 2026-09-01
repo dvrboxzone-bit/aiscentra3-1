@@ -7,8 +7,11 @@ observation, two distinct confirmed origin owners, and distinct source roots. It
 then atomically transitions the Signal to `APPROVED` / `ACTIVE` under the existing
 quality thresholds.
 
-The operation is service-role-only and has no HTTP route, scheduler, provider call,
-or automatic invocation. Both the corroboration audit and quality decision are
+The corroboration operation is service-role-only and has no HTTP route, scheduler,
+provider call, or automatic invocation. It remains separate from the normal
+Durable SIS `PRIMARY_CONFIRMED` path: primary issuer/preprint evidence does not
+earn independence credit, while corroboration still requires two explicitly
+assessed independent owners. Both the corroboration audit and quality decision are
 append-only. Origin ownership is never inferred from hostname, title, or semantic
 similarity. Missing or `UNKNOWN` assessments, `SAME_ORIGIN` evidence, identical
 origin owners, and corroborating evidence that is not `INDEPENDENTLY_VERIFIED`

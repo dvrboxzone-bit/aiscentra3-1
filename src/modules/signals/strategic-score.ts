@@ -14,7 +14,11 @@
  */
 
 import { z } from 'zod'
-import type { StrategicImportanceScore, QualificationResult, HumanRelevanceFlags } from '@/types/database'
+import type {
+  StrategicImportanceScore,
+  QualificationResult,
+  HumanRelevanceFlags,
+} from '@/types/database'
 import { computeSISFinal, classifyBySIS } from '@/types/database'
 import { V2_THRESHOLDS } from './pre-qualification'
 import {
@@ -22,55 +26,66 @@ import {
   applyPublicationTypeCaps,
   type PublicationClassification,
 } from './publication-classifier'
+import { EVIDENCE_PROCESSING_CONTRACT_V1 } from './primary-evidence-policy'
 
 // ── SIS LLM Output Schema ─────────────────────────────────────────────────────
 // Note: NO publication-type fields here. That classification happens in the
 // Engine before this schema is even used to build the prompt.
 
-export const SISOutputSchema = z.object({
-  sis_novelty: z.preprocess(
-    v => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
-    z.number().int().min(0).max(10),
-  ),
-  sis_importance: z.preprocess(
-    v => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
-    z.number().int().min(0).max(10),
-  ),
-  sis_urgency: z.preprocess(
-    v => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
-    z.number().int().min(0).max(10),
-  ),
-  sis_confidence: z.preprocess(
-    v => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
-    z.number().int().min(0).max(10),
-  ),
+export const SISOutputSchema = z
+  .object({
+    sis_novelty: z.preprocess(
+      (v) => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
+      z.number().int().min(0).max(10),
+    ),
+    sis_importance: z.preprocess(
+      (v) => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
+      z.number().int().min(0).max(10),
+    ),
+    sis_urgency: z.preprocess(
+      (v) => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
+      z.number().int().min(0).max(10),
+    ),
+    sis_confidence: z.preprocess(
+      (v) => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
+      z.number().int().min(0).max(10),
+    ),
 
-  human_cto:                  z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
-  human_research_director:    z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
-  human_vc:                   z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
-  human_founder:              z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
-  human_government_analyst:   z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
-  human_enterprise_architect: z.union([z.boolean(), z.string().transform(s => s === 'true')]).default(false),
+    human_cto: z.union([z.boolean(), z.string().transform((s) => s === 'true')]).default(false),
+    human_research_director: z
+      .union([z.boolean(), z.string().transform((s) => s === 'true')])
+      .default(false),
+    human_vc: z.union([z.boolean(), z.string().transform((s) => s === 'true')]).default(false),
+    human_founder: z.union([z.boolean(), z.string().transform((s) => s === 'true')]).default(false),
+    human_government_analyst: z
+      .union([z.boolean(), z.string().transform((s) => s === 'true')])
+      .default(false),
+    human_enterprise_architect: z
+      .union([z.boolean(), z.string().transform((s) => s === 'true')])
+      .default(false),
 
-  anti_hype_score: z.preprocess(
-    v => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
-    z.number().int().min(0).max(10),
-  ),
-  anti_hype_flags: z.array(z.string()).default([]),
+    anti_hype_score: z.preprocess(
+      (v) => Math.min(10, Math.max(0, Math.round(Number(v) || 0))),
+      z.number().int().min(0).max(10),
+    ),
+    anti_hype_flags: z.array(z.string()).default([]),
 
-  relevance_horizon: z.enum(['DAYS', 'WEEKS', 'MONTHS', 'YEARS', 'STRUCTURAL']).default('MONTHS'),
+    relevance_horizon: z.enum(['DAYS', 'WEEKS', 'MONTHS', 'YEARS', 'STRUCTURAL']).default('MONTHS'),
 
-  event_type: z.enum([
-    'DISCRETE_EVENT',
-    'EMERGING_TREND',
-    'ECOSYSTEM_CONSOLIDATION',
-    'TECHNOLOGY_MATURITY',
-    'DIRECTION_CONFIRMATION',
-    'INDUSTRY_MOVEMENT',
-  ]).default('DISCRETE_EVENT'),
+    event_type: z
+      .enum([
+        'DISCRETE_EVENT',
+        'EMERGING_TREND',
+        'ECOSYSTEM_CONSOLIDATION',
+        'TECHNOLOGY_MATURITY',
+        'DIRECTION_CONFIRMATION',
+        'INDUSTRY_MOVEMENT',
+      ])
+      .default('DISCRETE_EVENT'),
 
-  engine_justification: z.string().min(10).max(800),
-}).passthrough()
+    engine_justification: z.string().min(10).max(800),
+  })
+  .passthrough()
 
 export type SISOutput = z.infer<typeof SISOutputSchema>
 
@@ -82,6 +97,8 @@ CORE RULE: A Signal = evidence the tech landscape is CHANGING. Good engineering 
 Most papers are competent normal science (optimize/extend/apply known methods) — NOT Signals.
 DEFAULT: score low unless clear ecosystem-level consequence. Return ONLY JSON.
 
+${EVIDENCE_PROCESSING_CONTRACT_V1}
+
 sis_novelty(0-10): 0-2=known technique applied to new use case. 3-5=combines known techniques solving real limitation.
 6-8=new capability class others build on. 9-10=breakthrough.
 
@@ -90,7 +107,8 @@ sis_importance(0-10): 0-2=narrow technical audience only, no major actor changes
 
 sis_urgency(0-10): 0-2=no time pressure. 3-5=worth knowing this quarter. 6-8=reprioritize within weeks. 9-10=breaking news.
 
-sis_confidence(0-10): 0-2=single unverified source. 3-5=credible preprint uncorroborated. 6-8=official+corroborated. 9-10=peer-reviewed+adopted.
+sis_confidence(0-10): 0-2=unsupported or anonymous claim. 3-5=bounded but materially uncertain evidence.
+6-8=an exact policy-approved issuer statement or exact scholarly primary artifact with explicit attribution; this may still be single-source and is NOT independent verification. 9-10=independently corroborated, replicated, or adopted evidence.
 
 Human relevance — STRICT, default FALSE. Only TRUE if you can name the SPECIFIC decision that changes:
 human_cto: would change eng roadmap because of THIS finding specifically
@@ -115,10 +133,27 @@ engine_justification: 2-3 sentences. State explicitly whether this is "normal sc
 or genuine "ecosystem-changing intelligence" and why. If high score, name the SPECIFIC
 actor/market/direction that changes.`
 
-export function buildSISPrompt(title: string, content: string, sourceName: string, sourceType: string): string {
-  return `SOURCE: ${sourceName} (${sourceType})
-TITLE: ${title}
-CONTENT: ${content.slice(0, 400)}
+function promptEvidence(value: string, maxChars: number): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, maxChars)
+}
+
+export function buildSISPrompt(
+  title: string,
+  content: string,
+  sourceName: string,
+  sourceType: string,
+  evidencePolicy = 'EVIDENCE_POLICY: eligible=false; reason=NOT_EVALUATED',
+): string {
+  return `${evidencePolicy}
+<UNTRUSTED_SOURCE>
+SOURCE: ${promptEvidence(sourceName, 120)} (${promptEvidence(sourceType, 48)})
+TITLE: ${promptEvidence(title, 500)}
+CONTENT: ${promptEvidence(content, 400)}
+</UNTRUSTED_SOURCE>
 
 Evaluate strategic importance. Return JSON only.`
 }
@@ -128,26 +163,26 @@ export type RuleTraceEntry = string
 // ── Compute final SIS ─────────────────────────────────────────────────────────
 
 export function computeSIS(
-  raw:     SISOutput,
-  title:   string = '',
+  raw: SISOutput,
+  title: string = '',
   content: string = '',
 ): {
-  sis:                     StrategicImportanceScore
-  human_relevance:         HumanRelevanceFlags
-  anti_hype_score:         number
-  anti_hype_flags:         string[]
-  relevance_horizon:       string
-  engine_justification:    string
-  decision:                QualificationResult
-  publication_type:        PublicationClassification
-  rule_trace:              RuleTraceEntry[]
+  sis: StrategicImportanceScore
+  human_relevance: HumanRelevanceFlags
+  anti_hype_score: number
+  anti_hype_flags: string[]
+  relevance_horizon: string
+  engine_justification: string
+  decision: QualificationResult
+  publication_type: PublicationClassification
+  rule_trace: RuleTraceEntry[]
 } {
   const ruleTrace: RuleTraceEntry[] = []
 
   // ── Step 1: Engine Classification (deterministic, BEFORE any LLM-derived logic) ──
   const publicationClass = classifyPublicationType(title, content)
   if (publicationClass.matchedPatterns.length > 0) {
-    ruleTrace.push(...publicationClass.matchedPatterns.map(p => `classification:${p}`))
+    ruleTrace.push(...publicationClass.matchedPatterns.map((p) => `classification:${p}`))
   }
 
   // ── Step 2: Apply deterministic caps based on Engine classification ─────────
@@ -156,25 +191,29 @@ export function computeSIS(
 
   // ── Step 3: Compute SIS_FINAL from (possibly capped) dimensions ──────────────
   const sis: StrategicImportanceScore = {
-    novelty:    caps.novelty,
+    novelty: caps.novelty,
     importance: caps.importance,
-    urgency:    raw.sis_urgency,
+    urgency: raw.sis_urgency,
     confidence: raw.sis_confidence,
-    final:      0,
+    final: 0,
   }
   sis.final = parseFloat(computeSISFinal(sis).toFixed(2))
 
   // ── Step 4: Human Relevance — modifier, not gate ─────────────────────────────
   const human_relevance: HumanRelevanceFlags = {
-    cto:                  raw.human_cto,
-    research_director:    raw.human_research_director,
-    vc:                   raw.human_vc,
-    founder:              raw.human_founder,
-    government_analyst:   raw.human_government_analyst,
+    cto: raw.human_cto,
+    research_director: raw.human_research_director,
+    vc: raw.human_vc,
+    founder: raw.human_founder,
+    government_analyst: raw.human_government_analyst,
     enterprise_architect: raw.human_enterprise_architect,
-    roles_yes_count:      [
-      raw.human_cto, raw.human_research_director, raw.human_vc,
-      raw.human_founder, raw.human_government_analyst, raw.human_enterprise_architect,
+    roles_yes_count: [
+      raw.human_cto,
+      raw.human_research_director,
+      raw.human_vc,
+      raw.human_founder,
+      raw.human_government_analyst,
+      raw.human_enterprise_architect,
     ].filter(Boolean).length,
   }
 
@@ -202,25 +241,34 @@ export function computeSIS(
 
   // ── Build transparent, human-readable justification ──────────────────────────
   const overrideNotes: string[] = []
-  if (caps.noveltyCapped)    overrideNotes.push(`NOVELTY CAP: publication classified as ${publicationClass.type} — novelty capped`)
-  if (caps.importanceCapped) overrideNotes.push(`IMPORTANCE CAP: publication classified as ${publicationClass.type} — importance capped`)
+  if (caps.noveltyCapped)
+    overrideNotes.push(
+      `NOVELTY CAP: publication classified as ${publicationClass.type} — novelty capped`,
+    )
+  if (caps.importanceCapped)
+    overrideNotes.push(
+      `IMPORTANCE CAP: publication classified as ${publicationClass.type} — importance capped`,
+    )
   if (ruleTrace.includes('event_type_promotion')) {
-    overrideNotes.push(`EVENT TYPE: classified as ${raw.event_type} — promoted from DISCARD to Weak Signal`)
+    overrideNotes.push(
+      `EVENT TYPE: classified as ${raw.event_type} — promoted from DISCARD to Weak Signal`,
+    )
   }
 
-  const finalJustification = overrideNotes.length > 0
-    ? `${raw.engine_justification} [ENGINE OVERRIDES: ${overrideNotes.join(' | ')}]`
-    : raw.engine_justification
+  const finalJustification =
+    overrideNotes.length > 0
+      ? `${raw.engine_justification} [ENGINE OVERRIDES: ${overrideNotes.join(' | ')}]`
+      : raw.engine_justification
 
   return {
     sis,
     human_relevance,
-    anti_hype_score:      raw.anti_hype_score,
-    anti_hype_flags:      raw.anti_hype_flags,
-    relevance_horizon:    raw.relevance_horizon,
+    anti_hype_score: raw.anti_hype_score,
+    anti_hype_flags: raw.anti_hype_flags,
+    relevance_horizon: raw.relevance_horizon,
     engine_justification: finalJustification,
     decision,
-    publication_type:     publicationClass,
-    rule_trace:           ruleTrace,
+    publication_type: publicationClass,
+    rule_trace: ruleTrace,
   }
 }

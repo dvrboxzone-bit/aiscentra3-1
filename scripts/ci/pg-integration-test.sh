@@ -1171,6 +1171,16 @@ check "schema restoration after TEST 17's intentional drops is genuinely complet
 
 echo ""
 echo "TEST 19 — DRAFT corroboration/approval is provenance-aware, atomic, and idempotent"
+$PG -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+INSERT INTO public.sources(id,name,type,url,status) VALUES
+  ('1c46d1c9-3a60-4629-9bcf-63300649439d','OpenAI Blog','company_blog','https://openai.com/blog','ACTIVE'),
+  ('ebdde718-9cab-432b-a597-91d7e14f4eee','Google DeepMind','company_blog','https://deepmind.google/discover/blog/','ACTIVE'),
+  ('bd3a13c6-ea98-4e4f-aefa-4063af595653','ArXiv CS.AI','research','https://arxiv.org/list/cs.AI/recent','ACTIVE'),
+  ('d0b027dd-b139-4f56-958a-830377d59e0b','ArXiv CS.LG','research','https://arxiv.org/list/cs.LG/recent','ACTIVE'),
+  ('3a4a7e80-381f-4daa-b5a0-eb20b1fd18e7','GitHub Blog AI','technical','https://github.blog','ACTIVE'),
+  ('45e5cf9a-8539-4d91-add2-ff209a5ebcb3','Hugging Face Blog','technical','https://huggingface.co/blog','ACTIVE')
+ON CONFLICT (id) DO NOTHING;
+SQL
 $PG -v ON_ERROR_STOP=1 -f "$DRAFT_CORROBORATION_MIGRATION" >/dev/null
 
 ROOT_A="41414141-4141-4414-8414-414141414141"
@@ -1258,8 +1268,8 @@ check "unknown source root remains a fail-closed secondary guard" "DRAFT|PENDING
   "$($PG -v ON_ERROR_STOP=0 -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_UNKNOWN_ROOT');" 2>/dev/null || true; $PG -c "SELECT status||'|'||quality_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_UNKNOWN_ROOT') FROM signals WHERE id='$SIG_OK';")"
 
 CORROBORATED_RESULT="$($PG -c "SELECT public.corroborate_draft_signal('$SIG_OK','$OBS_B')->>'applied';")"
-check "independent roots atomically approve and activate" "true|ACTIVE|APPROVED|CORROBORATED|2|true" \
-  "$CORROBORATED_RESULT|$($PG -c "SELECT status||'|'||quality_state||'|'||verification_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_B') FROM signals WHERE id='$SIG_OK';")"
+check "independent roots atomically approve and activate" "true|ACTIVE|APPROVED|CORROBORATED|CORROBORATED|2|true" \
+  "$CORROBORATED_RESULT|$($PG -c "SELECT status||'|'||quality_state||'|'||evidence_tier||'|'||verification_state||'|'||cardinality(observation_ids)||'|'||(SELECT processed FROM observations WHERE id='$OBS_B') FROM signals WHERE id='$SIG_OK';")"
 check "approval audit snapshots exact evidence, assessments, roots, rule and actor" "2|2|2|draft-corroboration-approval-v2|1" \
   "$($PG -c "SELECT cardinality(evidence_observation_ids)||'|'||cardinality(evidence_provenance_roots)||'|'||jsonb_array_length(provenance_assessments)||'|'||rule_version||'|'||count(*) OVER () FROM signal_corroboration_audits WHERE signal_id='$SIG_OK';")"
 check "assessment snapshot is sufficient to reproduce the accepted decision" "2" \
@@ -1296,6 +1306,118 @@ check "existing public selection includes only the successful ACTIVE Signal" "$S
   "$($PG -c "SELECT id FROM signals WHERE status IN ('ACTIVE','PROMOTED') AND has_verified_source=true AND id IN ('$SIG_OK','$SIG_LOW','$SIG_WEAK','$SIG_ROLLBACK') ORDER BY id;")"
 check "existing digest cutoff selects the newly ACTIVE Signal" "$SIG_OK" \
   "$($PG -c "SELECT id FROM signals WHERE status IN ('ACTIVE','PROMOTED') AND created_at > now()-interval '1 hour' AND id IN ('$SIG_OK','$SIG_LOW','$SIG_WEAK','$SIG_ROLLBACK') ORDER BY created_at,id LIMIT 3;")"
+
+echo ""
+echo "TEST 20 — PRIMARY_CONFIRMED is policy-bound, atomic, and wired to Durable FINALIZE"
+PRIMARY_OPENAI_OBS="71717171-7171-4717-8717-717171717171"
+PRIMARY_OPENAI_RUN="71717171-7171-4717-8717-717171717172"
+PRIMARY_ARXIV_OBS="72727272-7272-4727-8727-727272727272"
+PRIMARY_ARXIV_RUN="72727272-7272-4727-8727-727272727273"
+PRIMARY_EXCLUDED_OBS="73737373-7373-4737-8737-737373737373"
+PRIMARY_EXCLUDED_RUN="73737373-7373-4737-8737-737373737374"
+PRIMARY_LOW_OBS="74747474-7474-4747-8747-747474747474"
+PRIMARY_LOW_RUN="74747474-7474-4747-8747-747474747475"
+PRIMARY_WEAK_OBS="75757575-7575-4757-8757-757575757575"
+PRIMARY_WEAK_RUN="75757575-7575-4757-8757-757575757576"
+PRIMARY_ROLLBACK_OBS="76767676-7676-4767-8767-767676767676"
+PRIMARY_ROLLBACK_RUN="76767676-7676-4767-8767-767676767677"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+DELETE FROM public.sis_provider_budget_reservations;
+DELETE FROM public.sis_execution_attempts;
+DELETE FROM public.sis_execution_finalizations;
+DELETE FROM public.sis_execution_recoveries;
+DELETE FROM public.sis_execution_runs;
+DELETE FROM pgmq.q_durable_sis_v1;
+INSERT INTO public.observations(id,source_id,title,content,processed,url_verified_ok,url) VALUES
+  ('$PRIMARY_OPENAI_OBS','1c46d1c9-3a60-4629-9bcf-63300649439d','OpenAI fixture release','Bounded issuer release evidence.',false,true,'https://openai.com/index/fixture-release/'),
+  ('$PRIMARY_ARXIV_OBS','bd3a13c6-ea98-4e4f-aefa-4063af595653','ArXiv fixture paper','Exact self-reported paper evidence.',false,true,'https://arxiv.org/abs/2608.27899v2'),
+  ('$PRIMARY_EXCLUDED_OBS','3a4a7e80-381f-4daa-b5a0-eb20b1fd18e7','GitHub Blog fixture','Excluded publisher fixture.',false,true,'https://github.blog/fixture-release/'),
+  ('$PRIMARY_LOW_OBS','ebdde718-9cab-432b-a597-91d7e14f4eee','Low SIS fixture','Allowed source but insufficient SIS.',false,true,'https://deepmind.google/blog/low-sis-fixture/'),
+  ('$PRIMARY_WEAK_OBS','ebdde718-9cab-432b-a597-91d7e14f4eee','Weak fixture','Allowed source but classifier result is WEAK.',false,true,'https://deepmind.google/blog/weak-fixture/'),
+  ('$PRIMARY_ROLLBACK_OBS','ebdde718-9cab-432b-a597-91d7e14f4eee','Rollback fixture','Atomic failure and retry fixture.',false,true,'https://deepmind.google/blog/rollback-fixture/');
+INSERT INTO public.sis_execution_runs(
+  id,control_key,observation_id,status,current_stage,
+  finalization_outcome,finalization_signal,finalization_decision
+) VALUES
+  ('$PRIMARY_OPENAI_RUN','durable_sis_v1_control_20260825','$PRIMARY_OPENAI_OBS','READY_TO_FINALIZE','FINALIZE','SIGNAL',
+   '{"title":"OpenAI bounded release","description":"OpenAI announced a bounded product release. Independent effectiveness has not been established.","category":"MODELS","impact_factor":8,"actor_factor":8,"novelty_factor":7,"verifiability_factor":8,"strategic_factor":8,"authority_factor":8,"corroboration_factor":2,"specificity_factor":8,"category_confidence_factor":8,"signal_score":80,"confidence_score":78,"momentum_score":40}'::jsonb,
+   '{"sis_novelty":7,"sis_importance":8,"sis_urgency":7,"sis_confidence":8,"sis_final":6.9,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Substantive bounded issuer fixture."}'::jsonb),
+  ('$PRIMARY_ARXIV_RUN','durable_sis_v1_control_20260825','$PRIMARY_ARXIV_OBS','READY_TO_FINALIZE','FINALIZE','SIGNAL',
+   '{"title":"ArXiv bounded research result","description":"The authors report a bounded research result in this preprint. Independent replication has not been established.","category":"RESEARCH","impact_factor":7,"actor_factor":7,"novelty_factor":7,"verifiability_factor":7,"strategic_factor":7,"authority_factor":7,"corroboration_factor":2,"specificity_factor":8,"category_confidence_factor":8,"signal_score":72,"confidence_score":72,"momentum_score":30}'::jsonb,
+   '{"sis_novelty":7,"sis_importance":7,"sis_urgency":6,"sis_confidence":7,"sis_final":6.4,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Exact self-reported preprint fixture."}'::jsonb),
+  ('$PRIMARY_EXCLUDED_RUN','durable_sis_v1_control_20260825','$PRIMARY_EXCLUDED_OBS','READY_TO_FINALIZE','FINALIZE','SIGNAL',
+   '{"title":"Excluded publisher event","description":"GitHub announced a release that cannot qualify under primary-confirmed-v1.","category":"OPEN_SOURCE","impact_factor":8,"actor_factor":8,"novelty_factor":7,"verifiability_factor":8,"strategic_factor":8,"authority_factor":8,"corroboration_factor":2,"specificity_factor":8,"category_confidence_factor":8,"signal_score":80,"confidence_score":78,"momentum_score":40}'::jsonb,
+   '{"sis_novelty":7,"sis_importance":8,"sis_urgency":7,"sis_confidence":8,"sis_final":6.9,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Excluded source fixture."}'::jsonb),
+  ('$PRIMARY_LOW_RUN','durable_sis_v1_control_20260825','$PRIMARY_LOW_OBS','READY_TO_FINALIZE','FINALIZE','SIGNAL',
+   '{"title":"Low SIS issuer event","description":"Google DeepMind announced a routine update without sufficient SIS.","category":"RESEARCH","impact_factor":5,"actor_factor":5,"novelty_factor":4,"verifiability_factor":7,"strategic_factor":4,"authority_factor":7,"corroboration_factor":2,"specificity_factor":7,"category_confidence_factor":7,"signal_score":50,"confidence_score":60,"momentum_score":10}'::jsonb,
+   '{"sis_novelty":4,"sis_importance":5,"sis_urgency":4,"sis_confidence":6,"sis_final":5.5,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Below threshold fixture."}'::jsonb),
+  ('$PRIMARY_WEAK_RUN','durable_sis_v1_control_20260825','$PRIMARY_WEAK_OBS','READY_TO_FINALIZE','FINALIZE','WEAK_SIGNAL',
+   '{"title":"Weak issuer event","description":"Google DeepMind announced a routine weak event that remains non-public.","category":"RESEARCH","impact_factor":5,"actor_factor":5,"novelty_factor":4,"verifiability_factor":7,"strategic_factor":4,"authority_factor":7,"corroboration_factor":2,"specificity_factor":7,"category_confidence_factor":7,"signal_score":50,"confidence_score":60,"momentum_score":10}'::jsonb,
+   '{"sis_novelty":4,"sis_importance":5,"sis_urgency":4,"sis_confidence":6,"sis_final":4.5,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Weak fixture."}'::jsonb),
+  ('$PRIMARY_ROLLBACK_RUN','durable_sis_v1_control_20260825','$PRIMARY_ROLLBACK_OBS','READY_TO_FINALIZE','FINALIZE','SIGNAL',
+   '{"title":"DeepMind bounded release","description":"Google DeepMind announced a bounded research release. Independent effectiveness has not been established.","category":"RESEARCH","impact_factor":8,"actor_factor":8,"novelty_factor":7,"verifiability_factor":8,"strategic_factor":8,"authority_factor":8,"corroboration_factor":2,"specificity_factor":8,"category_confidence_factor":8,"signal_score":80,"confidence_score":78,"momentum_score":40}'::jsonb,
+   '{"sis_novelty":7,"sis_importance":8,"sis_urgency":7,"sis_confidence":8,"sis_final":6.9,"anti_hype_score":8,"anti_hype_flags":[],"human_relevance":{},"relevance_horizon":"MONTHS","engine_justification":"Atomic rollback fixture."}'::jsonb);
+WITH messages AS (
+  SELECT id AS run_id, pgmq.send('durable_sis_v1',jsonb_build_object('stage','FINALIZE','run_id',id)) AS message_id
+  FROM public.sis_execution_runs
+  WHERE id IN (
+    '$PRIMARY_OPENAI_RUN','$PRIMARY_ARXIV_RUN','$PRIMARY_EXCLUDED_RUN',
+    '$PRIMARY_LOW_RUN','$PRIMARY_WEAK_RUN','$PRIMARY_ROLLBACK_RUN'
+  )
+)
+UPDATE public.sis_execution_runs run
+SET finalization_message_id=messages.message_id
+FROM messages WHERE run.id=messages.run_id;
+SELECT public.finalize_durable_sis_v1('$PRIMARY_OPENAI_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_OPENAI_RUN'));
+SELECT public.finalize_durable_sis_v1('$PRIMARY_ARXIV_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_ARXIV_RUN'));
+SELECT public.finalize_durable_sis_v1('$PRIMARY_EXCLUDED_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_EXCLUDED_RUN'));
+SELECT public.finalize_durable_sis_v1('$PRIMARY_LOW_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_LOW_RUN'));
+SELECT public.finalize_durable_sis_v1('$PRIMARY_WEAK_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_WEAK_RUN'));
+SQL
+
+check "OpenAI issuer evidence atomically becomes PRIMARY_CONFIRMED APPROVED/ACTIVE" "ACTIVE|APPROVED|PRIMARY_CONFIRMED|SINGLE_SOURCE_UNVERIFIED|OpenAI announced" \
+  "$($PG -c "SELECT status||'|'||quality_state||'|'||evidence_tier||'|'||verification_state||'|'||left(description,16) FROM signals WHERE '$PRIMARY_OPENAI_OBS'=ANY(observation_ids);")"
+check "ArXiv is bounded to the exact paper and self-reported attribution" "ACTIVE|APPROVED|PRIMARY_CONFIRMED|arxiv.org|arxiv-authors:2608.27899|The authors report" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.evidence_tier||'|'||audit.provenance_root||'|'||audit.origin_owner||'|'||audit.required_attribution FROM signals signal JOIN signal_primary_evidence_audits audit ON audit.signal_id=signal.id WHERE '$PRIMARY_ARXIV_OBS'=ANY(signal.observation_ids);")"
+check "ArXiv audit scope states self-report and never independent verification" "1|0" \
+  "$($PG -c "SELECT (allowed_claim_scope ILIKE '%self-report%')::int||'|'||(evidence_tier='VERIFIED')::int FROM signal_primary_evidence_audits WHERE observation_id='$PRIMARY_ARXIV_OBS';")"
+check "GitHub Blog exclusion is audited and remains non-public DRAFT/PENDING" "DRAFT|PENDING|UNASSESSED|REJECTED|SOURCE_POLICY_EXCLUDED" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.evidence_tier||'|'||audit.decision||'|'||audit.reason_code FROM signals signal JOIN signal_primary_evidence_audits audit ON audit.signal_id=signal.id WHERE '$PRIMARY_EXCLUDED_OBS'=ANY(signal.observation_ids);")"
+check "allowed source below existing SIS threshold remains DRAFT" "DRAFT|PENDING|UNASSESSED|SIS_BELOW_THRESHOLD" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.evidence_tier||'|'||audit.reason_code FROM signals signal JOIN signal_primary_evidence_audits audit ON audit.signal_id=signal.id WHERE '$PRIMARY_LOW_OBS'=ANY(signal.observation_ids);")"
+check "WEAK outcome never enters PRIMARY_CONFIRMED path" "WEAK|PENDING|UNASSESSED|0" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.evidence_tier||'|'||(SELECT count(*) FROM signal_primary_evidence_audits audit WHERE audit.signal_id=signal.id) FROM signals signal WHERE '$PRIMARY_WEAK_OBS'=ANY(signal.observation_ids);")"
+check "only successful PRIMARY_CONFIRMED Signals enter public and digest selection" "2|2" \
+  "$($PG -c "SELECT count(*) FILTER (WHERE status IN ('ACTIVE','PROMOTED') AND has_verified_source=true)||'|'||count(*) FILTER (WHERE status IN ('ACTIVE','PROMOTED') AND created_at>now()-interval '1 hour') FROM signals WHERE observation_ids && ARRAY['$PRIMARY_OPENAI_OBS','$PRIMARY_ARXIV_OBS','$PRIMARY_EXCLUDED_OBS','$PRIMARY_LOW_OBS','$PRIMARY_WEAK_OBS']::uuid[];")"
+check "PRIMARY_CONFIRMED approval keeps original content decision and exact audit" "2|2|2" \
+  "$($PG -c "SELECT (SELECT count(*) FROM signal_decision_log WHERE observation_id IN ('$PRIMARY_OPENAI_OBS','$PRIMARY_ARXIV_OBS'))||'|'||(SELECT count(*) FROM signal_primary_evidence_audits WHERE observation_id IN ('$PRIMARY_OPENAI_OBS','$PRIMARY_ARXIV_OBS') AND decision='APPROVED')||'|'||(SELECT count(*) FROM signal_quality_decisions WHERE signal_id IN (SELECT id FROM signals WHERE observation_ids && ARRAY['$PRIMARY_OPENAI_OBS','$PRIMARY_ARXIV_OBS']::uuid[]) AND to_state='APPROVED');")"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+CREATE FUNCTION public.fail_fixture_primary_audit() RETURNS trigger LANGUAGE plpgsql AS \$\$
+BEGIN
+  IF NEW.observation_id='$PRIMARY_ROLLBACK_OBS' THEN RAISE EXCEPTION 'fixture injected primary failure'; END IF;
+  RETURN NEW;
+END \$\$;
+CREATE TRIGGER fail_fixture_primary_audit
+  BEFORE INSERT ON public.signal_primary_evidence_audits
+  FOR EACH ROW EXECUTE FUNCTION public.fail_fixture_primary_audit();
+SQL
+set +e
+PRIMARY_FAILURE="$($PG -v ON_ERROR_STOP=1 -c "SELECT public.finalize_durable_sis_v1('$PRIMARY_ROLLBACK_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_ROLLBACK_RUN'));" 2>&1)"
+PRIMARY_FAILURE_CODE=$?
+set -e
+check "injected PRIMARY audit failure is surfaced" "1" \
+  "$([[ "$PRIMARY_FAILURE_CODE" -ne 0 && "$PRIMARY_FAILURE" == *"fixture injected primary failure"* ]] && echo 1 || echo 0)"
+check "PRIMARY failure rolls back Signal, decision, observation, finalization and archive" "0|0|false|0|1" \
+  "$($PG -c "SELECT (SELECT count(*) FROM signals WHERE '$PRIMARY_ROLLBACK_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$PRIMARY_ROLLBACK_OBS')||'|'||(SELECT processed FROM observations WHERE id='$PRIMARY_ROLLBACK_OBS')||'|'||(SELECT count(*) FROM sis_execution_finalizations WHERE run_id='$PRIMARY_ROLLBACK_RUN')||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1 WHERE msg_id=(SELECT finalization_message_id FROM sis_execution_runs WHERE id='$PRIMARY_ROLLBACK_RUN'));")"
+$PG -c "DROP TRIGGER fail_fixture_primary_audit ON public.signal_primary_evidence_audits; DROP FUNCTION public.fail_fixture_primary_audit();" >/dev/null
+$PG -v ON_ERROR_STOP=1 -c "SELECT public.finalize_durable_sis_v1('$PRIMARY_ROLLBACK_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_ROLLBACK_RUN'));" >/dev/null
+check "retry after transaction rollback succeeds exactly once" "ACTIVE|APPROVED|PRIMARY_CONFIRMED|1|1|1" \
+  "$($PG -c "SELECT signal.status||'|'||signal.quality_state||'|'||signal.evidence_tier||'|'||(SELECT count(*) FROM signals WHERE '$PRIMARY_ROLLBACK_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$PRIMARY_ROLLBACK_OBS')||'|'||(SELECT count(*) FROM signal_primary_evidence_audits WHERE observation_id='$PRIMARY_ROLLBACK_OBS') FROM signals signal WHERE '$PRIMARY_ROLLBACK_OBS'=ANY(signal.observation_ids);")"
+PRIMARY_DUPLICATE="$($PG -c "SELECT (public.finalize_durable_sis_v1('$PRIMARY_ROLLBACK_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_ROLLBACK_RUN'))->>'duplicate')::boolean;")"
+check "repeated PRIMARY finalization is idempotent" "t|1|1|1" \
+  "$PRIMARY_DUPLICATE|$($PG -c "SELECT (SELECT count(*) FROM signals WHERE '$PRIMARY_ROLLBACK_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$PRIMARY_ROLLBACK_OBS')||'|'||(SELECT count(*) FROM signal_primary_evidence_audits WHERE observation_id='$PRIMARY_ROLLBACK_OBS');")"
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then

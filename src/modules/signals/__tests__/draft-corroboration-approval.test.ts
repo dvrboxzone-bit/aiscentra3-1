@@ -8,6 +8,9 @@ const migration = readFileSync(
   'utf8',
 )
 const migrationSql = migration.replace(/--.*$/gm, '')
+const corroborationOperation = migration.match(
+  /CREATE OR REPLACE FUNCTION public\.corroborate_draft_signal[\s\S]*?\nEND;\n\$\$;/,
+)?.[0]
 const publicQueries = readFileSync(resolve('src/modules/signals/queries.ts'), 'utf8')
 const digestRoute = readFileSync(resolve('src/app/api/cron/signals-digest/route.ts'), 'utf8')
 
@@ -68,6 +71,7 @@ describe('DRAFT corroboration approval contract', () => {
       /status IN \('ACTIVE', 'PROMOTED'\)/,
       /intelligence_type IN \('SIGNAL', 'CRITICAL_SIGNAL'\)/,
       /has_verified_source = TRUE/,
+      /evidence_tier IN \('CORROBORATED', 'VERIFIED'\)/,
       /verification_state IN \('CORROBORATED', 'VERIFIED'\)/,
       /qualification_score >= 6\.0/,
       /sis_final >= 6\.0/,
@@ -93,10 +97,11 @@ describe('DRAFT corroboration approval contract', () => {
   })
 
   test('does not rewrite classifier/parser/content-decision records or introduce side effects', () => {
-    assert.doesNotMatch(migrationSql, /UPDATE public\.signal_decision_log/i)
-    assert.doesNotMatch(migrationSql, /INSERT INTO public\.signal_decision_log/i)
+    assert.ok(corroborationOperation)
+    assert.doesNotMatch(corroborationOperation, /UPDATE public\.signal_decision_log/i)
+    assert.doesNotMatch(corroborationOperation, /INSERT INTO public\.signal_decision_log/i)
     assert.doesNotMatch(
-      migrationSql,
+      corroborationOperation,
       /sis_execution_attempts|sis_execution_runs|pgmq|fetch\(|resend/i,
     )
     assert.doesNotMatch(migrationSql, /CREATE POLICY|ALTER POLICY/i)
