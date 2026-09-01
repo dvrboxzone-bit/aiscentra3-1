@@ -67,7 +67,13 @@ test('real source type and trust score reach Durable SIS stage payloads without 
     content: 'Verified primary evidence',
     url: 'https://source.example/evidence',
   }
-  const source = { name: 'Verified Source', type: 'primary', trust_score: 0.91 }
+  const source = {
+    name: 'Verified Source',
+    type: 'primary',
+    trust_score: 0.91,
+    url: 'https://source.example',
+    status: 'ACTIVE',
+  }
   const db = {
     rpc: async (name: string) => {
       if (name === 'claim_durable_sis_v1_attempt') {
@@ -110,7 +116,10 @@ test('real source type and trust score reach Durable SIS stage payloads without 
 
   assert.equal((await POST(request)).status, 200)
   assert.equal((await POST(request)).status, 200)
-  assert.deepEqual(sourceSelects, ['name, type, trust_score', 'name, type, trust_score'])
+  assert.deepEqual(sourceSelects, [
+    'name, type, trust_score, url, status',
+    'name, type, trust_score, url, status',
+  ])
 
   const classifierPayload =
     reservations.find((reservation) => reservation.content.includes('(primary)'))?.content ?? ''
