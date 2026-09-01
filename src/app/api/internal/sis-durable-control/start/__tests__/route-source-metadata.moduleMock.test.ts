@@ -35,7 +35,12 @@ test('real source type reaches the Durable SIS start payload without fallback', 
     title: 'Control observation',
     content: 'Verified primary evidence',
   }
-  const source = { name: 'ArXiv CS.AI', type: 'research', status: 'ACTIVE' }
+  const source = {
+    name: 'ArXiv CS.AI',
+    type: 'research',
+    status: 'ACTIVE',
+    url: 'https://arxiv.org/list/cs.AI/recent',
+  }
   const db = {
     rpc: async (name: string, args: Record<string, unknown>) => {
       rpcCalls.push({ name, args })
@@ -76,7 +81,7 @@ test('real source type reaches the Durable SIS start payload without fallback', 
   )
 
   assert.equal(response.status, 200)
-  assert.deepEqual(sourceSelects, ['name,type,status'])
+  assert.deepEqual(sourceSelects, ['name,type,status,url'])
   assert.match(reservations[0] ?? '', /SOURCE: ArXiv CS\.AI \(research\)/)
   assert.doesNotMatch(reservations[0] ?? '', /Unknown Source/)
   assert.deepEqual(rpcCalls, [

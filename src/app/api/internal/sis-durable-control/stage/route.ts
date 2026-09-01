@@ -31,6 +31,10 @@ import {
   computeSIS,
 } from '@/modules/signals/strategic-score'
 import { validateSignal } from '@/modules/signals/validation'
+import {
+  assessPrimaryEvidencePolicyV1,
+  primaryEvidencePromptContext,
+} from '@/modules/signals/primary-evidence-policy'
 import type { ModelRef } from '@/lib/ai/config'
 import type { ObservationRow } from '@/modules/observations/queries'
 
@@ -207,17 +211,30 @@ export async function POST(request: Request): Promise<NextResponse> {
     const observation = observationData as ObservationRow
     const { data: source } = await db
       .from('sources')
-      .select('name, type, trust_score')
+      .select('name, type, trust_score, url, status')
       .eq('id', observation.source_id)
       .single()
     const sourceName = source?.name ?? 'Unknown Source'
     const sourceType = source?.type ?? ''
+    const evidencePolicy = primaryEvidencePromptContext(
+      assessPrimaryEvidencePolicyV1({
+        sourceId: observation.source_id,
+        sourceUrl: source?.url ?? '',
+        observationUrl: observation.url,
+      }),
+    )
 
     const classifierMessages: AIMessage[] = [
       { role: 'system', content: SIS_SYSTEM_PROMPT },
       {
         role: 'user',
-        content: buildSISPrompt(observation.title, observation.content, sourceName, sourceType),
+        content: buildSISPrompt(
+          observation.title,
+          observation.content,
+          sourceName,
+          sourceType,
+          evidencePolicy,
+        ),
       },
     ]
     const parserMessages: AIMessage[] = [
@@ -234,6 +251,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           sourceType,
           sourceTrustScore: source?.trust_score ?? 0.5,
           candidateCategory: candidateCategory(observation.title, observation.content),
+          evidencePolicy,
         }),
       },
     ]

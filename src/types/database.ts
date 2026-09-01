@@ -387,6 +387,7 @@ export interface Signal {
   quality_rule_version: string
   quality_evaluated_at: string | null
   quarantined_at: string | null
+  evidence_tier: 'UNASSESSED' | 'PRIMARY_CONFIRMED' | 'CORROBORATED' | 'VERIFIED'
 
   // V1: Lifecycle
   validation_flags: string[]
