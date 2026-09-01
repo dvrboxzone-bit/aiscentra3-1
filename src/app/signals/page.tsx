@@ -72,6 +72,9 @@ const CATEGORY_METADATA: Record<SignalCategory, { title: string; description: st
   },
 }
 
+const ALL_CATEGORIES_DESCRIPTION =
+  'Every published Signal across all nine tracked categories — models, companies, research, funding, regulation, and more — filtered only by evidence, not by topic.'
+
 const DEFAULT_SIGNALS_METADATA = {
   title: 'Signals',
   description:
@@ -257,7 +260,12 @@ export default async function SignalsPage({
         <div className="relative z-10 mx-auto max-w-[1200px]">
           <span className="font-caption mb-4 block text-mint-signal">SIGNAL DISCOVERY</span>
           <h1 className="font-display mb-6 text-[12vw] text-frost md:text-[80px]">Signal Feed.</h1>
-          <p className="mb-12 text-lg text-silver-haze">
+          <p className="mb-4 max-w-2xl text-lg text-silver-haze">
+            {activeCategory
+              ? CATEGORY_METADATA[activeCategory].description
+              : ALL_CATEGORIES_DESCRIPTION}
+          </p>
+          <p className="mb-12 text-sm text-silver-haze opacity-70">
             {totalCount} published signal{totalCount !== 1 ? 's' : ''}
             {activeCategory ? ` in ${activeCategory.replace('_', ' ')}` : ''} — page {currentPage}{' '}
             of {totalPages}
