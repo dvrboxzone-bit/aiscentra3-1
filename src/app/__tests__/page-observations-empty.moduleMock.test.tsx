@@ -36,7 +36,7 @@ describe('HomePage (vfinal) — Observations: empty real result', () => {
       },
     })
 
-    const { default: HomePage } = await import('../page')
+    const { default: HomePage } = await import('../(public)/page')
     const jsx = await HomePage()
     const { container } = render(jsx)
 

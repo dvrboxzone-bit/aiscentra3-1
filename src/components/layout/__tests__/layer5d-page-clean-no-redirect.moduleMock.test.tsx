@@ -26,7 +26,7 @@ describe('/signals — a real, clean, valid page value does NOT redirect', () =>
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({ page: '2' }) })
     assert.ok(jsx, 'a clean page=2 must resolve normally, not redirect')
     assert.ok(signalsCalled, 'getSignals must genuinely be reached for a clean page value')

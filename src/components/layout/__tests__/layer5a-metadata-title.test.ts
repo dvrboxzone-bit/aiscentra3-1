@@ -37,7 +37,7 @@ function extractRealTemplate(): string {
 
 describe('/about and /signals — real metadata.title, no double-branding', () => {
   test('the real /about page module exports metadata.title exactly "About"', async () => {
-    const { metadata } = await import('../../../app/about/page')
+    const { metadata } = await import('../../../app/(public)/about/page')
     assert.equal(
       metadata.title,
       'About',
@@ -46,14 +46,14 @@ describe('/about and /signals — real metadata.title, no double-branding', () =
   })
 
   test('the real /signals page module exports generateMetadata whose default (no category) title is exactly "Signals"', async () => {
-    const { generateMetadata } = await import('../../../app/signals/page')
+    const { generateMetadata } = await import('../../../app/(public)/signals/page')
     const metadata = await generateMetadata({ searchParams: Promise.resolve({}) })
     assert.equal(metadata.title, 'Signals')
   })
 
   test('interpolating the REAL root template against the REAL /about title produces exactly "About | AIscentra" -- the genuine final HTML <title> value, no double-branding', async () => {
     const realTemplate = extractRealTemplate()
-    const { metadata: aboutMetadata } = await import('../../../app/about/page')
+    const { metadata: aboutMetadata } = await import('../../../app/(public)/about/page')
     const resolved = realTemplate.replace('%s', aboutMetadata.title as string)
     assert.equal(resolved, 'About | AIscentra')
     assert.doesNotMatch(
@@ -65,7 +65,7 @@ describe('/about and /signals — real metadata.title, no double-branding', () =
 
   test('interpolating the REAL root template against the REAL /signals default (no category) title produces exactly "Signals | AIscentra" -- the genuine final HTML <title> value, no double-branding', async () => {
     const realTemplate = extractRealTemplate()
-    const { generateMetadata } = await import('../../../app/signals/page')
+    const { generateMetadata } = await import('../../../app/(public)/signals/page')
     const signalsMetadata = await generateMetadata({ searchParams: Promise.resolve({}) })
     const resolved = realTemplate.replace('%s', signalsMetadata.title as string)
     assert.equal(resolved, 'Signals | AIscentra')

@@ -37,7 +37,7 @@ describe('HomePage (vfinal) — Featured Signals: partial real result', () => {
       },
     })
 
-    const { default: HomePage } = await import('../page')
+    const { default: HomePage } = await import('../(public)/page')
     const jsx = await HomePage()
     const { container } = render(jsx)
 

@@ -55,7 +55,7 @@ describe('/signals catalog cards — real publication date, real source (favicon
       },
     })
 
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({}) })
     const { container } = render(jsx)
 

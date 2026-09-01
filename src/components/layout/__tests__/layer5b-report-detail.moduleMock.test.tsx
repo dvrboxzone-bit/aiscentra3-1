@@ -18,14 +18,12 @@ describe('/reports/[slug] — real detail-page functions preserved', () => {
     mock.module('@/modules/reports/queries', {
       namedExports: { getReportById: async () => report },
     })
-    const { default: ReportPage } = await import('../../../app/reports/[slug]/page')
+    const { default: ReportPage } = await import('../../../app/(public)/reports/[slug]/page')
     const jsx = await ReportPage({ params: Promise.resolve({ slug: 'r1' }) })
     const { container } = render(jsx)
     assert.match(container.innerHTML, /Real Report Detail/)
     assert.match(container.innerHTML, /First real paragraph/)
     assert.match(container.innerHTML, /Second real paragraph/)
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     assert.doesNotMatch(container.innerHTML, /href="#"/)
   })
 })
