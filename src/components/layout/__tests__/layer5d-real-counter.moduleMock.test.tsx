@@ -20,7 +20,7 @@ describe('/signals — real counter reflects the real total published count, not
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({}) })
     const { container } = render(jsx)
 

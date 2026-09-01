@@ -32,7 +32,7 @@ describe('/observatory — real empty state', () => {
         }),
       },
     })
-    const { default: ObservatoryPage } = await import('../../../app/observatory/page')
+    const { default: ObservatoryPage } = await import('../../../app/(public)/observatory/page')
     const jsx = await ObservatoryPage()
     const { container } = render(jsx)
     assert.match(container.innerHTML, /No signals yet\./)

@@ -18,7 +18,7 @@ describe('/search — real 2-char minimum-length gate (does NOT call search)', (
         },
       },
     })
-    const { default: SearchPage } = await import('../../../app/search/page')
+    const { default: SearchPage } = await import('../../../app/(public)/search/page')
     const jsx = await SearchPage({ searchParams: Promise.resolve({ q: 'a' }) })
     const { container } = render(jsx)
     assert.equal(searchCallCount, 0, 'the real search() must NOT be called for a 1-character query')

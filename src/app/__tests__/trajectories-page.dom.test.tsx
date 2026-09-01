@@ -20,7 +20,7 @@ describe('/trajectories — 6 real companies, real favicons, subtle per-card sur
     const restore = forceReducedMotion()
     t.after(restore)
 
-    const { default: TrajectoriesPage } = await import('../../app/trajectories/page')
+    const { default: TrajectoriesPage } = await import('../../app/(public)/trajectories/page')
     const jsx = TrajectoriesPage()
     const { container } = render(jsx)
 
@@ -37,7 +37,7 @@ describe('/trajectories — 6 real companies, real favicons, subtle per-card sur
     // asked for the per-card subtle dark surface to come back,
     // matching the exact same real pattern already used by
     // Observatory's own sub-blocks (bg-surface-tonal, #0A0A0A --
-    // confirmed identical to src/app/observatory/page.tsx's own
+    // confirmed identical to src/app/(public)/observatory/page.tsx's own
     // section elements). Each of the 6 real cards must carry this
     // class -- not the old "text directly over the shared tech-grid,
     // zero per-card fill" decision from the prior commit.

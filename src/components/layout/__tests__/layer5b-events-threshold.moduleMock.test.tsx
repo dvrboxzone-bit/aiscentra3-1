@@ -12,7 +12,7 @@ describe('/events — real promotion-threshold copy on empty state', () => {
     mock.module('@/modules/events/queries', {
       namedExports: { getEvents: async () => [] },
     })
-    const { default: EventsPage } = await import('../../../app/events/page')
+    const { default: EventsPage } = await import('../../../app/(public)/events/page')
     const jsx = await EventsPage()
     const { container } = render(jsx)
     assert.match(

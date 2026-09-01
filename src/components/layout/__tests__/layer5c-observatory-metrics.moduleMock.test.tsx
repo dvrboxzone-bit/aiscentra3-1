@@ -40,12 +40,10 @@ describe('/observatory — real computed metrics', () => {
       },
     })
 
-    const { default: ObservatoryPage } = await import('../../../app/observatory/page')
+    const { default: ObservatoryPage } = await import('../../../app/(public)/observatory/page')
     const jsx = await ObservatoryPage()
     const { container } = render(jsx)
 
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     assert.doesNotMatch(container.innerHTML, /href="#"/)
     assert.doesNotMatch(container.innerHTML, /picsum/i)
     assert.doesNotMatch(container.innerHTML, /z-cdn/i)

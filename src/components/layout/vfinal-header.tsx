@@ -14,7 +14,7 @@
  * - Logo: href="#" -> "/"
  * - "Signals" dropdown: the HTML's own /signals/<category> paths do
  *   not exist as real routes -- the real category filter is
- *   /signals?category=<CATEGORY> (see src/app/signals/page.tsx's own
+ *   /signals?category=<CATEGORY> (see src/app/(public)/signals/page.tsx's own
  *   category links). Same 9 categories, same order, real query-param
  *   hrefs.
  * - "Observations" (#news anchor in the HTML): mapped to /observatory,

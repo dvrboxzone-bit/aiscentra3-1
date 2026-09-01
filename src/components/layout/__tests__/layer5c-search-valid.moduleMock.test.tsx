@@ -35,7 +35,7 @@ describe('/search — real search() called for a valid query, query preserved in
         },
       },
     })
-    const { default: SearchPage } = await import('../../../app/search/page')
+    const { default: SearchPage } = await import('../../../app/(public)/search/page')
     const jsx = await SearchPage({ searchParams: Promise.resolve({ q: 'transformer' }) })
     const { container } = render(jsx)
 
@@ -57,8 +57,6 @@ describe('/search — real search() called for a valid query, query preserved in
     assert.ok(resultLink, 'a real, working result link (the real result.href) must render')
     assert.match(container.innerHTML, /Real Search Signal/)
 
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     assert.doesNotMatch(container.innerHTML, /href="#"/)
     assert.doesNotMatch(container.innerHTML, /picsum/i)
     assert.doesNotMatch(container.innerHTML, /z-cdn/i)

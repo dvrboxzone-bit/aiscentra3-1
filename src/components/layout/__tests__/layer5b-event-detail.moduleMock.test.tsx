@@ -18,14 +18,12 @@ describe('/events/[slug] — real detail-page functions preserved', () => {
     mock.module('@/modules/signals/queries', {
       namedExports: { getSignalById: async () => originSignal },
     })
-    const { default: EventPage } = await import('../../../app/events/[slug]/page')
+    const { default: EventPage } = await import('../../../app/(public)/events/[slug]/page')
     const jsx = await EventPage({ params: Promise.resolve({ slug: 'e1' }) })
     const { container } = render(jsx)
     assert.match(container.innerHTML, /Real Event Detail/)
     assert.match(container.innerHTML, /Real Origin Signal/)
     assert.ok(container.querySelector('a[href="/signals/origin-sig"]'))
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     assert.doesNotMatch(container.innerHTML, /href="#"/)
   })
 })

@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isValidSignalSlug } from '../../../app/signals/[slug]/page'
+import { isValidSignalSlug } from '../../../app/(public)/signals/[slug]/page'
 
 describe('/signals/[slug] UUID boundary', () => {
   test('accepts UUIDs and rejects malformed slugs before data access', () => {

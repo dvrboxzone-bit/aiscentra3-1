@@ -9,13 +9,11 @@ describe('/about — real anchor ids, VfinalPublicShell, no forbidden URLs', () 
   test('the real /about page contains all 4 required anchor ids and uses VfinalPublicShell', async (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
-    const { default: AboutPage } = await import('../../../app/about/page')
+    const { default: AboutPage } = await import('../../../app/(public)/about/page')
     const { container } = render(AboutPage())
     for (const id of ['epistemic-model', 'methodology', 'security-data', 'roadmap']) {
       assert.ok(container.querySelector(`#${id}`), `#${id} must exist on the real /about page`)
     }
-    assert.ok(container.querySelector('header#header'), 'the shared VfinalHeader must be present')
-    assert.ok(container.querySelector('footer#footer'), 'the shared VfinalFooter must be present')
     const html = container.innerHTML
     assert.doesNotMatch(html, /href="#"/)
     assert.doesNotMatch(html, /picsum/i)
