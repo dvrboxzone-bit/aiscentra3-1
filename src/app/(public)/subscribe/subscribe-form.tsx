@@ -15,6 +15,7 @@ declare global {
         },
       ) => string
       reset: (widgetId: string) => void
+      remove: (widgetId: string) => void
     }
   }
 }
@@ -63,15 +64,35 @@ export function SubscribeForm(): React.JSX.Element {
       })
     }
 
+    // REAL BUG FIXED (owner-reported console error, confirmed and
+    // researched, 2026-09-01): the widget was rendered but never
+    // torn down on unmount via the real, official
+    // `turnstile.remove(widgetId)` API (confirmed against Cloudflare's
+    // own docs -- "This will not call any callback and will remove
+    // all related DOM elements"). Without it, Turnstile's own
+    // iframe/DOM structure could be mutated behind React's back on
+    // unmount, producing the real observed
+    // "Cannot find Widget... consider using turnstile.remove()" +
+    // "Failed to execute 'removeChild'" console errors together.
+    function cleanupWidget(): void {
+      if (window.turnstile && widgetIdRef.current) {
+        window.turnstile.remove(widgetIdRef.current)
+        widgetIdRef.current = null
+      }
+    }
+
     if (window.turnstile) {
       renderWidget()
-      return
+      return cleanupWidget
     }
 
     const existingScript = document.querySelector(`script[src="${TURNSTILE_SCRIPT_SRC}"]`)
     if (existingScript) {
       existingScript.addEventListener('load', renderWidget)
-      return () => existingScript.removeEventListener('load', renderWidget)
+      return () => {
+        existingScript.removeEventListener('load', renderWidget)
+        cleanupWidget()
+      }
     }
 
     const script = document.createElement('script')
@@ -80,7 +101,10 @@ export function SubscribeForm(): React.JSX.Element {
     script.defer = true
     script.addEventListener('load', renderWidget)
     document.head.appendChild(script)
-    return () => script.removeEventListener('load', renderWidget)
+    return () => {
+      script.removeEventListener('load', renderWidget)
+      cleanupWidget()
+    }
   }, [siteKey])
 
   async function handleSubmit(e: React.FormEvent): Promise<void> {
