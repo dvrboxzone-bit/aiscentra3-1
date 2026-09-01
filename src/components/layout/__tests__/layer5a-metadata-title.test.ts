@@ -45,8 +45,9 @@ describe('/about and /signals — real metadata.title, no double-branding', () =
     )
   })
 
-  test('the real /signals page module exports metadata.title exactly "Signals"', async () => {
-    const { metadata } = await import('../../../app/(public)/signals/page')
+  test('the real /signals page module exports generateMetadata whose default (no category) title is exactly "Signals"', async () => {
+    const { generateMetadata } = await import('../../../app/(public)/signals/page')
+    const metadata = await generateMetadata({ searchParams: Promise.resolve({}) })
     assert.equal(metadata.title, 'Signals')
   })
 
@@ -62,9 +63,10 @@ describe('/about and /signals — real metadata.title, no double-branding', () =
     )
   })
 
-  test('interpolating the REAL root template against the REAL /signals title produces exactly "Signals | AIscentra" -- the genuine final HTML <title> value, no double-branding', async () => {
+  test('interpolating the REAL root template against the REAL /signals default (no category) title produces exactly "Signals | AIscentra" -- the genuine final HTML <title> value, no double-branding', async () => {
     const realTemplate = extractRealTemplate()
-    const { metadata: signalsMetadata } = await import('../../../app/(public)/signals/page')
+    const { generateMetadata } = await import('../../../app/(public)/signals/page')
+    const signalsMetadata = await generateMetadata({ searchParams: Promise.resolve({}) })
     const resolved = realTemplate.replace('%s', signalsMetadata.title as string)
     assert.equal(resolved, 'Signals | AIscentra')
     assert.doesNotMatch(

@@ -2,7 +2,8 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Methodology',
-  description: 'How AIscentra monitors, selects, and processes AI ecosystem signals.',
+  description:
+    'How a raw observation becomes a published Signal: the filters it must pass, the evidence it must carry, and the exact point where AIscentra rejects more candidates than it publishes.',
 }
 
 /**

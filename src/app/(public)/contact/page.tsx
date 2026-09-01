@@ -3,7 +3,8 @@ import { ContactForm } from './contact-form'
 
 export const metadata: Metadata = {
   title: 'Contact',
-  description: 'Get in touch with AIscentra.',
+  description:
+    "Questions about a Signal, a correction, or a partnership inquiry — write directly, no contact form middleman. AIscentra is run by one person; you'll get a real reply, not an auto-response.",
 }
 
 /**

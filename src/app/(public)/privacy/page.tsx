@@ -2,7 +2,8 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy',
-  description: 'How AIscentra handles technical and personal information.',
+  description:
+    "No accounts, no tracking cookies beyond what keeps the form working. If you subscribe, here's exactly what's stored, who processes it, and how to leave in one click.",
 }
 
 /**

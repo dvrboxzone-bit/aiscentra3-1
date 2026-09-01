@@ -2,7 +2,8 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Terms of Use',
-  description: 'Terms governing the use of AIscentra.',
+  description:
+    "The short version: read freely, quote with attribution, don't claim our analysis as yours. Full terms below, no legal filler.",
 }
 
 /**

@@ -8,10 +8,84 @@ import { formatDate } from '@/lib/utils/format'
 import type { Signal, SignalCategory } from '@/types/database'
 import type { SourceLink } from '@/lib/utils/source-links'
 
-export const metadata: Metadata = {
+interface SignalsPageProps {
+  searchParams: Promise<{ category?: string; page?: string }>
+}
+
+/**
+ * AIscentra — per-category SEO metadata for /signals (explicit owner
+ * instruction, researched and approved via Notion). Previously all 9
+ * real category filter pages (?category=RESEARCH, ?category=MODELS,
+ * etc.) shared one identical, generic title/description -- a real,
+ * confirmed SEO gap found during the site's own SEO audit. Each real
+ * SignalCategory now gets its own distinct, honest title/description
+ * reflecting AIscentra's real evidence-first positioning, not generic
+ * "AI news" copy. Falls back to the existing generic copy when no
+ * category is selected (the bare /signals catalog).
+ */
+const CATEGORY_METADATA: Record<SignalCategory, { title: string; description: string }> = {
+  RESEARCH: {
+    title: 'AI Research Signals — Verified Papers & Breakthroughs',
+    description:
+      'Research claims tracked from source to verdict. AIscentra separates what a paper proves from what a press release says it proves — no hype, every claim traced to evidence.',
+  },
+  MODELS: {
+    title: 'AI Model Release Signals — Checked Before You Read',
+    description:
+      "New model releases and updates, with the benchmark numbers traced to who ran them. If a claim is the company's own and unverified, we say so — not after the fact.",
+  },
+  COMPANIES: {
+    title: 'AI Company Signals — Moves, Leadership, Strategy',
+    description:
+      'What AI companies actually announced, versus what commentary layered on top. Leadership changes, strategic shifts, and public statements, kept separate from speculation.',
+  },
+  INFRASTRUCTURE: {
+    title: 'AI Infrastructure Signals — Compute, Chips, Data Centers',
+    description:
+      'The physical and technical backbone of AI — compute deals, chip announcements, data center builds — tracked with the same evidence bar as everything else here.',
+  },
+  OPEN_SOURCE: {
+    title: 'Open Source AI Signals — Releases Worth Tracking',
+    description:
+      'Open-weight and open-source AI releases, with license terms and real capability claims checked, not just repeated from the announcement post.',
+  },
+  FUNDING: {
+    title: 'AI Funding Signals — Rounds, Valuations, Verified',
+    description:
+      'Funding announcements checked against filings and independent reporting, not just the press release. See which numbers are confirmed and which are still just claimed.',
+  },
+  REGULATION: {
+    title: 'AI Regulation Signals — Policy Tracked to Source',
+    description:
+      "AI policy and regulatory shifts, traced to the actual filing, ruling, or statement — not a paraphrase of a paraphrase. Know what's law, what's proposed, and what's still a rumor.",
+  },
+  AGENTS: {
+    title: 'AI Agent Signals — Autonomous Systems Tracked',
+    description:
+      'What autonomous AI agents can actually do right now, versus what a demo suggests they can do. Capability claims checked against independent evidence where it exists.',
+  },
+  HARDWARE: {
+    title: 'AI Hardware Signals — Chips, Devices, Specs Verified',
+    description:
+      'New AI hardware and chip announcements, with the claimed specs separated from the independently benchmarked ones — before the marketing language settles in.',
+  },
+}
+
+const ALL_CATEGORIES_DESCRIPTION =
+  'Every published Signal across all nine tracked categories — models, companies, research, funding, regulation, and more — filtered only by evidence, not by topic.'
+
+const DEFAULT_SIGNALS_METADATA = {
   title: 'Signals',
   description:
     'Live AI ecosystem signal feed. Browse, filter and explore scored intelligence signals.',
+}
+
+export async function generateMetadata({ searchParams }: SignalsPageProps): Promise<Metadata> {
+  const { category } = await searchParams
+  if (category && (REAL_CATEGORIES as readonly string[]).includes(category)) {
+    return CATEGORY_METADATA[category as SignalCategory]
+  }
+  return DEFAULT_SIGNALS_METADATA
 }
 
 export const revalidate = 3600
@@ -41,10 +115,6 @@ function isRealCategory(value: string): value is SignalCategory {
 // dirty input that must redirect to the canonical URL, never be
 // silently parsed/truncated into a different, unstated page.
 const STRICT_PAGE_PATTERN = /^[1-9][0-9]*$/
-
-interface SignalsPageProps {
-  searchParams: Promise<{ category?: string; page?: string }>
-}
 
 /**
  * AIscentra — vfinal /signals catalog page (Frontend Design
@@ -189,7 +259,12 @@ export default async function SignalsPage({
         <div className="relative z-10 mx-auto max-w-[1200px]">
           <span className="font-caption mb-4 block text-mint-signal">SIGNAL DISCOVERY</span>
           <h1 className="font-display mb-6 text-[12vw] text-frost md:text-[80px]">Signal Feed.</h1>
-          <p className="mb-12 text-lg text-silver-haze">
+          <p className="mb-4 max-w-2xl text-lg text-silver-haze">
+            {activeCategory
+              ? CATEGORY_METADATA[activeCategory].description
+              : ALL_CATEGORIES_DESCRIPTION}
+          </p>
+          <p className="mb-12 text-sm text-silver-haze opacity-70">
             {totalCount} published signal{totalCount !== 1 ? 's' : ''}
             {activeCategory ? ` in ${activeCategory.replace('_', ' ')}` : ''} — page {currentPage}{' '}
             of {totalPages}
