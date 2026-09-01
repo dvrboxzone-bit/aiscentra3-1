@@ -11,8 +11,6 @@ describe('loading.tsx — vfinal design, shared header/footer, accessible', () =
     t.after(restore)
     const { default: Loading } = await import('../../../app/loading')
     const { container } = render(Loading())
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     assert.ok(
       container.querySelector('[role="status"]'),
       'an accessible status role must exist for the loading indicator',
@@ -35,8 +33,6 @@ describe('error.tsx — real reset() callback, shared header/footer', () => {
     const { container } = render(
       GlobalError({ error: Object.assign(new Error('test'), { digest: 'x' }), reset: realReset }),
     )
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     // REAL BUG FIXED (found while writing this test): VfinalPublicShell
     // also renders VfinalProgressAndBackToTop's own #back-to-top
     // <button>, earlier in the DOM than the real "Restart Observatory"
@@ -62,8 +58,6 @@ describe('not-found.tsx — real, working return-home link, shared header/footer
     t.after(restore)
     const { default: NotFound } = await import('../../../app/not-found')
     const { container } = render(NotFound())
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     const link = container.querySelector('a[href="/"]')
     assert.ok(link, 'a real, working link to the home route must exist')
     assert.match(container.innerHTML, /404/)

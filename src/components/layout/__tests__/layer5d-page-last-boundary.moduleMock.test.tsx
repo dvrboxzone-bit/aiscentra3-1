@@ -19,7 +19,7 @@ describe('/signals — the real last page is an inclusive, valid boundary', () =
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     // Must resolve normally (not throw/reject) -- page 6 is the real
     // last valid page for 150 signals at 25/page.
     const jsx = await SignalsPage({ searchParams: Promise.resolve({ page: '6' }) })

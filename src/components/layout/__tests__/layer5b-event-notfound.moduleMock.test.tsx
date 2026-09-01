@@ -14,7 +14,7 @@ describe('/events/[slug] — real notFound() behavior', () => {
     mock.module('@/modules/signals/queries', {
       namedExports: { getSignalById: async () => null },
     })
-    const { default: EventPage } = await import('../../../app/events/[slug]/page')
+    const { default: EventPage } = await import('../../../app/(public)/events/[slug]/page')
     await assert.rejects(
       () => EventPage({ params: Promise.resolve({ slug: 'missing-event' }) }),
       (err: unknown) => {

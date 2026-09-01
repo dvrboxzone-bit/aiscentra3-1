@@ -30,7 +30,7 @@ export async function assertCanonicalRedirect(
   searchParams: { category?: string; page?: string },
   expectedTargetFragment: string,
 ): Promise<void> {
-  const { default: SignalsPage } = await import('../../../app/signals/page')
+  const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
   await assert.rejects(
     () => SignalsPage({ searchParams: Promise.resolve(searchParams) }),
     (err: unknown) => {

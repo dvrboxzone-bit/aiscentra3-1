@@ -11,7 +11,7 @@ describe('/reports/[slug] — real notFound() behavior', () => {
     mock.module('@/modules/reports/queries', {
       namedExports: { getReportById: async () => null },
     })
-    const { default: ReportPage } = await import('../../../app/reports/[slug]/page')
+    const { default: ReportPage } = await import('../../../app/(public)/reports/[slug]/page')
     await assert.rejects(
       () => ReportPage({ params: Promise.resolve({ slug: 'missing-report' }) }),
       (err: unknown) => {

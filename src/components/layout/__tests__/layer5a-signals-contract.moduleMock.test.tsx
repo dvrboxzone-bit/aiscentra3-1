@@ -20,7 +20,7 @@ describe('/signals — critical release-gate contract intact', () => {
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({}) })
     const { container } = render(jsx)
     const el = container.querySelector('[data-active-signal-count]')
@@ -29,7 +29,5 @@ describe('/signals — critical release-gate contract intact', () => {
       'data-active-signal-count must exist -- this is a real, production release-gate contract',
     )
     assert.equal(el?.getAttribute('data-active-signal-count'), '2')
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
   })
 })

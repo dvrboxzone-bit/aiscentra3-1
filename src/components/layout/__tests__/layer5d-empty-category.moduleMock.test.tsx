@@ -18,7 +18,7 @@ describe('/signals — real, honest empty-state for a category with zero real si
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({ category: 'HARDWARE' }) })
     const { container } = render(jsx)
     assert.match(container.innerHTML, /No signals detected in HARDWARE yet\./)

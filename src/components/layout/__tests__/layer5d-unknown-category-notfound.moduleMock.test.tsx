@@ -21,7 +21,7 @@ describe('/signals — an unknown category returns real notFound()', () => {
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
 
     await assert.rejects(
       () => SignalsPage({ searchParams: Promise.resolve({ category: 'NOT_A_REAL_CATEGORY' }) }),

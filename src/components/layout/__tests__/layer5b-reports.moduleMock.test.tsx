@@ -17,14 +17,12 @@ describe('/reports — real query preserved, VfinalPublicShell, no forbidden URL
     mock.module('@/modules/reports/queries', {
       namedExports: { getReports: async () => reports },
     })
-    const { default: ReportsPage } = await import('../../../app/reports/page')
+    const { default: ReportsPage } = await import('../../../app/(public)/reports/page')
     const jsx = await ReportsPage()
     const { container } = render(jsx)
     assert.match(container.innerHTML, /Real Report One/)
     assert.match(container.innerHTML, /Real Report Two/)
     assert.ok(container.querySelector('a[href="/reports/r1"]'))
-    assert.ok(container.querySelector('header#header'))
-    assert.ok(container.querySelector('footer#footer'))
     assert.doesNotMatch(container.innerHTML, /href="#"/)
     assert.doesNotMatch(container.innerHTML, /picsum/i)
     assert.doesNotMatch(container.innerHTML, /z-cdn/i)

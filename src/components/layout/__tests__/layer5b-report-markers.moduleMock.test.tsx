@@ -19,7 +19,7 @@ describe('/reports/[slug] — real epistemic-marker stripping and visual classif
     mock.module('@/modules/reports/queries', {
       namedExports: { getReportById: async () => report },
     })
-    const { default: ReportPage } = await import('../../../app/reports/[slug]/page')
+    const { default: ReportPage } = await import('../../../app/(public)/reports/[slug]/page')
     const jsx = await ReportPage({ params: Promise.resolve({ slug: 'r1' }) })
     const { container } = render(jsx)
 

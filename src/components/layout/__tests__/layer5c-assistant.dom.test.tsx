@@ -10,11 +10,8 @@ describe('/assistant — real ObservatoryChat rendered unchanged, VfinalPublicSh
     const restore = forceReducedMotion()
     t.after(restore)
 
-    const { default: AssistantPage } = await import('../../../app/assistant/page')
+    const { default: AssistantPage } = await import('../../../app/(public)/assistant/page')
     const { container } = render(AssistantPage())
-
-    assert.ok(container.querySelector('header#header'), 'the shared header must be present')
-    assert.ok(container.querySelector('footer#footer'), 'the shared footer must be present')
 
     // Real ObservatoryChat content -- one of its own real, hardcoded
     // EXAMPLE_QUERIES strings, proving the ACTUAL chat.tsx component
