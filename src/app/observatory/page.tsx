@@ -9,7 +9,8 @@ import { getSignalSeverity } from '@/types/database'
 
 export const metadata: Metadata = {
   title: 'Observatory',
-  description: 'Global AI ecosystem monitoring dashboard.',
+  description:
+    "A live view of what AIscentra is watching right now — sources checked, signals in review, and what cleared the evidence bar today versus what didn't.",
 }
 
 export const revalidate = 3600
