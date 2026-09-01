@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
  */
 describe('/signals?category=X — each real category has its own distinct, non-generic metadata', () => {
   test('all 9 real categories produce a distinct title and description, none identical to each other or to the generic default', async () => {
-    const { generateMetadata } = await import('../../../app/signals/page')
+    const { generateMetadata } = await import('../../../app/(public)/signals/page')
     const categories = [
       'RESEARCH',
       'MODELS',
@@ -55,7 +55,7 @@ describe('/signals?category=X — each real category has its own distinct, non-g
   })
 
   test('an unknown/invalid category value falls back to the generic default, not a crash or undefined', async () => {
-    const { generateMetadata } = await import('../../../app/signals/page')
+    const { generateMetadata } = await import('../../../app/(public)/signals/page')
     const metadata = await generateMetadata({
       searchParams: Promise.resolve({ category: 'NOT_A_REAL_CATEGORY' }),
     })
