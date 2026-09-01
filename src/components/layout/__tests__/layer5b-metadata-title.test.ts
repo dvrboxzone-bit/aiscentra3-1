@@ -31,7 +31,7 @@ describe('/events and /reports list pages — real metadata.title, no double-bra
   })
 
   test('the real /events page module exports metadata.title exactly "Events"', async () => {
-    const { metadata } = await import('../../../app/events/page')
+    const { metadata } = await import('../../../app/(public)/events/page')
     assert.equal(
       metadata.title,
       'Events',
@@ -40,7 +40,7 @@ describe('/events and /reports list pages — real metadata.title, no double-bra
   })
 
   test('the real /reports page module exports metadata.title exactly "Reports"', async () => {
-    const { metadata } = await import('../../../app/reports/page')
+    const { metadata } = await import('../../../app/(public)/reports/page')
     assert.equal(metadata.title, 'Reports')
   })
 })

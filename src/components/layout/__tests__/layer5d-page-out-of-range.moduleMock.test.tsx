@@ -17,7 +17,7 @@ describe('/signals — a page genuinely beyond the real total returns real notFo
     mock.module('@/modules/observations/queries', {
       namedExports: { getSourceLinksForSignals: async () => new Map() },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
 
     await assert.rejects(
       () => SignalsPage({ searchParams: Promise.resolve({ page: '999' }) }),

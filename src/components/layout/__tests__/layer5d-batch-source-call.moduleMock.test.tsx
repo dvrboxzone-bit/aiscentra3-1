@@ -32,7 +32,7 @@ describe('/signals — real ONE batch source-links call for the whole page, not 
         },
       },
     })
-    const { default: SignalsPage } = await import('../../../app/signals/page')
+    const { default: SignalsPage } = await import('../../../app/(public)/signals/page')
     const jsx = await SignalsPage({ searchParams: Promise.resolve({}) })
     render(jsx)
 

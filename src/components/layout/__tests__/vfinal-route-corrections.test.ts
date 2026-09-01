@@ -9,7 +9,10 @@ function source(relativePath: string): string {
 
 describe('public route correction contracts', () => {
   test('event and report detail pages render dynamically when cookie-bound data is read', () => {
-    for (const path of ['app/events/[slug]/page.tsx', 'app/reports/[slug]/page.tsx']) {
+    for (const path of [
+      'app/(public)/events/[slug]/page.tsx',
+      'app/(public)/reports/[slug]/page.tsx',
+    ]) {
       const file = source(path)
       assert.match(file, /export const dynamic = ['"]force-dynamic['"]/)
       assert.doesNotMatch(file, /export const revalidate/)

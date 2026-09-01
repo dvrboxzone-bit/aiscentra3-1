@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { useAssistantPanel } from './vfinal-assistant-context'
 
 interface Message {
@@ -20,6 +21,20 @@ const SERVICE_COMMANDS: Array<{ label: string; note: string }> = [
   { label: 'Report abuse', note: 'Reporting inappropriate content' },
   { label: 'Ask Founder or Creator', note: 'A direct question for Denis Dan' },
 ]
+
+/**
+ * AIscentra — real, honest label for "which page is the visitor on"
+ * (Task 7, explicit owner instruction: "ассистент должен знать на
+ * какой странице он находится а пользователь чтобы видеть о чем
+ * спрашивает"). Deliberately just formats the real pathname itself
+ * rather than maintaining a separate, easily-stale page-name registry
+ * -- /signals/some-real-slug shows exactly that, not a guessed title.
+ */
+function describeCurrentPage(pathname: string): string {
+  if (pathname === '/') return 'Home'
+  const segments = pathname.split('/').filter(Boolean)
+  return segments.map((s) => s.replace(/-/g, ' ')).join(' / ')
+}
 
 /**
  * AIscentra — real sliding Assistant panel.
@@ -69,6 +84,7 @@ const SERVICE_COMMANDS: Array<{ label: string; note: string }> = [
  */
 export function VfinalAssistantPanel(): React.JSX.Element | null {
   const { isOpen, close } = useAssistantPanel()
+  const pathname = usePathname()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'error'>('idle')
@@ -160,8 +176,6 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
     <div
       className={`assistant-panel-overlay fixed inset-0 flex justify-end ${isOpen ? 'open' : ''}`}
     >
-      <div className="absolute inset-0" onClick={close} />
-
       <aside
         id="assistant-panel"
         role="dialog"
@@ -190,6 +204,14 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             </svg>
           </button>
         </div>
+
+        {pathname && (
+          <div className="border-b border-border-subtle px-4 py-2">
+            <span className="font-caption text-xs text-silver-haze opacity-60">
+              CONTEXT: {describeCurrentPage(pathname)}
+            </span>
+          </div>
+        )}
 
         <div className="textured-bg relative flex-1 overflow-y-auto p-4">
           <div className="tech-grid" />

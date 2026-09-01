@@ -36,7 +36,7 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
         getSignals: async () => twoRealObservations(),
       },
     })
-    const { default: HomePage } = await import('../page')
+    const { default: HomePage } = await import('../(public)/page')
     const jsx = await HomePage()
     const { container } = render(jsx)
 

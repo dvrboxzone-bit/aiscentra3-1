@@ -46,7 +46,7 @@ describe('/signals/[slug] malformed slug boundary', () => {
     })
 
     const { default: SignalPage } = await import(
-      `../../../app/signals/[slug]/page?invalid=${Date.now()}`
+      `../../../app/(public)/signals/[slug]/page?invalid=${Date.now()}`
     )
 
     await assert.rejects(
