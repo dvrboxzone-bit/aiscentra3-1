@@ -239,7 +239,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
 
         <div
           className="textured-bg relative min-h-0 flex-1 overflow-y-auto"
-          style={{ overscrollBehavior: 'contain' }}
+          style={{ overflowY: 'auto', overscrollBehavior: 'contain' }}
           onWheel={(e) => {
             // Real, additional defense-in-depth (external review,
             // confirmed valid): even though this handler already
