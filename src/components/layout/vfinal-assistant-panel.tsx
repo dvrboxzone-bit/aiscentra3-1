@@ -253,6 +253,29 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
           }}
         >
           <div className="relative">
+            {/* REAL BUG FIXED (owner-reported, after live scroll fix
+                landed): a solid dark bar briefly appeared at the top/
+                bottom edge during scroll, exact same size as the
+                earlier tech-grid gap. Root cause: .textured-bg's own
+                ::before noise-texture pseudo-element (globals.css) is
+                anchored to .textured-bg itself -- the OUTER, short
+                (visible-only) scroll container -- not the taller
+                scrollable content height, identical in kind to the
+                tech-grid bug already fixed in this same file. Rather
+                than editing the shared, site-wide .textured-bg::before
+                rule (used elsewhere on the site, explicit owner
+                instruction not to touch other site code), replicated
+                the same real noise texture here as a plain, local div
+                inside this already-correctly-sized full-height
+                wrapper -- same SVG data URI, same opacity, scoped only
+                to this one component. */}
+            <div
+              className="pointer-events-none absolute inset-0 -z-10"
+              style={{
+                backgroundImage:
+                  'url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="4" stitchTiles="stitch"/></filter><rect width="100%25" height="100%25" filter="url(%23n)" opacity="0.06"/></svg>\')',
+              }}
+            />
             <div className="tech-grid" />
             <div className="relative z-10 p-4">
               {messages.length === 0 ? (
