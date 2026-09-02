@@ -231,7 +231,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         )}
 
         <div
-          className="textured-bg relative flex-1 overflow-y-auto p-4"
+          className="textured-bg relative min-h-0 flex-1 overflow-y-auto p-4"
           style={{ overscrollBehavior: 'contain' }}
         >
           <div className="tech-grid" />
