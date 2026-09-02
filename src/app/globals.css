@@ -498,7 +498,23 @@
 .assistant-panel {
   position: fixed;
   top: 0;
-  right: 0;
+  /* REAL BUG FIXED (found via targeted research after extensive live
+     testing kept showing wheel events never arriving at the panel's
+     own scrollable child at all -- confirmed via a direct native
+     'wheel' listener check). Root cause: a documented Chromium engine
+     bug (issues.chromium.org/issues/348520453) -- an element with
+     BOTH position:fixed AND its own `transform` applied, that also
+     has children, can block wheel/trackpad scroll events from ever
+     reaching those descendants, specifically on Chrome/macOS. This
+     panel had exactly that combination (position:fixed + transform:
+     translateX() on the very same element, with a real scrollable
+     child). Multiple independent real-world sources confirm the same
+     standard fix: animate the slide-in/out via `right` instead of
+     `transform`, so the fixed+scrollable element itself never carries
+     a `transform` at all. `right` is not as GPU-cheap as `transform`
+     but is more than adequate for a single slide-out panel, and
+     sidesteps this entire bug category. */
+  right: -100%;
   bottom: 0;
   height: 100dvh;
   z-index: 61;
@@ -507,14 +523,13 @@
   overflow: hidden;
   background: var(--color-deep-obsidian);
   border-left: 1px solid var(--color-border-subtle);
-  transform: translateX(100%);
   visibility: hidden;
   transition:
-    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    right 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     visibility 0.35s ease;
 }
 .assistant-panel.open {
-  transform: translateX(0);
+  right: 0;
   visibility: visible;
 }
 
