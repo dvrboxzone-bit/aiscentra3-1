@@ -240,6 +240,9 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         <div
           className="textured-bg relative min-h-0 flex-1 overflow-y-auto p-4"
           style={{ overscrollBehavior: 'contain' }}
+          onWheel={(e) => {
+            e.currentTarget.scrollTop += e.deltaY
+          }}
         >
           <div className="tech-grid" />
           <div className="relative z-10">
