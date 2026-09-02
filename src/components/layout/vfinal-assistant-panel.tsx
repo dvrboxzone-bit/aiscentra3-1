@@ -1,10 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAssistantPanel } from './vfinal-assistant-context'
-import { getActiveLenisInstance } from './vfinal-lenis-provider'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -90,33 +89,29 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'error'>('idle')
 
-  // REAL BUG FIXED (owner-reported: scrolling inside the panel's own
-  // message area instead scrolled the whole page, hiding bottom
-  // content). Root cause: without this, a scroll gesture that reaches
-  // the panel's own scroll boundary "chains" onward to the page body.
-  // overscroll-behavior: contain (added to the scrollable div itself)
-  // is the primary fix; this body-level lock is a second, real layer
-  // -- while the panel is open, the page itself cannot scroll at all,
-  // so every scroll gesture is unambiguously the panel's own content.
-  // REAL FIX (matches the exact same already-proven pattern used by
-  // VfinalHeader's own mobile menu for this identical problem --
-  // getActiveLenisInstance()?.stop()/.start() -- rather than relying
-  // solely on Lenis's own `prevent` option, which real live testing
-  // did not conclusively confirm as sufficient on its own. Fully
-  // stopping Lenis while the panel is open guarantees it cannot
-  // intercept any wheel event anywhere on the page, leaving native
-  // overflow-y:auto scrolling on the panel's own message area
-  // completely unobstructed.
-  useEffect(() => {
-    if (!isOpen) return
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    getActiveLenisInstance()?.stop()
-    return () => {
-      document.body.style.overflow = previousOverflow
-      getActiveLenisInstance()?.start()
-    }
-  }, [isOpen])
+  // REAL BUG FIXED, then a REAL REGRESSION FOUND AND UNDONE
+  // (owner-reported, in this order):
+  //
+  // 1. Scrolling inside the panel's own message area instead scrolled
+  //    the whole page. Root cause: without CSS containment, a scroll
+  //    gesture reaching the panel's own scroll boundary "chains" onward
+  //    to the page body. Fixed via overscroll-behavior: contain (on the
+  //    scrollable div) + min-h-0 (fixing a real flexbox sizing bug) +
+  //    overflow: hidden on .assistant-panel itself.
+  //
+  // 2. An EARLIER version of this same fix ALSO locked
+  //    document.body.style.overflow = 'hidden' and called
+  //    getActiveLenisInstance()?.stop() while the panel was open, as
+  //    an extra defensive layer. This was a REAL, genuine regression:
+  //    the owner's own explicit, earlier requirement for this panel is
+  //    that it stay NON-modal -- the whole page (a signal, the menu,
+  //    text selection) must remain fully usable while the panel is
+  //    open, and that explicitly includes the page's own scroll, not
+  //    just clicks. Locking body scroll broke exactly that. Removed
+  //    entirely -- CSS-level scroll containment on the panel's own
+  //    scrollable area (above) is the correct, complete fix on its
+  //    own; it does not require or benefit from also disabling the
+  //    page's own independent scroll.
 
   async function sendQuery(query: string): Promise<void> {
     if (!query.trim() || status === 'sending') return
