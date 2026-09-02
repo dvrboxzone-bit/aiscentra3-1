@@ -238,7 +238,7 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         )}
 
         <div
-          className="textured-bg relative min-h-0 flex-1 overflow-y-auto p-4"
+          className="textured-bg relative min-h-0 flex-1 overflow-y-auto"
           style={{ overscrollBehavior: 'contain' }}
           onWheel={(e) => {
             // Real, additional defense-in-depth (external review,
@@ -252,62 +252,64 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             e.currentTarget.scrollTop += e.deltaY
           }}
         >
-          <div className="tech-grid" />
-          <div className="relative z-10">
-            {messages.length === 0 ? (
-              <>
-                <svg width="140" height="56" className="mx-auto mb-6 block">
-                  <use href="#aiscentra-logo" />
-                </svg>
-                <p className="text-sm leading-relaxed text-silver-haze">
-                  Welcome. I can help you explore signals, events and analysis across the AI
-                  ecosystem — ask a question, or choose a quick action below.
-                </p>
-              </>
-            ) : (
-              <div className="space-y-3">
-                {messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={
-                      m.role === 'user'
-                        ? 'ml-auto max-w-[85%] border border-border-subtle bg-surface-tonal p-3 text-sm text-frost'
-                        : 'max-w-[85%] text-sm leading-relaxed text-silver-haze'
-                    }
-                  >
-                    {m.text}
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="relative">
+            <div className="tech-grid" />
+            <div className="relative z-10 p-4">
+              {messages.length === 0 ? (
+                <>
+                  <svg width="140" height="56" className="mx-auto mb-6 block">
+                    <use href="#aiscentra-logo" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-silver-haze">
+                    Welcome. I can help you explore signals, events and analysis across the AI
+                    ecosystem — ask a question, or choose a quick action below.
+                  </p>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  {messages.map((m, i) => (
+                    <div
+                      key={i}
+                      className={
+                        m.role === 'user'
+                          ? 'ml-auto max-w-[85%] border border-border-subtle bg-surface-tonal p-3 text-sm text-frost'
+                          : 'max-w-[85%] text-sm leading-relaxed text-silver-haze'
+                      }
+                    >
+                      {m.text}
+                    </div>
+                  ))}
+                </div>
+              )}
 
-            <div className="mt-6 space-y-2">
-              <span className="font-caption block text-silver-haze">QUICK ACTIONS</span>
-              {CONTENT_COMMANDS.map((cmd) => (
-                <button
-                  key={cmd}
-                  type="button"
-                  onClick={() => {
-                    void sendQuery(cmd)
-                  }}
-                  className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
-                >
-                  {cmd}
-                </button>
-              ))}
-              {SERVICE_COMMANDS.map(({ label, note }) => (
-                <Link
-                  key={label}
-                  href="/contact"
-                  onClick={close}
-                  title={note}
-                  className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
-                >
-                  {label}
-                </Link>
-              ))}
-              <div className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze">
-                You can ask a question about the content of this page
+              <div className="mt-6 space-y-2">
+                <span className="font-caption block text-silver-haze">QUICK ACTIONS</span>
+                {CONTENT_COMMANDS.map((cmd) => (
+                  <button
+                    key={cmd}
+                    type="button"
+                    onClick={() => {
+                      void sendQuery(cmd)
+                    }}
+                    className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
+                  >
+                    {cmd}
+                  </button>
+                ))}
+                {SERVICE_COMMANDS.map(({ label, note }) => (
+                  <Link
+                    key={label}
+                    href="/contact"
+                    onClick={close}
+                    title={note}
+                    className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
+                  >
+                    {label}
+                  </Link>
+                ))}
+                <div className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze">
+                  You can ask a question about the content of this page
+                </div>
               </div>
             </div>
           </div>
