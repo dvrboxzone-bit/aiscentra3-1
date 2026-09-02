@@ -240,17 +240,6 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         <div
           className="textured-bg relative min-h-0 flex-1 overflow-y-auto"
           style={{ overflowY: 'auto', overscrollBehavior: 'contain' }}
-          onWheel={(e) => {
-            // Real, additional defense-in-depth (external review,
-            // confirmed valid): even though this handler already
-            // directly drives scrollTop (confirmed working via live
-            // test), Lenis's own global wheel listener could still be
-            // separately reacting to the same event in the
-            // background. stopPropagation prevents that listener from
-            // ever seeing this event at all.
-            e.stopPropagation()
-            e.currentTarget.scrollTop += e.deltaY
-          }}
         >
           <div className="relative">
             {/* REAL BUG FIXED (owner-reported, after live scroll fix
