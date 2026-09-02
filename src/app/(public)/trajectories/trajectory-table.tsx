@@ -31,7 +31,7 @@ export function TrajectoryTable({
 
   return (
     <div>
-      <div className="overflow-x-auto border border-border-subtle">
+      <div className="overflow-x-auto border border-border-subtle bg-surface-tonal">
         <table className="w-full min-w-[900px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-border-subtle text-mint-signal">

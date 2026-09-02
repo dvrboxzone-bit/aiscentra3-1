@@ -33,13 +33,19 @@ export default function TrajectoriesPage(): React.JSX.Element {
         <h1 className="font-display mb-8 text-[12vw] text-frost md:text-[100px]">
           Company registry.
         </h1>
+        <p className="mb-4 max-w-2xl text-lg leading-relaxed text-silver-haze">
+          A canonical list of companies across the AI ecosystem — frontier labs, generative media,
+          coding agents, infrastructure, biotech, robotics, and defence.
+        </p>
+        <p className="mb-4 max-w-2xl text-lg leading-relaxed text-silver-haze">
+          This is not a ranking: the order follows category, not importance. Every founding date,
+          founder list, and current status is independently checked against a primary source before
+          publication. Where a source describes a founding team rather than a single founder, we
+          preserve that distinction rather than simplifying it.
+        </p>
         <p className="mb-16 max-w-2xl text-lg leading-relaxed text-silver-haze">
-          A canonical list of {TRAJECTORIES.length} companies shaping the AI ecosystem — frontier
-          labs, generative media, coding agents, infrastructure, biotech, robotics, and defence.
-          This is not a ranking: order follows category, not any notion of importance. Every
-          founding date, founder list, and current status here is independently checked against a
-          primary source before publication — where a source describes a founding team rather than a
-          single name, we say so, rather than inventing a simpler story.
+          Status reflects the company&rsquo;s current state; historical changes remain part of its
+          trajectory.
         </p>
 
         <TrajectoryTable entities={TRAJECTORIES} />
