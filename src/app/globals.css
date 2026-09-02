@@ -504,6 +504,7 @@
   z-index: 61;
   pointer-events: auto;
   width: min(100vw, 28rem);
+  overflow: hidden;
   background: var(--color-deep-obsidian);
   border-left: 1px solid var(--color-border-subtle);
   transform: translateX(100%);

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAssistantPanel } from './vfinal-assistant-context'
+import { getActiveLenisInstance } from './vfinal-lenis-provider'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -97,12 +98,23 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
   // is the primary fix; this body-level lock is a second, real layer
   // -- while the panel is open, the page itself cannot scroll at all,
   // so every scroll gesture is unambiguously the panel's own content.
+  // REAL FIX (matches the exact same already-proven pattern used by
+  // VfinalHeader's own mobile menu for this identical problem --
+  // getActiveLenisInstance()?.stop()/.start() -- rather than relying
+  // solely on Lenis's own `prevent` option, which real live testing
+  // did not conclusively confirm as sufficient on its own. Fully
+  // stopping Lenis while the panel is open guarantees it cannot
+  // intercept any wheel event anywhere on the page, leaving native
+  // overflow-y:auto scrolling on the panel's own message area
+  // completely unobstructed.
   useEffect(() => {
     if (!isOpen) return
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    getActiveLenisInstance()?.stop()
     return () => {
       document.body.style.overflow = previousOverflow
+      getActiveLenisInstance()?.start()
     }
   }, [isOpen])
 
