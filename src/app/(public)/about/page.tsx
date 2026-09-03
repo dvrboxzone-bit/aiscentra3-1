@@ -19,14 +19,20 @@ export const metadata: Metadata = {
  * reduction, or merging -- text unchanged, only visual language
  * updated.
  *
- * Four real anchor ids added (task's own explicit requirement --
- * these are the exact targets the header/footer Framework dropdown,
- * migrated in layer 2, already links to):
+ * Three real anchor ids for the Framework dropdown/footer column --
+ * REAL SITE-STRUCTURE BUG FOUND AND FIXED, 2026-09-03 (explicit owner
+ * report: the same "Methodology" nav label existed in FOUR places
+ * across the site -- header Framework dropdown, mobile menu, footer
+ * Framework column, AND footer's own legal row -- three of them
+ * pointing here (#methodology) and only the fourth pointing to the
+ * real, substantially content-rich standalone /methodology page built
+ * the same day. Fixed by renaming this section's anchor to
+ * #pipeline-overview (kept as a real, useful quick-reference grid, not
+ * deleted) and repointing every nav link that said "Methodology" to
+ * the real dedicated page instead, so one label now has exactly one
+ * real destination):
  * - #epistemic-model -- the Mission block (closest real match: what
  *   AIscentra IS/is-not, its epistemic stance).
- * - #methodology -- the "How it works" 4-step pipeline (Observation ->
- *   Signal Detection -> Event Generation -> Intelligence) -- this IS
- *   the real, existing methodology description.
  * - #security-data -- new section: no dedicated real content existed
  *   for this on the prior page. Rather than fabricate data-handling
  *   claims, this honestly points to the real Signal Engine pipeline
@@ -66,9 +72,9 @@ export default function AboutPage(): React.JSX.Element {
               <p className="text-xl text-frost">Observe. Analyze. Accelerate the Future.</p>
             </div>
 
-            <div id="methodology">
+            <div id="pipeline-overview">
               <span className="font-caption mb-6 block text-silver-haze">
-                HOW IT WORKS — METHODOLOGY
+                HOW IT WORKS — QUICK OVERVIEW
               </span>
               <div className="grid gap-px border border-border-subtle bg-deep-obsidian md:grid-cols-2">
                 {(
@@ -97,6 +103,13 @@ export default function AboutPage(): React.JSX.Element {
                   </div>
                 ))}
               </div>
+              <p className="mt-4 text-base text-silver-haze">
+                <Link href="/methodology" className="text-mint-signal hover:underline">
+                  Read the full methodology
+                </Link>{' '}
+                — evidence standards, the questions we ask before publishing, and how we separate
+                fact from interpretation.
+              </p>
             </div>
 
             <div id="security-data">

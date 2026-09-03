@@ -28,12 +28,14 @@
  *   structure (4 distinct sub-items), and removing it violated the
  *   task's own explicit "не менять количество блоков/подблоков"
  *   constraint. Restored: the dropdown submenu (same 4 sub-items,
- *   same order) now links to real anchors on /about
- *   (/about#epistemic-model, /about#methodology, /about#security-data,
- *   /about#roadmap) -- fragments that will exist once /about migrates
- *   in a later layer and gains matching section ids. No fabricated
- *   page is created; every link resolves to the real, existing /about
- *   route.
+ *   same order) links to real destinations -- REAL SITE-STRUCTURE BUG
+ *   FOUND AND FIXED, 2026-09-03: "Methodology" used to point to
+ *   /about#methodology (a short in-page section), duplicating and
+ *   competing with the real, substantially content-rich standalone
+ *   /methodology page built the same day. Now points there directly
+ *   (/about#epistemic-model, /methodology, /about#security-data,
+ *   /about#roadmap) -- one real destination per label, no duplicate
+ *   competing content under the same nav name.
  * - "Assistant": #assistant anchor -> /assistant (real route).
  * - "Help the project": kept as-is (mailto:, a valid, real anchor
  *   target, not a fabricated page).
@@ -235,7 +237,7 @@ export function VfinalHeader(): React.JSX.Element {
               </Link>
               <div className="dropdown-content">
                 <Link href="/about#epistemic-model">Epistemic Model</Link>
-                <Link href="/about#methodology">Methodology</Link>
+                <Link href="/methodology">Methodology</Link>
                 <Link href="/about#security-data">Security &amp; Data</Link>
                 <Link href="/about#roadmap">Roadmap</Link>
               </div>
@@ -346,7 +348,7 @@ export function VfinalHeader(): React.JSX.Element {
           <Link href="/about#epistemic-model" onClick={() => closeMobileMenu(false)}>
             Epistemic Model
           </Link>
-          <Link href="/about#methodology" onClick={() => closeMobileMenu(false)}>
+          <Link href="/methodology" onClick={() => closeMobileMenu(false)}>
             Methodology
           </Link>
           <Link href="/about#security-data" onClick={() => closeMobileMenu(false)}>
