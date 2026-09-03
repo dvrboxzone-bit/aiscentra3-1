@@ -80,6 +80,16 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — private',
   },
   {
+    name: 'Kuaishou',
+    domain: 'kuaishou.com',
+    founded:
+      "2024 (Kling AI, Kuaishou's real first public AI video-generation product, launched June 2024; the company itself was founded in 2011)",
+    founders: 'Su Hua, Cheng Yixiao and founding team',
+    country: 'China',
+    sphere: 'Video, recommendation, generative AI',
+    status: 'Active — public',
+  },
+  {
     name: 'xAI',
     domain: 'x.ai',
     founded: '2023',
@@ -225,6 +235,26 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — private',
   },
   {
+    name: 'n8n',
+    domain: 'n8n.io',
+    founded:
+      '2022 (real, Wikipedia-confirmed reorientation around AI, more visible from 2024; the company itself was founded in 2019)',
+    founders: 'Jan Oberhauser',
+    country: 'Germany',
+    sphere: 'Workflow automation, AI agents',
+    status: 'Active — private',
+  },
+  {
+    name: 'Replit',
+    domain: 'replit.com',
+    founded:
+      "2022 (Ghostwriter, Replit's first real AI pair-programmer, launched April 2022; the company itself was founded in 2016)",
+    founders: 'Amjad Masad and founding team',
+    country: 'United States',
+    sphere: 'AI software development, coding agents',
+    status: 'Active — private',
+  },
+  {
     name: 'Anthropic',
     domain: 'anthropic.com',
     founded: '2021',
@@ -351,15 +381,6 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — private',
   },
   {
-    name: 'n8n',
-    domain: 'n8n.io',
-    founded: '2019',
-    founders: 'Jan Oberhauser',
-    country: 'Germany',
-    sphere: 'Workflow automation, AI agents',
-    status: 'Active — private',
-  },
-  {
     name: 'Baseten',
     domain: 'baseten.co',
     founded: '2019',
@@ -385,15 +406,6 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     country: 'United States',
     sphere: 'AI drug discovery, biotech',
     status: 'Active — private',
-  },
-  {
-    name: 'Huawei',
-    domain: 'huawei.com',
-    founded: '2018 (first Ascend AI chip; the company itself was founded in 1987)',
-    founders: 'Ren Zhengfei and founding team',
-    country: 'China',
-    sphere: 'AI hardware, cloud, ICT',
-    status: 'Active — private / employee-owned',
   },
   {
     name: 'AI21 Labs',
@@ -469,15 +481,6 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — public',
   },
   {
-    name: 'Replit',
-    domain: 'replit.com',
-    founded: '2016',
-    founders: 'Amjad Masad and founding team',
-    country: 'United States',
-    sphere: 'AI software development, coding agents',
-    status: 'Active — private',
-  },
-  {
     name: 'Cerebras',
     domain: 'cerebras.ai',
     founded: '2016',
@@ -539,6 +542,16 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     founders: 'Pony Ma and founding team',
     country: 'China',
     sphere: 'Consumer AI, cloud, foundation models',
+    status: 'Active — public',
+  },
+  {
+    name: 'AMD',
+    domain: 'amd.com',
+    founded:
+      "2016 (Radeon Instinct, AMD's first dedicated AI/deep-learning accelerator line, announced December 2016; the company itself was founded in 1969)",
+    founders: 'Jerry Sanders and founding team',
+    country: 'United States',
+    sphere: 'AI accelerators, CPUs/GPUs, compute',
     status: 'Active — public',
   },
   {
@@ -633,6 +646,16 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — public',
   },
   {
+    name: 'Huawei',
+    domain: 'huawei.com',
+    founded:
+      "2012 (Noah's Ark Lab, Huawei's own AI research institute; the company itself was founded in 1987)",
+    founders: 'Ren Zhengfei and founding team',
+    country: 'China',
+    sphere: 'AI hardware, cloud, ICT',
+    status: 'Active — private / employee-owned',
+  },
+  {
     name: 'Lambda',
     domain: 'lambda.ai',
     founded: '2012',
@@ -641,12 +664,6 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     sphere: 'AI cloud, GPU infrastructure',
     status: 'Active — private',
   },
-  // Verified, not left unchanged by oversight: ByteDance's own
-  // FIRST product (Toutiao, launched the same year as the company
-  // itself) was already built on ML-based content recommendation
-  // from day one -- unlike Alibaba/Tencent/Baidu/Huawei, where AI
-  // was a real, later addition to an already-mature company,
-  // ByteDance is genuinely AI-native from its actual founding.
   {
     name: 'ByteDance',
     alsoKnownAs: 'Doubao',
@@ -658,12 +675,13 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — private',
   },
   {
-    name: 'Kuaishou',
-    domain: 'kuaishou.com',
-    founded: '2011',
-    founders: 'Su Hua, Cheng Yixiao and founding team',
-    country: 'China',
-    sphere: 'Video, recommendation, generative AI',
+    name: 'NVIDIA',
+    domain: 'nvidia.com',
+    founded:
+      '2012 (AlexNet moment -- the real, widely-documented turning point when NVIDIA GPUs became central to deep learning; the company itself was founded in 1993)',
+    founders: 'Jensen Huang, Chris Malachowsky, Curtis Priem',
+    country: 'United States',
+    sphere: 'AI accelerators, compute, software',
     status: 'Active — public',
   },
   {
@@ -675,6 +693,14 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     sphere: 'Autonomous driving',
     status: 'Active — Alphabet subsidiary',
   },
+  // Checked, deliberately left unchanged: the commonly-repeated
+  // claim of a 2013 OpenCV-based AI component in UiPath Studio did
+  // not turn up any real primary source. UiPath's own official
+  // "AI Computer Vision" release notes only go back to 2022; the
+  // 2019 ProcessGold acquisition is a plausible alternative but
+  // also not independently confirmed as the real AI-focus start.
+  // Held at the company's own real founding year (2005) pending a
+  // clearer, better-sourced date.
   {
     name: 'UiPath',
     domain: 'uipath.com',
@@ -691,24 +717,6 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     founders: 'University founding team',
     country: 'China',
     sphere: 'Speech AI, language AI',
-    status: 'Active — public',
-  },
-  {
-    name: 'NVIDIA',
-    domain: 'nvidia.com',
-    founded: '1993',
-    founders: 'Jensen Huang, Chris Malachowsky, Curtis Priem',
-    country: 'United States',
-    sphere: 'AI accelerators, compute, software',
-    status: 'Active — public',
-  },
-  {
-    name: 'AMD',
-    domain: 'amd.com',
-    founded: '1969',
-    founders: 'Jerry Sanders and founding team',
-    country: 'United States',
-    sphere: 'AI accelerators, CPUs/GPUs, compute',
     status: 'Active — public',
   },
 ] as const
