@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import Script from 'next/script'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
 import '@fontsource/inter/700.css'
@@ -85,7 +86,23 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* Umami site analytics (explicit owner instruction,
+            2026-09-03). next/script's own "afterInteractive" strategy
+            is the real, documented Next.js equivalent of a plain
+            `<script defer>` tag -- loads after the page becomes
+            interactive, non-blocking, same real timing intent as the
+            owner's own provided snippet. Placed in the true root
+            layout (not the (public) route group layout) so it loads
+            site-wide, including /admin -- matches standard site
+            analytics practice, not scoped to only public pages. */}
+        <Script
+          src="https://cloud.umami.is/script.js"
+          data-website-id="d171734d-5c40-4f7f-8f00-689a9dd7a76e"
+          strategy="afterInteractive"
+        />
+      </body>
     </html>
   )
 }
