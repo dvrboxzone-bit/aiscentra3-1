@@ -11,7 +11,16 @@ describe('/about — real anchor ids, VfinalPublicShell, no forbidden URLs', () 
     t.after(restore)
     const { default: AboutPage } = await import('../../../app/(public)/about/page')
     const { container } = render(AboutPage())
-    for (const id of ['epistemic-model', 'methodology', 'security-data', 'roadmap']) {
+    // REAL SITE-STRUCTURE BUG FOUND AND FIXED, 2026-09-03 (owner
+    // report): "methodology" used to be one of the 4 required anchors
+    // here, duplicating and competing with the real, content-rich
+    // standalone /methodology page built the same day -- every
+    // "Methodology" nav link across the site pointed to THIS short
+    // in-page section in 3 of 4 places. Renamed to "pipeline-overview"
+    // (kept as a real, useful quick-reference grid, now linking out to
+    // the real page) so one nav label has exactly one real
+    // destination.
+    for (const id of ['epistemic-model', 'pipeline-overview', 'security-data', 'roadmap']) {
       assert.ok(container.querySelector(`#${id}`), `#${id} must exist on the real /about page`)
     }
     const html = container.innerHTML

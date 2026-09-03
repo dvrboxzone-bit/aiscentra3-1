@@ -22,12 +22,12 @@ import Link from 'next/link'
  *   grounded in this project's own real architecture doc,
  *   File_59_STRATEGIC_MEMORY_SYSTEM.md). "Observations" ->
  *   /observatory (real route, does exist).
- * - Framework column: all 4 original destinations (Epistemic Model,
- *   Methodology, Security & Data, Roadmap) point to href="#" in the
- *   HTML with no corresponding real pages -- fabricating 4 new pages
- *   is explicitly forbidden. All 4 rows are preserved (same count) and
- *   link to /about, the closest real existing page covering this
- *   content, rather than being deleted or left as dead "#" links.
+ * - Framework column: 3 of 4 destinations (Epistemic Model, Security
+ *   & Data, Roadmap) link to real /about anchors. "Methodology" ->
+ *   /methodology (real, dedicated page -- REAL SITE-STRUCTURE BUG
+ *   FOUND AND FIXED, 2026-09-03: this used to point to
+ *   /about#methodology, duplicating and competing with the real,
+ *   content-rich standalone /methodology page built the same day).
  * - Connect column: the two mailto: links are real and kept as-is.
  *   "X / Twitter" has no real destination configured -- rendered as
  *   plain text, not a fabricated URL. "Status Page" -> /status (real
@@ -95,7 +95,7 @@ export function VfinalFooter(): React.JSX.Element {
                 </Link>
               </li>
               <li>
-                <Link href="/about#methodology" className="text-frost hover:text-mint-signal">
+                <Link href="/methodology" className="text-frost hover:text-mint-signal">
                   Methodology
                 </Link>
               </li>

@@ -21,7 +21,10 @@ describe('public route correction contracts', () => {
 
   test('all Framework anchors reserve the fixed-header offset', () => {
     const css = source('app/globals.css')
-    for (const anchor of ['epistemic-model', 'methodology', 'security-data', 'roadmap']) {
+    // REAL SITE-STRUCTURE BUG FOUND AND FIXED, 2026-09-03: "methodology"
+    // renamed to "pipeline-overview" -- see layer5a-about.moduleMock.test.tsx
+    // for the full real explanation (duplicate nav destination).
+    for (const anchor of ['epistemic-model', 'pipeline-overview', 'security-data', 'roadmap']) {
       assert.match(css, new RegExp(`#${anchor}`))
     }
     assert.match(css, /scroll-margin-top:\s*100px/)
