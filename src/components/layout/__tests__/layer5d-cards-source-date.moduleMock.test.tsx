@@ -6,8 +6,8 @@ import { render } from '@testing-library/react'
 import { forceReducedMotion } from '../../../app/__tests__/homepage-fixtures'
 import { makeSignal } from './layer5b-fixtures'
 
-describe('/signals catalog cards — real publication date, real source (favicon or text fallback), working links', () => {
-  test('a card with a real, verified source link shows the real SourceFaviconStrip; a card with NO source link shows nothing fabricated in its place; both show the real publication date and a real, working /signals/[id] link', async (t) => {
+describe('/signals catalog cards — real publication date, real source as a plain text link, working links', () => {
+  test('a card with a real, verified source link shows a real text link to that source; a card with NO source link shows nothing fabricated in its place; both show the real publication date and a real, working /signals/[id] link', async (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
     const withSource = makeSignal({
@@ -71,12 +71,15 @@ describe('/signals catalog cards — real publication date, real source (favicon
       'the real publication date for has-source must render in some real date format',
     )
 
-    // Real source favicon strip (an <a> to the real source URL) is
-    // present -- proves SourceFaviconStrip genuinely received real
-    // source data, not a fabricated icon.
+    // Real source link (a plain <a> to the real source URL, no
+    // logo/favicon -- removed entirely, explicit owner instruction,
+    // 2026-09-02: the same-origin favicon.ico approach was a
+    // deliberate privacy tradeoff that still failed for many real
+    // sources) is present -- proves the real source data reached the
+    // page, not a fabricated link.
     assert.ok(
       container.querySelector('a[href="https://example.com/article"]'),
-      'the real source link must render via SourceFaviconStrip',
+      'the real source link must render as plain text',
     )
   })
 })
