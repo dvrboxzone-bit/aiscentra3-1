@@ -238,8 +238,13 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         )}
 
         <div
-          className="textured-bg relative min-h-0 flex-1 overflow-y-auto"
-          style={{ overflowY: 'auto', overscrollBehavior: 'contain' }}
+          className="relative min-h-0 flex-1 overflow-y-auto"
+          style={{
+            backgroundColor: 'var(--color-deep-obsidian)',
+            isolation: 'isolate',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
+          }}
         >
           <div className="relative">
             {/* REAL BUG FIXED (owner-reported, after live scroll fix
