@@ -10,13 +10,18 @@ import Link from 'next/link'
  * Real-route / honest-content adaptation (task instructions: "Удалить
  * пустые href='#'", "не создавать выдуманные... страницы"):
  * - Logo: href="#" -> "/".
- * - Product column: "Signals" -> /signals (real). "Forecasts" and
- *   "Observations"/"Strategic Memory": no dedicated route/section
- *   exists yet for these as standalone destinations -- rendered as
- *   plain, non-clickable text (not <a href="#">, not a fabricated
- *   route) so the subblock/row itself is preserved but never lies
- *   about being a working link. "Observations" -> /observatory (real
- *   route, does exist).
+ * - Product column: "Signals" -> /signals (real). "Trajectories" ->
+ *   /trajectories (real -- REAL BUG FIXED 2026-09-03: this previously
+ *   pointed to /#trajectories, a stale anchor left over from when
+ *   Trajectories was a homepage section rather than its own page).
+ *   "Forecasts" -> /forecasts (real -- REAL BUG FIXED 2026-09-03: this
+ *   page already existed but the footer was never updated to link to
+ *   it, still rendering plain non-clickable text). "Strategic Memory":
+ *   no dedicated route/section exists yet as a standalone destination
+ *   -- rendered as plain, non-clickable text (not <a href="#">, not a
+ *   fabricated route) so the subblock/row itself is preserved but
+ *   never lies about being a working link. "Observations" ->
+ *   /observatory (real route, does exist).
  * - Framework column: all 4 original destinations (Epistemic Model,
  *   Methodology, Security & Data, Roadmap) point to href="#" in the
  *   HTML with no corresponding real pages -- fabricating 4 new pages
@@ -56,14 +61,14 @@ export function VfinalFooter(): React.JSX.Element {
                 </Link>
               </li>
               <li>
-                <Link href="/#trajectories" className="text-frost hover:text-mint-signal">
+                <Link href="/trajectories" className="text-frost hover:text-mint-signal">
                   Trajectories
                 </Link>
               </li>
               <li>
-                <span className="text-silver-haze opacity-50" title="In development">
+                <Link href="/forecasts" className="text-frost hover:text-mint-signal">
                   Forecasts
-                </span>
+                </Link>
               </li>
               <li>
                 <Link href="/observatory" className="text-frost hover:text-mint-signal">
