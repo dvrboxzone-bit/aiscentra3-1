@@ -16,11 +16,11 @@ import Link from 'next/link'
  *   Trajectories was a homepage section rather than its own page).
  *   "Forecasts" -> /forecasts (real -- REAL BUG FIXED 2026-09-03: this
  *   page already existed but the footer was never updated to link to
- *   it, still rendering plain non-clickable text). "Strategic Memory":
- *   no dedicated route/section exists yet as a standalone destination
- *   -- rendered as plain, non-clickable text (not <a href="#">, not a
- *   fabricated route) so the subblock/row itself is preserved but
- *   never lies about being a working link. "Observations" ->
+ *   it, still rendering plain non-clickable text). "Strategic Memory"
+ *   -> /strategic-memory (real -- REAL PAGE BUILT 2026-09-03: new
+ *   standalone page, same real IN DEVELOPMENT pattern as /forecasts,
+ *   grounded in this project's own real architecture doc,
+ *   File_59_STRATEGIC_MEMORY_SYSTEM.md). "Observations" ->
  *   /observatory (real route, does exist).
  * - Framework column: all 4 original destinations (Epistemic Model,
  *   Methodology, Security & Data, Roadmap) point to href="#" in the
@@ -29,8 +29,11 @@ import Link from 'next/link'
  *   link to /about, the closest real existing page covering this
  *   content, rather than being deleted or left as dead "#" links.
  * - Connect column: the two mailto: links are real and kept as-is.
- *   "X / Twitter" and "Status Page" have no real destination
- *   configured -- rendered as plain text, not fabricated URLs.
+ *   "X / Twitter" has no real destination configured -- rendered as
+ *   plain text, not a fabricated URL. "Status Page" -> /status (real
+ *   -- REAL PAGE BUILT 2026-09-03: new standalone page, honestly
+ *   states it will show real pipeline state once that data exists,
+ *   not a fabricated "all systems normal" badge).
  * - Bottom legal row: Privacy / Data Retention / Security Disclosure
  *   have no real pages -- rendered as plain text, not fabricated
  *   legal pages (task explicitly forbids creating these).
@@ -76,12 +79,9 @@ export function VfinalFooter(): React.JSX.Element {
                 </Link>
               </li>
               <li>
-                <span
-                  className="text-silver-haze opacity-50"
-                  title="Not yet available as a standalone page"
-                >
+                <Link href="/strategic-memory" className="text-frost hover:text-mint-signal">
                   Strategic Memory
-                </span>
+                </Link>
               </li>
             </ul>
           </div>
@@ -125,9 +125,9 @@ export function VfinalFooter(): React.JSX.Element {
                 </a>
               </li>
               <li>
-                <span className="text-silver-haze opacity-50" title="Not yet available">
+                <Link href="/status" className="text-frost hover:text-mint-signal">
                   Status Page
-                </span>
+                </Link>
               </li>
             </ul>
           </div>

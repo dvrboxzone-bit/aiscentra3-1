@@ -203,6 +203,8 @@ export function VfinalHeader(): React.JSX.Element {
                 <Link href="/forecasts">Forecasts</Link>
                 <Link href="/editorial">Editorial</Link>
                 <Link href="/emerging-patterns">Emerging Patterns</Link>
+                <Link href="/strategic-memory">Strategic Memory</Link>
+                <Link href="/status">Status Page</Link>
               </div>
             </div>
 
@@ -324,6 +326,12 @@ export function VfinalHeader(): React.JSX.Element {
           </Link>
           <Link href="/emerging-patterns" onClick={() => closeMobileMenu(false)}>
             Emerging Patterns
+          </Link>
+          <Link href="/strategic-memory" onClick={() => closeMobileMenu(false)}>
+            Strategic Memory
+          </Link>
+          <Link href="/status" onClick={() => closeMobileMenu(false)}>
+            Status Page
           </Link>
 
           <span className="mobile-menu-group-label">EXPLORE</span>
