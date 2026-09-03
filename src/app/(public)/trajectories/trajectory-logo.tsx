@@ -10,7 +10,7 @@
  */
 export function TrajectoryLogo({ src }: { src: string }): React.JSX.Element {
   return (
-    // eslint-disable-next-line @next/next/no-img-element -- external, unknown-dimension favicon; next/image would require remotePatterns for every possible source domain (same established pattern as SourceFaviconStrip)
+    // eslint-disable-next-line @next/next/no-img-element -- external, unknown-dimension logo across a real three-source fallback chain; next/image would require remotePatterns for every possible source domain
     <img
       src={src}
       alt=""

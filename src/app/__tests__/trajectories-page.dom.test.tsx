@@ -49,7 +49,7 @@ describe('/trajectories — 6 real companies, real favicons, subtle per-card sur
 
     // Real company favicons: each of the 6 real, current company
     // domains must produce a real, correctly-formed favicon URL --
-    // same honest pattern as SourceFaviconStrip, never a fabricated icon.
+    // never a fabricated icon.
     for (const domain of [
       'deepmind.google',
       'getcruise.com',
