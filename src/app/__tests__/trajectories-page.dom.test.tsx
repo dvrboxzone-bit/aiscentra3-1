@@ -81,8 +81,12 @@ describe('/trajectories — real 73-entity registry table, show/hide reveal, rea
     fireEvent.click(getByRole('button', { name: /Show all 73 entities/ }))
 
     for (const entity of TRAJECTORIES) {
-      const matches = [...container.querySelectorAll('tbody td')].filter(
-        (td) => td.textContent?.trim() === entity.name,
+      // Starts-with, not exact-equal: 5 real entities now also show a
+      // real "(also known as <brand>)" suffix (e.g. Moonshot AI / Kimi)
+      // -- the cell's own text is no longer always an exact match to
+      // just the bare company name for those five.
+      const matches = [...container.querySelectorAll('tbody td')].filter((td) =>
+        td.textContent?.trim().startsWith(entity.name),
       )
       assert.equal(matches.length, 1, `"${entity.name}" must appear exactly once in the table`)
     }

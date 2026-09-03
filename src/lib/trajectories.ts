@@ -27,6 +27,13 @@
  */
 export interface TrajectoryEntity {
   name: string
+  /**
+   * Real, well-known consumer/product brand this company operates
+   * under, when materially different from its own corporate/domain
+   * name (e.g. Moonshot AI's real product is known as Kimi). Omitted
+   * entirely when no such distinct brand exists -- never invented.
+   */
+  alsoKnownAs?: string
   domain: string
   founded: string
   founders: string
@@ -101,6 +108,7 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
   },
   {
     name: 'Moonshot AI',
+    alsoKnownAs: 'Kimi',
     domain: 'moonshot.ai',
     founded: '2023',
     founders: 'Yang Zhilin and founding team',
@@ -379,6 +387,15 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — private',
   },
   {
+    name: 'Huawei',
+    domain: 'huawei.com',
+    founded: '2018 (first Ascend AI chip; the company itself was founded in 1987)',
+    founders: 'Ren Zhengfei and founding team',
+    country: 'China',
+    sphere: 'AI hardware, cloud, ICT',
+    status: 'Active — private / employee-owned',
+  },
+  {
     name: 'AI21 Labs',
     domain: 'ai21.com',
     founded: '2017',
@@ -442,6 +459,16 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — private',
   },
   {
+    name: 'Alibaba',
+    alsoKnownAs: 'Qwen (Tongyi Qianwen)',
+    domain: 'alibaba.com',
+    founded: '2017 (AI research institute DAMO Academy; the company itself was founded in 1999)',
+    founders: 'Jack Ma and founding team',
+    country: 'China',
+    sphere: 'Cloud, foundation models, AI platforms',
+    status: 'Active — public',
+  },
+  {
     name: 'Replit',
     domain: 'replit.com',
     founded: '2016',
@@ -503,6 +530,16 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     country: 'China',
     sphere: 'Robotics, humanoids, quadrupeds',
     status: 'Active — public (Shanghai STAR: 688836)',
+  },
+  {
+    name: 'Tencent',
+    alsoKnownAs: 'Hunyuan / Yuanbao',
+    domain: 'tencent.com',
+    founded: '2016 (Tencent AI Lab; the company itself was founded in 1998)',
+    founders: 'Pony Ma and founding team',
+    country: 'China',
+    sphere: 'Consumer AI, cloud, foundation models',
+    status: 'Active — public',
   },
   {
     name: 'OpenAI',
@@ -586,6 +623,16 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — public (Nasdaq: RXRX)',
   },
   {
+    name: 'Baidu',
+    alsoKnownAs: 'ERNIE Bot',
+    domain: 'baidu.com',
+    founded: '2013 (Institute of Deep Learning; the company itself was founded in 2000)',
+    founders: 'Robin Li, Eric Xu',
+    country: 'China',
+    sphere: 'Search, foundation models, AI cloud',
+    status: 'Active — public',
+  },
+  {
     name: 'Lambda',
     domain: 'lambda.ai',
     founded: '2012',
@@ -594,8 +641,15 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     sphere: 'AI cloud, GPU infrastructure',
     status: 'Active — private',
   },
+  // Verified, not left unchanged by oversight: ByteDance's own
+  // FIRST product (Toutiao, launched the same year as the company
+  // itself) was already built on ML-based content recommendation
+  // from day one -- unlike Alibaba/Tencent/Baidu/Huawei, where AI
+  // was a real, later addition to an already-mature company,
+  // ByteDance is genuinely AI-native from its actual founding.
   {
     name: 'ByteDance',
+    alsoKnownAs: 'Doubao',
     domain: 'bytedance.com',
     founded: '2012',
     founders: 'Yiming Zhang, Rubo Liang and founding team',
@@ -631,39 +685,12 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     status: 'Active — public',
   },
   {
-    name: 'Baidu',
-    domain: 'baidu.com',
-    founded: '2000',
-    founders: 'Robin Li, Eric Xu',
-    country: 'China',
-    sphere: 'Search, foundation models, AI cloud',
-    status: 'Active — public',
-  },
-  {
-    name: 'Alibaba',
-    domain: 'alibaba.com',
-    founded: '1999',
-    founders: 'Jack Ma and founding team',
-    country: 'China',
-    sphere: 'Cloud, foundation models, AI platforms',
-    status: 'Active — public',
-  },
-  {
     name: 'iFLYTEK',
     domain: 'iflytek.com',
     founded: '1999',
     founders: 'University founding team',
     country: 'China',
     sphere: 'Speech AI, language AI',
-    status: 'Active — public',
-  },
-  {
-    name: 'Tencent',
-    domain: 'tencent.com',
-    founded: '1998',
-    founders: 'Pony Ma and founding team',
-    country: 'China',
-    sphere: 'Consumer AI, cloud, foundation models',
     status: 'Active — public',
   },
   {
@@ -674,15 +701,6 @@ export const TRAJECTORIES: readonly TrajectoryEntity[] = [
     country: 'United States',
     sphere: 'AI accelerators, compute, software',
     status: 'Active — public',
-  },
-  {
-    name: 'Huawei',
-    domain: 'huawei.com',
-    founded: '1987',
-    founders: 'Ren Zhengfei and founding team',
-    country: 'China',
-    sphere: 'AI hardware, cloud, ICT',
-    status: 'Active — private / employee-owned',
   },
   {
     name: 'AMD',

@@ -52,10 +52,18 @@ export function TrajectoryTable({
                 <td className="whitespace-nowrap px-4 py-3">
                   <div className="flex items-center gap-3">
                     <TrajectoryLogo domain={entity.domain} name={entity.name} />
-                    <span className="text-frost">{entity.name}</span>
+                    <span className="text-frost">
+                      {entity.name}
+                      {entity.alsoKnownAs && (
+                        <span className="text-silver-haze">
+                          {' '}
+                          (also known as {entity.alsoKnownAs})
+                        </span>
+                      )}
+                    </span>
                   </div>
                 </td>
-                <td className="whitespace-nowrap px-4 py-3">{entity.founded}</td>
+                <td className="min-w-[140px] px-4 py-3">{entity.founded}</td>
                 <td className="px-4 py-3">{entity.founders}</td>
                 <td className="whitespace-nowrap px-4 py-3">{entity.country}</td>
                 <td className="px-4 py-3">{entity.sphere}</td>
