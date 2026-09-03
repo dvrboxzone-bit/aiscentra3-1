@@ -38,10 +38,11 @@ export default function TrajectoriesPage(): React.JSX.Element {
           coding agents, infrastructure, biotech, robotics, and defence.
         </p>
         <p className="mb-4 max-w-2xl text-lg leading-relaxed text-silver-haze">
-          This is not a ranking: the order follows category, not importance. Every founding date,
-          founder list, and current status is independently checked against a primary source before
-          publication. Where a source describes a founding team rather than a single founder, we
-          preserve that distinction rather than simplifying it.
+          This is not a ranking: companies are ordered by the year they were founded, most recently
+          founded at the top. Every founding date, founder list, and current status is independently
+          checked against a primary source before publication. Where a source describes a founding
+          team rather than a single founder, we preserve that distinction rather than simplifying
+          it.
         </p>
         <p className="mb-16 max-w-2xl text-lg leading-relaxed text-silver-haze">
           Status reflects the company&rsquo;s current state; historical changes remain part of its
