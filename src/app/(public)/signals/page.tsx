@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
-import { SourceFaviconStrip } from '@/components/signals/source-favicon-strip'
 import { getSignals, getSignalsCount } from '@/modules/signals/queries'
 import { getSourceLinksForSignals } from '@/modules/observations/queries'
 import { formatDate } from '@/lib/utils/format'
@@ -170,8 +169,7 @@ const STRICT_PAGE_PATTERN = /^[1-9][0-9]*$/
  * for the whole page (REAL BUG FIXED -- was previously up to 25
  * separate admin-client queries, one per signal) -- same real
  * favicon-or-text-fallback SourceLink shape, same real safety
- * filtering, reusing the SAME real, already-tested SourceFaviconStrip
- * component.
+ * filtering.
  *
  * Real counts: getSignalsCount() applies the exact same real filters
  * (status ACTIVE/PROMOTED, has_verified_source=true, optional
@@ -374,12 +372,35 @@ function VfinalCatalogCard({
       <h3 className="mb-3 text-xl font-medium leading-tight text-frost">{signal.title}</h3>
       <p className="mb-4 text-sm leading-relaxed text-silver-haze">{signal.description}</p>
 
-      {/* Real source: verified favicon (via SourceFaviconStrip) when
-          available, else the real source name as plain text -- never
-          a fabricated icon. */}
+      {/* REAL DECISION CHANGE (explicit owner instruction, 2026-09-02):
+          logo/favicon display for signal sources was removed entirely,
+          not just fixed. Root cause found and explained to the owner:
+          the same-origin favicon.ico approach was deliberately chosen
+          over a third-party fallback chain (like the one used in
+          Trajectories) specifically to avoid leaking visitor IPs and
+          the site's own source list to third-party icon services --
+          a real, deliberate privacy tradeoff, not an oversight. Given
+          that same-origin approach genuinely failed for many real
+          sources (confirmed this session: github.blog serves a
+          functionally-blank icon, openai.com blocks direct requests
+          with HTTP 403), the owner's own conclusion was that a
+          decorative element serving none of the five real things a
+          reader needs (fact, evidence status, why it matters, source,
+          what's unconfirmed) isn't worth either the reliability
+          problem or the privacy tradeoff -- plain text links only. */}
       {sourceLinks.length > 0 ? (
-        <div className="mb-4">
-          <SourceFaviconStrip sources={sourceLinks} />
+        <div className="mb-4 flex flex-wrap gap-x-3 gap-y-1">
+          {sourceLinks.map((source) => (
+            <a
+              key={source.url}
+              href={source.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-silver-haze underline decoration-border-subtle underline-offset-2 hover:text-mint-signal"
+            >
+              {source.sourceName}
+            </a>
+          ))}
         </div>
       ) : null}
 

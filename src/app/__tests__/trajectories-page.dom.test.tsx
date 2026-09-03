@@ -1,84 +1,94 @@
 import '../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render } from '@testing-library/react'
+import { render, fireEvent, cleanup } from '@testing-library/react'
 import { forceReducedMotion } from './homepage-fixtures'
+import { TRAJECTORIES } from '../../lib/trajectories'
+
+afterEach(() => {
+  cleanup()
+  document.body.replaceChildren()
+})
 
 /**
  * AIscentra — /trajectories page: real regression coverage for the
- * independent-review correction (explicit owner instruction).
- *
- * No mock.module() needed here -- unlike most other pages, this one
- * has NO real data-layer dependency (Supabase, AI, etc.) at all; its
- * only "data" is the static TRAJECTORIES array plus a pure function
- * (buildFaviconUrl), so it can be tested as a plain, real,
- * unconditional render.
+ * registry table (explicit owner instruction, 2026-09-02, replacing
+ * the earlier 6-card layout entirely).
  */
-describe('/trajectories — 6 real companies, real favicons, subtle per-card surface, no fabricated links', () => {
-  test('renders exactly 6 real trajectory cards with real favicon URLs, the same real subtle surface fill used elsewhere on the site, and disabled "Coming soon" detail links (no fabricated destinations)', async (t) => {
+describe('/trajectories — real 73-entity registry table, show/hide reveal, real logo fallback chain', () => {
+  test('renders a real table with one row per real registry entity, initially showing 36 with the rest behind an explicit reveal', async (t) => {
     const restore = forceReducedMotion()
     t.after(restore)
 
     const { default: TrajectoriesPage } = await import('../../app/(public)/trajectories/page')
     const jsx = TrajectoriesPage()
-    const { container } = render(jsx)
+    const { container, getByRole } = render(jsx)
 
-    // Real, honest count: exactly the 6 real companies currently
-    // documented, no more, no fewer.
+    // Real, honest total: the actual registry size, not a hardcoded
+    // guess -- this test fails loudly if the data file's own entity
+    // count ever silently drifts from what the page claims to show.
+    assert.equal(TRAJECTORIES.length, 73, 'the real registry must contain exactly 73 entities')
+
+    const allRows = container.querySelectorAll('tbody tr')
     assert.equal(
-      container.querySelectorAll('[data-content-slot="trajectory"]').length,
-      6,
-      'exactly 6 real trajectory cards must render',
+      allRows.length,
+      36,
+      'exactly 36 rows must be visible before the reveal is used, matching the real INITIAL_VISIBLE_COUNT',
     )
 
-    // REAL DESIGN DECISION REVERSED (explicit owner instruction,
-    // 2026-08-24): the owner reviewed the no-fill version live and
-    // asked for the per-card subtle dark surface to come back,
-    // matching the exact same real pattern already used by
-    // Observatory's own sub-blocks (bg-surface-tonal, #0A0A0A --
-    // confirmed identical to src/app/(public)/observatory/page.tsx's own
-    // section elements). Each of the 6 real cards must carry this
-    // class -- not the old "text directly over the shared tech-grid,
-    // zero per-card fill" decision from the prior commit.
+    const revealButton = getByRole('button', { name: /Show all 73 entities/ })
+    assert.ok(revealButton, 'a real "show all" control naming the true total (73) must exist')
+
+    fireEvent.click(revealButton)
+
+    const allRowsAfterReveal = container.querySelectorAll('tbody tr')
     assert.equal(
-      container.querySelectorAll('[data-content-slot="trajectory"].bg-surface-tonal').length,
-      6,
-      "all 6 real trajectory cards must have the real bg-surface-tonal subtle dark fill, matching Observatory's own established sub-block pattern",
+      allRowsAfterReveal.length,
+      73,
+      'clicking the real reveal control must show every one of the 73 real entities, not a separate page',
     )
 
-    // Real company favicons: each of the 6 real, current company
-    // domains must produce a real, correctly-formed favicon URL --
-    // same honest pattern as SourceFaviconStrip, never a fabricated icon.
-    for (const domain of [
-      'deepmind.google',
-      'getcruise.com',
-      'openai.com',
-      'stability.ai',
-      'anthropic.com',
-      'inflection.ai',
-    ]) {
-      assert.ok(
-        container.querySelector(`img[src="https://${domain}/favicon.ico"]`),
-        `the real favicon for ${domain} must render`,
-      )
+    // Collapsing back must work too, not just a one-way reveal.
+    const collapseButton = getByRole('button', { name: /Show fewer/ })
+    fireEvent.click(collapseButton)
+    assert.equal(
+      container.querySelectorAll('tbody tr').length,
+      36,
+      'the reveal control must also collapse back to 36, not just expand',
+    )
+
+    // Real table columns: the actual header text, matching the
+    // registry's own recommended compact field set.
+    const headerText = container.querySelector('thead')?.textContent ?? ''
+    for (const column of ['Company', 'Founded', 'Founders', 'Country', 'Sphere', 'Status']) {
+      assert.ok(headerText.includes(column), `the real "${column}" column header must render`)
     }
 
-    // Honest "Coming soon": no fabricated /history/ or similar detail
-    // links -- the owner's own stated future plan (real detail pages)
-    // has not been built yet, so none may be faked here.
-    assert.equal(
-      container.querySelectorAll('a[href*="/history/"]').length,
-      0,
-      'no fabricated detail-page links may exist until real detail pages are built',
-    )
-    assert.equal(
-      container.querySelectorAll('[aria-disabled="true"]').length,
-      6,
-      'all 6 "Full trajectory" links must remain honestly disabled',
-    )
-
+    // No pagination links -- explicit owner instruction not to split
+    // this registry across separate pages.
+    assert.doesNotMatch(container.innerHTML, /trajectories\/2/)
     assert.doesNotMatch(container.innerHTML, /href="#"/)
-    assert.doesNotMatch(container.innerHTML, /picsum/i)
+  })
+
+  test('each real entity renders its own real company name exactly once in the full (expanded) table', async (t) => {
+    const restore = forceReducedMotion()
+    t.after(restore)
+
+    const { default: TrajectoriesPage } = await import('../../app/(public)/trajectories/page')
+    const jsx = TrajectoriesPage()
+    const { container, getByRole } = render(jsx)
+    fireEvent.click(getByRole('button', { name: /Show all 73 entities/ }))
+
+    for (const entity of TRAJECTORIES) {
+      // Starts-with, not exact-equal: 5 real entities now also show a
+      // real "(also known as <brand>)" suffix (e.g. Moonshot AI / Kimi)
+      // -- the cell's own text is no longer always an exact match to
+      // just the bare company name for those five.
+      const matches = [...container.querySelectorAll('tbody td')].filter((td) =>
+        td.textContent?.trim().startsWith(entity.name),
+      )
+      assert.equal(matches.length, 1, `"${entity.name}" must appear exactly once in the table`)
+    }
   })
 })
