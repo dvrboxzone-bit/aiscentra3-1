@@ -89,6 +89,30 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'error'>('idle')
 
+  // REAL BUG FIXED, then a REAL REGRESSION FOUND AND UNDONE
+  // (owner-reported, in this order):
+  //
+  // 1. Scrolling inside the panel's own message area instead scrolled
+  //    the whole page. Root cause: without CSS containment, a scroll
+  //    gesture reaching the panel's own scroll boundary "chains" onward
+  //    to the page body. Fixed via overscroll-behavior: contain (on the
+  //    scrollable div) + min-h-0 (fixing a real flexbox sizing bug) +
+  //    overflow: hidden on .assistant-panel itself.
+  //
+  // 2. An EARLIER version of this same fix ALSO locked
+  //    document.body.style.overflow = 'hidden' and called
+  //    getActiveLenisInstance()?.stop() while the panel was open, as
+  //    an extra defensive layer. This was a REAL, genuine regression:
+  //    the owner's own explicit, earlier requirement for this panel is
+  //    that it stay NON-modal -- the whole page (a signal, the menu,
+  //    text selection) must remain fully usable while the panel is
+  //    open, and that explicitly includes the page's own scroll, not
+  //    just clicks. Locking body scroll broke exactly that. Removed
+  //    entirely -- CSS-level scroll containment on the panel's own
+  //    scrollable area (above) is the correct, complete fix on its
+  //    own; it does not require or benefit from also disabling the
+  //    page's own independent scroll.
+
   async function sendQuery(query: string): Promise<void> {
     if (!query.trim() || status === 'sending') return
     setMessages((prev) => [...prev, { role: 'user', text: query }])
@@ -208,66 +232,102 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
         {pathname && (
           <div className="border-b border-border-subtle px-4 py-2">
             <span className="font-caption text-xs text-silver-haze opacity-60">
-              CONTEXT: {describeCurrentPage(pathname)}
+              Current page: {describeCurrentPage(pathname)}
             </span>
           </div>
         )}
 
-        <div className="textured-bg relative flex-1 overflow-y-auto p-4">
-          <div className="tech-grid" />
-          <div className="relative z-10">
-            {messages.length === 0 ? (
-              <>
-                <svg width="140" height="56" className="mx-auto mb-6 block">
-                  <use href="#aiscentra-logo" />
-                </svg>
-                <p className="text-sm leading-relaxed text-silver-haze">
-                  Welcome. I can help you explore signals, events and analysis across the AI
-                  ecosystem — ask a question, or choose a quick action below.
-                </p>
-              </>
-            ) : (
-              <div className="space-y-3">
-                {messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={
-                      m.role === 'user'
-                        ? 'ml-auto max-w-[85%] border border-border-subtle bg-surface-tonal p-3 text-sm text-frost'
-                        : 'max-w-[85%] text-sm leading-relaxed text-silver-haze'
-                    }
-                  >
-                    {m.text}
-                  </div>
-                ))}
-              </div>
-            )}
+        <div
+          className="relative min-h-0 flex-1 overflow-y-auto"
+          style={{
+            backgroundColor: 'var(--color-deep-obsidian)',
+            isolation: 'isolate',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
+          }}
+        >
+          <div className="relative">
+            {/* REAL BUG FIXED (owner-reported, after live scroll fix
+                landed): a solid dark bar briefly appeared at the top/
+                bottom edge during scroll, exact same size as the
+                earlier tech-grid gap. Root cause: .textured-bg's own
+                ::before noise-texture pseudo-element (globals.css) is
+                anchored to .textured-bg itself -- the OUTER, short
+                (visible-only) scroll container -- not the taller
+                scrollable content height, identical in kind to the
+                tech-grid bug already fixed in this same file. Rather
+                than editing the shared, site-wide .textured-bg::before
+                rule (used elsewhere on the site, explicit owner
+                instruction not to touch other site code), replicated
+                the same real noise texture here as a plain, local div
+                inside this already-correctly-sized full-height
+                wrapper -- same SVG data URI, same opacity, scoped only
+                to this one component. */}
+            <div
+              className="pointer-events-none absolute inset-0 -z-10"
+              style={{
+                backgroundImage:
+                  'url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="4" stitchTiles="stitch"/></filter><rect width="100%25" height="100%25" filter="url(%23n)" opacity="0.06"/></svg>\')',
+              }}
+            />
+            <div className="tech-grid" />
+            <div className="relative z-10 p-4">
+              {messages.length === 0 ? (
+                <>
+                  <svg width="140" height="56" className="mx-auto mb-6 block">
+                    <use href="#aiscentra-logo" />
+                  </svg>
+                  <p className="text-sm leading-relaxed text-silver-haze">
+                    Welcome. I can help you explore signals, events and analysis across the AI
+                    ecosystem — ask a question, or choose a quick action below.
+                  </p>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  {messages.map((m, i) => (
+                    <div
+                      key={i}
+                      className={
+                        m.role === 'user'
+                          ? 'ml-auto max-w-[85%] border border-border-subtle bg-surface-tonal p-3 text-sm text-frost'
+                          : 'max-w-[85%] text-sm leading-relaxed text-silver-haze'
+                      }
+                    >
+                      {m.text}
+                    </div>
+                  ))}
+                </div>
+              )}
 
-            <div className="mt-6 space-y-2">
-              <span className="font-caption block text-silver-haze">QUICK ACTIONS</span>
-              {CONTENT_COMMANDS.map((cmd) => (
-                <button
-                  key={cmd}
-                  type="button"
-                  onClick={() => {
-                    void sendQuery(cmd)
-                  }}
-                  className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
-                >
-                  {cmd}
-                </button>
-              ))}
-              {SERVICE_COMMANDS.map(({ label, note }) => (
-                <Link
-                  key={label}
-                  href="/contact"
-                  onClick={close}
-                  title={note}
-                  className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
-                >
-                  {label}
-                </Link>
-              ))}
+              <div className="mt-6 space-y-2">
+                <span className="font-caption block text-silver-haze">QUICK ACTIONS</span>
+                {CONTENT_COMMANDS.map((cmd) => (
+                  <button
+                    key={cmd}
+                    type="button"
+                    onClick={() => {
+                      void sendQuery(cmd)
+                    }}
+                    className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
+                  >
+                    {cmd}
+                  </button>
+                ))}
+                {SERVICE_COMMANDS.map(({ label, note }) => (
+                  <Link
+                    key={label}
+                    href="/contact"
+                    onClick={close}
+                    title={note}
+                    className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze hover:border-mint-signal hover:text-mint-signal"
+                  >
+                    {label}
+                  </Link>
+                ))}
+                <div className="block w-full border border-border-subtle bg-deep-obsidian/60 p-2 text-left text-xs text-silver-haze">
+                  You can ask a question about the content of this page
+                </div>
+              </div>
             </div>
           </div>
         </div>
