@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 
 export const metadata: Metadata = {
   title: 'About',
@@ -134,6 +135,33 @@ export default function AboutPage(): React.JSX.Element {
                 <p className="text-base text-silver-haze">
                   AIscentra is an independent project. Its principles, editorial standards, and
                   direction are set and maintained by its founder.
+                </p>
+              </div>
+
+              {/* REAL, ADDITIONAL CONTENT (explicit owner instruction,
+                  2026-09-03): the block above already existed and stays
+                  untouched. These two items close a real gap from the
+                  trust/credibility review the owner shared -- a real
+                  correction contact and an honest conflict-of-interest
+                  statement, both grounded in facts already established
+                  elsewhere in this project (the /contact page's own
+                  real purpose; the site's own no-advertising,
+                  independence policy already stated above under
+                  Security & Data), not invented for this section. */}
+              <div className="mt-6 space-y-4">
+                <p className="text-base text-silver-haze">
+                  Found something wrong in a Signal? The fastest way to reach us is directly —{' '}
+                  <Link href="/contact" className="text-mint-signal hover:underline">
+                    write in with what you found
+                  </Link>
+                  . One person reads every message; you&rsquo;ll get a real reply, not an
+                  autoresponder.
+                </p>
+                <p className="text-base text-silver-haze">
+                  <span className="text-frost">On conflicts of interest:</span> AIscentra takes no
+                  advertising, no paid placement, and no sponsorship from any company covered in a
+                  Signal. Nothing here is written or scored to favor a partner, because there are no
+                  partners.
                 </p>
               </div>
             </div>
