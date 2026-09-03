@@ -1,98 +1,56 @@
 import type { Metadata } from 'next'
 import { TRAJECTORIES } from '@/lib/trajectories'
-import { buildFaviconUrl } from '@/lib/utils/source-links'
-import { TrajectoryLogo } from './trajectory-logo'
+import { TrajectoryTable } from './trajectory-table'
 
 export const metadata: Metadata = {
   title: 'Trajectories',
   description:
-    'Company paths across the AI ecosystem — founded, acquired, restructured, wound down.',
+    'A canonical registry of AI ecosystem companies — founded, founders, country, sphere, and current status, each independently verified.',
 }
 
 /**
- * AIscentra — /trajectories page (independent-review correction)
+ * AIscentra — /trajectories page (registry table, explicit owner
+ * instruction, 2026-09-02).
  *
- * The "02 — Trajectories" ("Company paths") section previously lived
- * on the homepage as an anchor (#trajectories) -- moved here to its
- * own dedicated page per explicit owner instruction. The homepage's
- * own section numbering was renumbered accordingly (03 Forecasts -> 02,
- * 04 Observations -> 03) -- "The Convergence" (the unlabeled memory
- * section between Observations and Assistant) was NEVER part of the
- * numbered sequence to begin with and is untouched, matching its own
- * existing, protected byte-identical-preservation rule. The Assistant
- * section's own numbering (06) is deliberately left unchanged in this
- * commit -- its removal/renumbering is a separate, not-yet-authorized
- * task (moving to a sidebar panel), out of this commit's real scope.
+ * Replaces the earlier 6-card layout with a real table of all 73
+ * entities from AIscentra_TRAJECTORIES_REGISTRY_v0_2.md (owner-
+ * provided, independently source-verified document -- see that
+ * document's own "Critical corrections" and evidence sections). Not
+ * paginated across separate pages -- shown 36 rows at a time with an
+ * explicit "show all" reveal (see trajectory-table.tsx), matching the
+ * owner's own explicit preference for this registry's bounded size.
  *
- * Visual correction (explicit owner instruction): the per-card dark
- * fill (bg-surface-tonal) is REMOVED -- text now sits directly over
- * the shared, single large tech-grid block, matching the exact same
- * visual pattern already used elsewhere on the site for "one big
- * primary block hosting all real sub-items" (e.g. /signals's own
- * catalog block). Cards are separated by real border lines only, not
- * separate background fills.
- *
- * Real company logos (independent-review addition, explicit owner
- * instruction, implemented this session): each card's own real,
- * current official domain resolves to a real favicon via the SAME
- * honest, already-tested pattern used elsewhere in this project for
- * real signal-source favicons (buildFaviconUrl, source-links.ts) --
- * never a fabricated icon. If a specific favicon request ever fails
- * to load in the browser (network hiccup, a company changing its own
- * icon route), the real company initial letter renders instead via
- * onError -- still never a fabricated logo, just a plain letterform
- * fallback.
- *
- * "Full trajectory" remains an honest, disabled "Coming soon" state --
- * per the owner's own stated future plan (more companies + real
- * detail pages later), fabricating a working link to a page that does
- * not exist yet would violate this project's own standing "no
- * fabricated destinations" rule.
+ * Same visual language already established elsewhere on this site
+ * (textured-bg + tech-grid, one large block hosting all real content)
+ * -- not a new pattern invented for this page.
  */
 export default function TrajectoriesPage(): React.JSX.Element {
   return (
-    <>
-      <section className="textured-bg px-6 pb-24 pt-40">
-        <div className="tech-grid" />
-        <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-mint-signal">TRAJECTORIES</span>
-          <h1 className="font-display mb-12 text-[12vw] text-frost md:text-[100px]">
-            Company paths.
-          </h1>
+    <section className="textured-bg px-6 pb-24 pt-40">
+      <div className="tech-grid" />
+      <div className="relative z-10 mx-auto max-w-[1200px]">
+        <span className="font-caption mb-8 block text-mint-signal">TRAJECTORIES</span>
+        <h1 className="font-display mb-8 text-[12vw] text-frost md:text-[100px]">
+          Company registry.
+        </h1>
+        <p className="mb-4 max-w-2xl text-lg leading-relaxed text-silver-haze">
+          A canonical list of companies across the AI ecosystem — frontier labs, generative media,
+          coding agents, infrastructure, biotech, robotics, and defence.
+        </p>
+        <p className="mb-4 max-w-2xl text-lg leading-relaxed text-silver-haze">
+          This is not a ranking: companies are ordered by the year they were founded, most recently
+          founded at the top. Every founding date, founder list, and current status is independently
+          checked against a primary source before publication. Where a source describes a founding
+          team rather than a single founder, we preserve that distinction rather than simplifying
+          it.
+        </p>
+        <p className="mb-16 max-w-2xl text-lg leading-relaxed text-silver-haze">
+          Status reflects the company&rsquo;s current state; historical changes remain part of its
+          trajectory.
+        </p>
 
-          <div className="grid gap-px border border-border-subtle sm:grid-cols-2 lg:grid-cols-3">
-            {TRAJECTORIES.map((trajectory) => {
-              const faviconUrl = buildFaviconUrl(trajectory.domain)
-              return (
-                <article
-                  key={trajectory.name}
-                  className="flex min-h-72 flex-col border border-border-subtle bg-surface-tonal p-7"
-                  data-content-slot="trajectory"
-                >
-                  <div className="mb-8 flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      {faviconUrl ? <TrajectoryLogo src={faviconUrl} /> : null}
-                      <h3 className="font-heading text-3xl text-frost">{trajectory.name}</h3>
-                    </div>
-                    <span className="trajectory-mark">{trajectory.year}</span>
-                  </div>
-                  <span className="font-caption mb-4 text-mint-signal">{trajectory.status}</span>
-                  <p className="mb-8 text-sm leading-relaxed text-silver-haze">
-                    {trajectory.description}
-                  </p>
-                  <span
-                    className="arrow-link mt-auto cursor-not-allowed opacity-40"
-                    title="Coming soon"
-                    aria-disabled="true"
-                  >
-                    Full trajectory <span>↗</span>
-                  </span>
-                </article>
-              )
-            })}
-          </div>
-        </div>
-      </section>
-    </>
+        <TrajectoryTable entities={TRAJECTORIES} />
+      </div>
+    </section>
   )
 }

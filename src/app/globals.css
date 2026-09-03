@@ -475,7 +475,16 @@
   inset: 0;
   z-index: 60;
   border: 0;
-  background: rgba(0, 0, 0, 0.6);
+  /* Real fix (owner-reported, explicit decision after comparing to
+     typical SaaS "shrink main content" patterns and rejecting that
+     approach for this site): the panel is deliberately NOT modal.
+     No dark backdrop, and pointer-events: none here so the rest of
+     the page (a signal, the header menu, any text selection) stays
+     fully usable while the panel is open. Only the real panel element
+     itself (.assistant-panel, see below) re-enables pointer-events,
+     so it alone remains interactive. */
+  background: transparent;
+  pointer-events: none;
   opacity: 0;
   visibility: hidden;
   transition:
@@ -489,21 +498,38 @@
 .assistant-panel {
   position: fixed;
   top: 0;
-  right: 0;
+  /* REAL BUG FIXED (found via targeted research after extensive live
+     testing kept showing wheel events never arriving at the panel's
+     own scrollable child at all -- confirmed via a direct native
+     'wheel' listener check). Root cause: a documented Chromium engine
+     bug (issues.chromium.org/issues/348520453) -- an element with
+     BOTH position:fixed AND its own `transform` applied, that also
+     has children, can block wheel/trackpad scroll events from ever
+     reaching those descendants, specifically on Chrome/macOS. This
+     panel had exactly that combination (position:fixed + transform:
+     translateX() on the very same element, with a real scrollable
+     child). Multiple independent real-world sources confirm the same
+     standard fix: animate the slide-in/out via `right` instead of
+     `transform`, so the fixed+scrollable element itself never carries
+     a `transform` at all. `right` is not as GPU-cheap as `transform`
+     but is more than adequate for a single slide-out panel, and
+     sidesteps this entire bug category. */
+  right: -100%;
   bottom: 0;
   height: 100dvh;
   z-index: 61;
+  pointer-events: auto;
   width: min(100vw, 28rem);
+  overflow: hidden;
   background: var(--color-deep-obsidian);
   border-left: 1px solid var(--color-border-subtle);
-  transform: translateX(100%);
   visibility: hidden;
   transition:
-    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    right 0.35s cubic-bezier(0.16, 1, 0.3, 1),
     visibility 0.35s ease;
 }
 .assistant-panel.open {
-  transform: translateX(0);
+  right: 0;
   visibility: visible;
 }
 

@@ -54,11 +54,28 @@ export function getActiveLenisInstance(): Lenis | null {
 
 export function VfinalLenisProvider(): null {
   useEffect(() => {
+    // REAL BUG FIXED (owner-reported: scrolling inside the Assistant
+    // panel's own message area did nothing via real mouse wheel input,
+    // confirmed via a real Playwright mouse.wheel() test -- even
+    // though the element's own CSS overflow/scrollHeight were
+    // genuinely correct and programmatic scrollTop assignment worked
+    // fine). Root cause: Lenis intercepts wheel events GLOBALLY
+    // (smoothWheel: true) and drives its own smooth-scroll of the
+    // page -- with no `prevent` configured, every wheel event
+    // anywhere on the page, including inside the fixed-position
+    // Assistant panel's own internal scrollable area, was being
+    // captured by Lenis for the page's own scroll instead of being
+    // left for the browser's native overflow-y:auto handling on that
+    // inner element. `prevent` is Lenis's own real, documented option
+    // (node_modules/lenis/dist/lenis.d.ts) for exactly this situation
+    // -- elements matching it are excluded from Lenis's own handling,
+    // falling back to native scroll.
     const lenis = new Lenis({
       duration: 1.2,
       easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
       smoothWheel: true,
       respectReducedMotion: false,
+      prevent: (node: HTMLElement) => node.closest('.assistant-panel') !== null,
     })
     activeLenisInstance = lenis
 
