@@ -108,11 +108,28 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </p>
             </div>
             <div className="flex items-end justify-start md:justify-end">
-              <a href="#signals" className="arrow-link magnetic">
+              <Link href="/signals" className="arrow-link magnetic">
                 View signals <span>↓</span>
-              </a>
+              </Link>
             </div>
           </div>
+
+          {/* REAL ADDITION (explicit owner instruction, 2026-09-03):
+              standard blockquote typography -- left vertical rule
+              spanning the quote's full height, italic body text, real
+              curly typographic quotation marks (not straight "..."),
+              attribution after the closing mark. */}
+          <blockquote className="mt-16 border-l-2 border-mint-signal pl-6 md:max-w-[60ch]">
+            <p className="text-lg italic leading-relaxed text-silver-haze md:text-xl">
+              &ldquo;We don&rsquo;t predict the future. We measure the present.
+              <br />
+              No forecast can promise what reality will do next — only how honestly it was made, and
+              how often it holds up.
+              <br />
+              The decision, and its consequences, remain yours.&rdquo;
+            </p>
+            <footer className="mt-3 text-sm not-italic text-mint-signal">AIscentra · I.O</footer>
+          </blockquote>
         </div>
       </section>
 
