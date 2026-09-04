@@ -102,7 +102,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
             Observatory.
           </h1>
           <div className="mt-12">
-            <p className="max-w-[60ch] text-xl font-normal leading-snug text-silver-haze md:text-2xl">
+            <p className="max-w-[68ch] text-xl font-normal leading-snug text-silver-haze md:text-2xl">
               AIscentra is continuous monitoring of the global AI ecosystem. We separate significant
               changes from noise and preserve the provenance of every statement.
             </p>
@@ -119,12 +119,16 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           constrained to a narrow column). Uses a typewriter-effect
           version (real HTML mockup provided and adapted -- see
           VfinalQuoteTypewriter's own comments for exactly what
-          changed from the mockup and for 5 further, specific owner-
-          reported fixes applied after the first live preview review).
-          Left vertical rule removed per direct owner instruction. */}
-      <section id="quote" data-section="quote" className="textured-bg px-6 py-16">
-        <div className="tech-grid" />
-        <div className="relative z-10 mx-auto max-w-[1200px]">
+          changed from the mockup and for further, specific owner-
+          reported fixes applied after live preview reviews).
+          Left vertical rule removed per direct owner instruction.
+          textured-bg + tech-grid removed per direct owner
+          instruction -- plain dark background (the page's own real
+          base background color, no explicit fill/texture) sitting
+          directly between the hero and Signals blocks, not the
+          site's usual sub-block decorative treatment. */}
+      <section id="quote" data-section="quote" className="px-6 py-16">
+        <div className="relative mx-auto max-w-[1200px]">
           <blockquote>
             <VfinalQuoteTypewriter />
           </blockquote>
