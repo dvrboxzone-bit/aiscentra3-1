@@ -94,56 +94,46 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="hero" data-section="hero" className="textured-bg relative px-6 pb-24 pt-40">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <div className="grid gap-12 md:grid-cols-[1fr_340px]">
-            <div>
-              <h1 className="font-display text-[15vw] text-frost md:text-[120px]">
-                Intelligence
-                <br />
-                Observatory.
-              </h1>
-              <div className="mt-12">
-                <p className="max-w-[60ch] text-xl font-normal leading-snug text-silver-haze md:text-2xl">
-                  AIscentra is continuous monitoring of the global AI ecosystem. We separate
-                  significant changes from noise and preserve the provenance of every statement.
-                </p>
-              </div>
-
-              {/* REAL ADDITION (explicit owner instruction, 2026-09-03):
-                  standard blockquote typography -- left vertical rule
-                  spanning the quote's full height, italic body text, real
-                  curly typographic quotation marks (not straight "..."),
-                  attribution after the closing mark. */}
-              <blockquote className="mt-16 border-l-2 border-mint-signal pl-6 md:max-w-[60ch]">
-                <p className="text-lg italic leading-relaxed text-silver-haze md:text-xl">
-                  &ldquo;We don&rsquo;t predict the future. We measure the present.
-                  <br />
-                  No forecast can promise what reality will do next — only how honestly it was made,
-                  and how often it holds up.
-                  <br />
-                  The decision, and its consequences, remain yours.&rdquo;
-                </p>
-                <footer className="mt-3 text-sm not-italic text-mint-signal">
-                  AIscentra · I.O
-                </footer>
-              </blockquote>
-            </div>
-
-            {/* REAL RESTRUCTURE (explicit owner instruction,
-                2026-09-03): the density-scan visual (status count +
-                animated canvas) previously sat above the heading at a
-                fixed, short 70px height. Moved into this dedicated
-                right-hand column (the space the removed "View
-                signals" link used to occupy) and stretched to fill
-                the full column height -- top of heading to bottom of
-                quote -- via CSS flex (see .hero-density-scan-wrap/
-                -container in globals.css). Hidden below the md
-                breakpoint: at that width the column stacks below the
-                text, where a full-height stretch would be enormous
-                and not what was asked. */}
-            <div className="hidden h-full md:block">
-              <VfinalHeroDensityScan />
-            </div>
+          <VfinalHeroDensityScan />
+          <h1 className="font-display text-[15vw] text-frost md:text-[120px]">
+            Intelligence
+            <br />
+            Observatory.
+          </h1>
+          <div className="mt-12">
+            <p className="max-w-[60ch] text-xl font-normal leading-snug text-silver-haze md:text-2xl">
+              AIscentra is continuous monitoring of the global AI ecosystem. We separate significant
+              changes from noise and preserve the provenance of every statement.
+            </p>
           </div>
+        </div>
+      </section>
+
+      <div className="section-gap" />
+
+      {/* ── Quote — real, standalone block (explicit owner
+          instruction, 2026-09-03: moved out of the hero into its own
+          block, positioned between the hero and Signals; stretched
+          across the block per standard blockquote typography, not
+          constrained to a narrow column). Standard blockquote
+          typography preserved: left vertical rule spanning the
+          quote's full height, italic body text, real curly
+          typographic quotation marks (not straight "..."),
+          attribution after the closing mark. */}
+      <section id="quote" data-section="quote" className="textured-bg px-6 py-16">
+        <div className="tech-grid" />
+        <div className="relative z-10 mx-auto max-w-[1200px]">
+          <blockquote className="border-l-2 border-mint-signal pl-6 md:pl-10">
+            <p className="text-2xl italic leading-relaxed text-silver-haze md:text-3xl">
+              &ldquo;We don&rsquo;t predict the future. We measure the present.
+              <br />
+              No forecast can promise what reality will do next — only how honestly it was made, and
+              how often it holds up.
+              <br />
+              The decision, and its consequences, remain yours.&rdquo;
+            </p>
+            <footer className="mt-4 text-sm not-italic text-mint-signal">AIscentra · I.O</footer>
+          </blockquote>
         </div>
       </section>
 

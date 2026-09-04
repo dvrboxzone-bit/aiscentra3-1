@@ -375,10 +375,9 @@
 }
 
 .hero-density-scan-wrap {
-  display: flex;
-  height: 100%;
   width: 100%;
-  flex-direction: column;
+  max-width: 520px;
+  margin-bottom: 3rem;
 }
 .hero-density-scan-label {
   display: flex;
@@ -389,8 +388,7 @@
 .hero-density-scan-container {
   position: relative;
   width: 100%;
-  flex: 1 1 auto;
-  min-height: 200px;
+  height: 70px;
 }
 #hero-density-scan {
   display: block;
@@ -823,9 +821,10 @@
   .hamburger-btn {
     display: flex;
   }
+  .hero-density-scan-wrap {
+    max-width: 320px;
+  }
   .hero-density-scan-container {
     height: 50px;
-    flex: none;
-    min-height: 0;
   }
 }

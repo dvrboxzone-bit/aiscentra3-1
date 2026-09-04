@@ -40,15 +40,18 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     const jsx = await HomePage()
     const { container } = render(jsx)
 
-    // 1. Exact section order (6 sections, approved sequence after
+    // 1. Exact section order (7 sections, approved sequence after
     // Trajectories moved to /trajectories AND Assistant moved to the
     // real sliding side panel -- both independent-review corrections,
-    // explicit owner instruction).
+    // explicit owner instruction). REAL ADDITION, 2026-09-03: a real
+    // "quote" section added between hero and signals (moved out of
+    // the hero itself into its own standalone block, explicit owner
+    // instruction) -- now 7 real sections, not 6.
     const sectionIds = Array.from(container.querySelectorAll('section')).map((el) => el.id)
     assert.deepEqual(
       sectionIds,
-      ['hero', 'signals', 'forecasts', 'news', 'memory', 'signal-001'],
-      'all 6 sections must be present in the exact approved order',
+      ['hero', 'quote', 'signals', 'forecasts', 'news', 'memory', 'signal-001'],
+      'all 7 sections must be present in the exact approved order',
     )
 
     // 2. Exactly 6 Featured Signal cards with a full real result.
