@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { VfinalHeroDensityScan } from '@/components/layout/vfinal-hero-density-scan'
+import { VfinalQuoteTypewriter } from '@/components/layout/vfinal-quote-typewriter'
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
 import { VfinalSlider } from '@/components/layout/vfinal-slider'
@@ -115,24 +116,18 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           instruction, 2026-09-03: moved out of the hero into its own
           block, positioned between the hero and Signals; stretched
           across the block per standard blockquote typography, not
-          constrained to a narrow column). Standard blockquote
-          typography preserved: left vertical rule spanning the
-          quote's full height, italic body text, real curly
-          typographic quotation marks (not straight "..."),
-          attribution after the closing mark. */}
+          constrained to a narrow column). REPLACED with a
+          typewriter-effect version (explicit owner instruction,
+          2026-09-03, real HTML mockup provided and adapted -- see
+          VfinalQuoteTypewriter's own comments for exactly what
+          changed from the mockup, e.g. real site colors instead of
+          the mockup's own placeholder palette). Left vertical rule
+          wrapper preserved from the earlier static version. */}
       <section id="quote" data-section="quote" className="textured-bg px-6 py-16">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
           <blockquote className="border-l-2 border-mint-signal pl-6 md:pl-10">
-            <p className="text-2xl italic leading-relaxed text-silver-haze md:text-3xl">
-              &ldquo;We don&rsquo;t predict the future. We measure the present.
-              <br />
-              No forecast can promise what reality will do next — only how honestly it was made, and
-              how often it holds up.
-              <br />
-              The decision, and its consequences, remain yours.&rdquo;
-            </p>
-            <footer className="mt-4 text-sm not-italic text-mint-signal">AIscentra · I.O</footer>
+            <VfinalQuoteTypewriter />
           </blockquote>
         </div>
       </section>
