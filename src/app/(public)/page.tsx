@@ -108,9 +108,9 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </p>
             </div>
             <div className="flex items-end justify-start md:justify-end">
-              <Link href="/signals" className="arrow-link magnetic">
+              <span className="arrow-link">
                 View signals <span>↓</span>
-              </Link>
+              </span>
             </div>
           </div>
 
