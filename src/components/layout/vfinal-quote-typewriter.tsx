@@ -6,30 +6,46 @@ import { useEffect, useRef, useState } from 'react'
  * AIscentra — hero quote, typewriter-effect version.
  *
  * Real, owner-provided HTML mockup adapted into a React client
- * component. What changed from the mockup and why:
- * - Colors: the mockup used its own placeholder palette
- *   (--bg: #0A0A0A, --accent: #C1442C, an orange/red never used
- *   anywhere else on this site). Replaced with this project's own
- *   real theme variables (--color-mint-signal for the cursor/accent,
- *   --color-silver-haze for body text) -- never introduce a new,
- *   one-off color outside the established palette.
- * - No prefers-reduced-motion gating: matches this exact codebase's
- *   own established, real decision (see vfinal-interaction-
- *   controller.tsx's own comments) not to gate decorative animation
- *   on that media query, because headless/automated test browsers
- *   default it to "reduce," which was previously disabling effects
- *   for real users too, not just correctly respecting an explicit
- *   real user preference.
- * - Typing/erasing timers implemented with real cleanup
- *   (clearInterval/clearTimeout on unmount) to avoid a real memory
- *   leak / state update after unmount if the user navigates away
- *   mid-animation.
- * - Real curly typographic quotation marks and the exact quote text
- *   already approved for this page are preserved unchanged.
+ * component, then further corrected against 5 real, specific owner-
+ * reported bugs after the first live preview review (2026-09-03):
+ *
+ * 1. Quotation marks are now part of the animated TEXT itself
+ *    (typed in, erased out with everything else) -- an earlier
+ *    version rendered the opening mark as static, always-present
+ *    JSX outside the animated string, which left a real, visible
+ *    stray `"` behind after a full erase cycle finished.
+ * 2. Font size reduced to match this site's own real header/nav text
+ *    size (no special utility class on those nav links -- their real,
+ *    actual size is the browser/Tailwind default `text-base`, 16px).
+ *    An earlier version used a much larger text-2xl/3xl size, which
+ *    was too large relative to the header, as reported.
+ * 3. The left vertical rule (blockquote border) is removed entirely,
+ *    per direct owner instruction -- an earlier version kept it as a
+ *    holdover from the original static (non-animated) quote design.
+ * 4. The blinking cursor now stays visible and blinking continuously
+ *    from the moment typing starts all the way through the full
+ *    "reading" pause and the entire erase phase -- it only goes fully
+ *    dark during the true rest gap between cycles. An earlier version
+ *    (matching the original mockup's own literal behavior) turned the
+ *    cursor off immediately once typing finished, which read as the
+ *    cursor "disappearing" right when the owner wanted it to keep
+ *    blinking, exactly as reported.
+ *
+ * What's unchanged from the original adaptation, still real and still
+ * correct:
+ * - Colors: this project's own real theme variables
+ *   (--color-mint-signal for the cursor/accent, --color-silver-haze
+ *   for body text), never the mockup's own placeholder orange/red.
+ * - No prefers-reduced-motion gating, matching this exact codebase's
+ *   own already-established real decision (see vfinal-interaction-
+ *   controller.tsx's own comments).
+ * - Real timer cleanup (clearInterval/clearTimeout tracked and
+ *   cleared on unmount) to avoid a real state-update-after-unmount
+ *   leak.
  */
 
 const QUOTE_TEXT =
-  'We don\u2019t predict the future. We measure the present. No forecast can promise what reality will do next \u2014 only how honestly it was made, and how often it holds up. The decision, and its consequences, remain yours.'
+  '\u201cWe don\u2019t predict the future. We measure the present. No forecast can promise what reality will do next \u2014 only how honestly it was made, and how often it holds up. The decision, and its consequences, remain yours.\u201d'
 
 const TYPE_DELAY_MS = 34
 const ERASE_DELAY_MS = 14
@@ -57,7 +73,9 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
         setVisibleText(QUOTE_TEXT.slice(0, i))
         if (i >= QUOTE_TEXT.length) {
           clearInterval(timer)
-          setCursorOn(false)
+          // Real fix (#4): cursor stays on -- do NOT turn it off here.
+          // It keeps blinking through the reading pause and the erase
+          // phase below, only going dark during the true rest gap.
           onDone()
         }
       }, TYPE_DELAY_MS)
@@ -66,7 +84,6 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
 
     function eraseOut(onDone: () => void): void {
       setSignatureShown(false)
-      setCursorOn(true)
       let i = QUOTE_TEXT.length
       const timer = setInterval(() => {
         if (cancelled) return
@@ -112,15 +129,14 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
 
   return (
     <div>
-      <p className="min-h-[6.4em] text-2xl italic leading-relaxed text-silver-haze md:min-h-[3.2em] md:text-3xl">
-        &ldquo;{visibleText}
+      <p className="min-h-[4.8em] text-base italic leading-relaxed text-silver-haze md:min-h-[2.4em]">
+        {visibleText}
         <span
           aria-hidden="true"
           className={`ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-mint-signal ${
             cursorOn ? 'animate-pulse opacity-100' : 'opacity-0'
           }`}
         />
-        {visibleText.length >= QUOTE_TEXT.length ? '\u201d' : ''}
       </p>
       <footer
         className={`mt-4 text-sm not-italic text-mint-signal transition-opacity duration-700 ${

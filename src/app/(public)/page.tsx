@@ -116,17 +116,16 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           instruction, 2026-09-03: moved out of the hero into its own
           block, positioned between the hero and Signals; stretched
           across the block per standard blockquote typography, not
-          constrained to a narrow column). REPLACED with a
-          typewriter-effect version (explicit owner instruction,
-          2026-09-03, real HTML mockup provided and adapted -- see
+          constrained to a narrow column). Uses a typewriter-effect
+          version (real HTML mockup provided and adapted -- see
           VfinalQuoteTypewriter's own comments for exactly what
-          changed from the mockup, e.g. real site colors instead of
-          the mockup's own placeholder palette). Left vertical rule
-          wrapper preserved from the earlier static version. */}
+          changed from the mockup and for 5 further, specific owner-
+          reported fixes applied after the first live preview review).
+          Left vertical rule removed per direct owner instruction. */}
       <section id="quote" data-section="quote" className="textured-bg px-6 py-16">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <blockquote className="border-l-2 border-mint-signal pl-6 md:pl-10">
+          <blockquote>
             <VfinalQuoteTypewriter />
           </blockquote>
         </div>

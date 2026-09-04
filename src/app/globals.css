@@ -379,6 +379,10 @@
   max-width: 520px;
   margin-bottom: 3rem;
 }
+.hero-density-scan-status {
+  margin-bottom: 6px;
+  opacity: 0.7;
+}
 .hero-density-scan-label {
   display: flex;
   align-items: baseline;
