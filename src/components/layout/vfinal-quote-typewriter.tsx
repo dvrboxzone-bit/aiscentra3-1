@@ -54,7 +54,6 @@ const CYCLE_REST_MS = 6000
 
 export function VfinalQuoteTypewriter(): React.JSX.Element {
   const [visibleText, setVisibleText] = useState('')
-  const [cursorOn, setCursorOn] = useState(false)
   const [signatureShown, setSignatureShown] = useState(false)
   const timersRef = useRef<Array<ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>>>(
     [],
@@ -65,7 +64,6 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
     const timers = timersRef.current
 
     function typeOut(onDone: () => void): void {
-      setCursorOn(true)
       let i = 0
       const timer = setInterval(() => {
         if (cancelled) return
@@ -73,9 +71,6 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
         setVisibleText(QUOTE_TEXT.slice(0, i))
         if (i >= QUOTE_TEXT.length) {
           clearInterval(timer)
-          // Real fix (#4): cursor stays on -- do NOT turn it off here.
-          // It keeps blinking through the reading pause and the erase
-          // phase below, only going dark during the true rest gap.
           onDone()
         }
       }, TYPE_DELAY_MS)
@@ -91,7 +86,6 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
         setVisibleText(QUOTE_TEXT.slice(0, Math.max(0, i)))
         if (i <= 0) {
           clearInterval(timer)
-          setCursorOn(false)
           onDone()
         }
       }, ERASE_DELAY_MS)
@@ -128,14 +122,15 @@ export function VfinalQuoteTypewriter(): React.JSX.Element {
   }, [])
 
   return (
-    <div>
-      <p className="min-h-[4.8em] text-base italic leading-relaxed text-silver-haze md:min-h-[2.4em]">
+    <div translate="no" className="notranslate">
+      <p
+        translate="no"
+        className="notranslate min-h-[9.6em] text-base italic leading-relaxed text-silver-haze md:min-h-[4.8em]"
+      >
         {visibleText}
         <span
           aria-hidden="true"
-          className={`ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-mint-signal ${
-            cursorOn ? 'animate-pulse opacity-100' : 'opacity-0'
-          }`}
+          className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] animate-pulse bg-mint-signal opacity-100"
         />
       </p>
       <footer
