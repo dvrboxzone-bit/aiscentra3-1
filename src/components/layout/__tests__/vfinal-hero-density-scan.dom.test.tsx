@@ -58,16 +58,25 @@ afterEach(() => {
 })
 
 describe('VfinalHeroDensityScan', () => {
-  test('renders the approved status, SIG count and canvas without placeholder symbols', () => {
+  test('renders the SIG count and canvas without placeholder symbols', () => {
     const { container } = render(<VfinalHeroDensityScan />)
-    assert.match(container.textContent ?? '', /SYSTEM: SCANNING/)
+    // REAL SITE STRUCTURE CHANGE (explicit owner instruction,
+    // 2026-09-03): "SYSTEM: SCANNING" removed entirely -- it was tied
+    // to the removed "View signals" link area and the owner's own
+    // instruction was that it should not exist once that link was
+    // gone, not be replaced with something else.
+    assert.doesNotMatch(container.textContent ?? '', /SYSTEM: SCANNING/)
     assert.match(container.textContent ?? '', /SIG/)
     assert.match(container.textContent ?? '', /574,780/)
     assert.doesNotMatch(container.textContent ?? '', /SIGNALS INDEXED|—/)
     const canvas = container.querySelector<HTMLCanvasElement>('canvas#hero-density-scan')
     assert.ok(canvas)
-    assert.equal(canvas.style.height, '', 'CSS remains the source of the approved 70/50px height')
-    assert.equal(canvas.height, 70, 'bitmap height follows the canvas, not the 308px wrapper')
+    assert.equal(canvas.style.height, '', 'CSS remains the source of the real container height')
+    assert.equal(
+      canvas.height,
+      70,
+      'bitmap height follows the real container height reported by getBoundingClientRect (mocked here to 70px -- the real component now stretches to fill its column, not fixed to 70px in production CSS)',
+    )
   })
 
   test('keeps the required breathing animation running under reduced motion', () => {

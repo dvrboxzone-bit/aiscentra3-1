@@ -93,9 +93,6 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
 
   return (
     <div className="hero-density-scan-wrap" data-component="hero-density-scan">
-      <div className="hero-density-scan-status">
-        <span className="font-caption text-silver-haze">SYSTEM: SCANNING</span>
-      </div>
       <div className="hero-density-scan-label">
         <span className="font-caption text-silver-haze">SIG</span>
         <span className="font-caption text-mint-signal">574,780</span>
