@@ -41,6 +41,7 @@ export function makeSignal(overrides: Partial<Signal>): Signal {
     quality_rule_version: 'quality-foundation-v1',
     quality_evaluated_at: new Date().toISOString(),
     quarantined_at: null,
+    evidence_tier: 'PRIMARY_CONFIRMED',
     validation_flags: [],
     manual_override: false,
     expiration_reason: null,
