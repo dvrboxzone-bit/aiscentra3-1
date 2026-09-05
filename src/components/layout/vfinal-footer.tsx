@@ -73,6 +73,18 @@ export function VfinalFooter(): React.JSX.Element {
                   Forecasts
                 </Link>
               </li>
+              {/* REAL ADDITION (explicit owner instruction, 2026-09-05):
+                  duplicate of the same real link the homepage's compact
+                  History teaser now points to -- not added to the
+                  header nav, per the same explicit instruction. */}
+              <li>
+                <Link
+                  href="/editorial/the-convergence"
+                  className="text-frost hover:text-mint-signal"
+                >
+                  The Convergence
+                </Link>
+              </li>
               <li>
                 <Link href="/observatory" className="text-frost hover:text-mint-signal">
                   Observations

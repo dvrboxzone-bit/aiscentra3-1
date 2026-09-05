@@ -4,7 +4,7 @@ import { VfinalHeroDensityScan } from '@/components/layout/vfinal-hero-density-s
 import { VfinalQuoteTypewriter } from '@/components/layout/vfinal-quote-typewriter'
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
-import { VfinalSlider } from '@/components/layout/vfinal-slider'
+import { VfinalSlider8 } from '@/components/layout/vfinal-slider8'
 import {
   assetAt,
   FORECAST_ASSETS,
@@ -288,53 +288,45 @@ export default async function HomePage(): Promise<React.JSX.Element> {
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             The Convergence.
           </h2>
-          <p className="reveal mb-12 max-w-2xl text-xl text-silver-haze">
-            1943 → 1956. The beginning of AI was not an invention. It was a convergence of
-            independent ideas, researchers, and approaches, gradually moving toward the same
-            question: Could intelligence itself become a computational object?
+          {/* REAL CONTENT UPDATE (explicit owner instruction,
+              2026-09-05): this intro paragraph now matches the real,
+              sourced article this block links to (previously written
+              independently, by a different author, not drawn from any
+              specific researched source). The full article moved to
+              its own dedicated page (/editorial/the-convergence) --
+              this block keeps only the title and this one paragraph,
+              plus a single real link to the full piece, duplicated in
+              the footer per direct instruction (not added to the
+              header nav). */}
+          <p className="reveal mb-8 max-w-2xl text-xl text-silver-haze">
+            1943 → 1956. The emergence of artificial intelligence was not the result of a single
+            invention. It was a convergence of independent theoretical developments, research
+            communities, and methodological approaches that gradually aligned around one question:
+            could intelligence itself be treated as a computational object?
           </p>
+          <Link href="/editorial/the-convergence" className="reveal arrow-link magnetic mb-12">
+            Read the full story <span>→</span>
+          </Link>
           <div className="grid gap-6">
-            <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalSlider
-                assets={[assetAt(HISTORY_ASSETS, 0), assetAt(HISTORY_ASSETS, 1)]}
-                className="aspect-video border-0 md:aspect-auto md:w-2/5"
-              />
-              <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
-                <div className="mb-4 flex items-center gap-4">
-                  <span className="font-caption text-silver-haze">FACT</span>
-                  <span className="font-caption text-mint-signal">VERIFIED</span>
-                </div>
-                <h3 className="font-heading mb-4 text-3xl text-frost md:text-4xl">
-                  Can machines think?
-                </h3>
-                <p className="mb-6 max-w-[60ch] text-silver-haze">
-                  In 1950, British mathematician Alan Turing published &quot;Computing Machinery and
-                  Intelligence&quot;. He introduced the imitation game — a thought experiment later
-                  known as the Turing Test. He moved the discussion from abstract philosophy toward
-                  questions that could be investigated through computation and behavior.
-                </p>
-              </div>
-            </div>
-            <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalSlider
-                assets={[assetAt(HISTORY_ASSETS, 2), assetAt(HISTORY_ASSETS, 3)]}
-                className="aspect-video border-0 md:aspect-auto md:w-2/5"
-              />
-              <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
-                <div className="mb-4 flex items-center gap-4">
-                  <span className="font-caption text-silver-haze">EVENT</span>
-                  <span className="font-caption text-mint-signal">CONVERGENCE</span>
-                </div>
-                <h3 className="font-heading mb-4 text-3xl text-frost md:text-4xl">
-                  Dartmouth, Summer 1956
-                </h3>
-                <p className="mb-6 max-w-[60ch] text-silver-haze">
-                  In the summer of 1956, researchers gathered at Dartmouth College. Dartmouth did
-                  not create every idea that would become AI. What it did was arguably more
-                  important: It brought several emerging research directions together under a common
-                  intellectual framework.
-                </p>
-              </div>
+            {/* REAL RESTRUCTURE (explicit owner instruction,
+                2026-09-05): the two detail cards (with their own
+                2-image sliders) that used to sit here moved to the
+                new dedicated article page, where all 8 real images
+                are placed statically at their correct place in the
+                text -- no cycling animation on the article page
+                itself, per direct instruction. This single remaining
+                window now cycles through all 8 real images instead
+                of the previous two 2-image sliders.
+                REAL SIZE FIX (explicit owner instruction,
+                2026-09-05): reverted to the original card photo's
+                real footprint (plain aspect-video, no wide 21:9
+                stretch) and constrained to a real, modest max-width
+                instead of the full 1200px section -- the block was
+                meant to become more compact overall, not larger, and
+                an earlier version had enlarged the photo well beyond
+                what the two original 2-image sliders ever occupied. */}
+            <div className="reveal group aspect-video max-w-2xl border border-border-subtle bg-surface-tonal">
+              <VfinalSlider8 assets={HISTORY_ASSETS} className="h-full w-full" />
             </div>
           </div>
         </div>

@@ -117,26 +117,35 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     assert.equal(container.querySelectorAll('[data-section="telemetry"]').length, 0)
     assert.equal(container.querySelectorAll('.hero-globe-container').length, 0)
 
-    // 5. Exactly two History slider-container blocks, each with exactly
-    //    two slider-slide subblocks.
-    const sliders = container.querySelectorAll('.slider-container')
+    // 5. REAL RESTRUCTURE (explicit owner instruction, 2026-09-05):
+    // the History section's two detail cards (each with its own
+    // 2-image .slider-container) moved to their own dedicated article
+    // page (/editorial/the-convergence). This single remaining
+    // compact block now cycles through all 8 real history images in
+    // one window, using the new, separate .slider8-container/
+    // .slider8-slide CSS (globals.css) -- not a generalization of the
+    // old 2-image .slider-container, which is untouched and still
+    // used correctly elsewhere.
+    const sliders8 = container.querySelectorAll('.slider8-container')
+    assert.equal(sliders8.length, 1, 'the History section must have exactly 1 slider8-container')
     assert.equal(
-      sliders.length,
-      2,
-      'the History section must have exactly 2 slider-container blocks',
+      sliders8[0]?.querySelectorAll('.slider8-slide').length,
+      8,
+      'the single slider8-container must have exactly 8 slider8-slide subblocks (all real history images)',
     )
-    sliders.forEach((slider, i) => {
-      assert.equal(
-        slider.querySelectorAll('.slider-slide').length,
-        2,
-        `slider ${i} must have exactly 2 slider-slide subblocks`,
-      )
-    })
+    assert.equal(
+      container.querySelectorAll('.slider-container').length,
+      0,
+      'the old 2-image .slider-container must no longer appear on the homepage itself',
+    )
 
-    // 6. Exactly 14 total image slots (6 Featured + 2 Forecasts + 2
-    //    Observations + 4 History slider slides).
-    assert.equal(container.querySelectorAll('[data-image-slot="local-asset"]').length, 14)
-    assert.equal(container.querySelectorAll('img[src^="/images/"][src$=".webp"]').length, 14)
+    // 6. Exactly 18 total image slots (6 Featured + 2 Forecasts + 2
+    //    Observations + 8 History slider8 slides -- REAL CHANGE,
+    //    explicit owner instruction 2026-09-05: the compact History
+    //    block now cycles all 8 real images in one window instead of
+    //    the previous 2x2-image split).
+    assert.equal(container.querySelectorAll('[data-image-slot="local-asset"]').length, 18)
+    assert.equal(container.querySelectorAll('img[src^="/images/"][src$=".webp"]').length, 18)
     assert.equal(
       container.querySelectorAll('[data-asset-purpose="forecast"].group > img.img-mono').length,
       2,

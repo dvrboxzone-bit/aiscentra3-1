@@ -90,6 +90,10 @@ export const HISTORY_ASSETS = series('history', 8, 'history', (n) => {
     'Researchers standing beside an early computing apparatus',
     'Early computing researchers reviewing a printed document',
     'Participants of the 1956 Dartmouth workshop gathered outside',
+    'A second group of Dartmouth workshop participants seated outdoors',
+    'Portrait of Alan Turing',
+    'Alan Turing in his early passport-style photograph',
+    'The opening page of Alan Turing\u2019s 1950 paper in the journal Mind',
   ] as const
   return descriptions[n - 1] ?? `Early artificial intelligence history image ${n}`
 })
