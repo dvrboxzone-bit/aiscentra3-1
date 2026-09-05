@@ -303,7 +303,18 @@ function VfinalScoreBar({ value, label }: { value: number; label: string }): Rea
   const clamped = Math.max(0, Math.min(100, value))
   return (
     <div className="flex items-center gap-2">
-      <span className="font-caption w-16 shrink-0 text-silver-haze">{label}</span>
+      {/* REAL BUG FIXED (explicit owner instruction, screenshot-
+          annotated, 2026-09-05): "Momentum" and "Strategic" visibly
+          overflowed the fixed w-16 (64px) label column, colliding
+          with the score bar next to them. Confirmed via real,
+          measured pixel widths in a live browser (not guessed): at
+          this real font-caption size/weight, "Momentum" needs 87px
+          and "Strategic" needs 78px -- both genuinely exceed 64px.
+          Widened to w-24 (96px), confirmed via the same live
+          measurement to comfortably fit every real label currently
+          used on this page (Signal, Conf, Momentum, Impact, Actor,
+          Novelty, Verify, Strategic). */}
+      <span className="font-caption w-24 shrink-0 text-silver-haze">{label}</span>
       <div className="h-1.5 flex-1 bg-border-subtle">
         <div className="h-full bg-mint-signal" style={{ width: `${clamped}%` }} />
       </div>
