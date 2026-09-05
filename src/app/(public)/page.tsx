@@ -110,49 +110,29 @@ export default async function HomePage(): Promise<React.JSX.Element> {
         </div>
       </section>
 
-      {/* REAL FIX (explicit owner instruction, 2026-09-03, screenshot-
-          annotated): the two `.section-gap` divs that used to sit
-          immediately before/after this section added a visible
-          horizontal border line on each side (that class's own real
-          CSS: border-top + border-bottom) plus 5rem of extra height
-          each -- together making this whole block noticeably taller
-          than intended, with lines the owner explicitly did not want
-          here. Removed both -- `.section-gap` itself is untouched
-          (still used correctly elsewhere on this page for real
-          textured-section transitions); this quote block simply no
-          longer uses it. Own vertical padding reduced from py-16 to
-          py-8 to further compact the block, per the same instruction. */}
-      {/* ── Quote — real, standalone block (explicit owner
-          instruction, 2026-09-03: moved out of the hero into its own
-          block, positioned between the hero and Signals; stretched
-          across the block per standard blockquote typography, not
-          constrained to a narrow column). Uses a typewriter-effect
-          version (real HTML mockup provided and adapted -- see
-          VfinalQuoteTypewriter's own comments for exactly what
-          changed from the mockup and for further, specific owner-
-          reported fixes applied after live preview reviews).
-          Left vertical rule removed per direct owner instruction.
-          textured-bg + tech-grid removed per direct owner
-          instruction -- plain dark background (the page's own real
-          base background color, no explicit fill/texture) sitting
-          directly between the hero and Signals blocks, not the
-          site's usual sub-block decorative treatment. */}
-      <section id="quote" data-section="quote" className="px-6 py-8">
-        <div className="relative mx-auto max-w-[1200px]">
-          <blockquote>
-            <VfinalQuoteTypewriter />
-          </blockquote>
-        </div>
-      </section>
+      <div className="section-gap" />
 
       {/* ── 02 — Featured Signals (6 real production signals) ───────── */}
       <section id="signals" data-section="signals" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
           <span className="font-caption mb-8 block text-silver-haze">01 — Signals</span>
-          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
+          <h2 className="font-display reveal mb-8 text-[12vw] text-frost md:text-[100px]">
             Scarce signals.
           </h2>
+
+          {/* REAL MOVE (explicit owner instruction, 2026-09-04): the
+              quote used to be its own standalone section between the
+              hero and Signals -- moved here instead, directly under
+              this heading, inside the real Signals block. See
+              VfinalQuoteTypewriter's own comments for the animation's
+              full real history (typing logic, colors, cursor,
+              translate-crash protection, etc.) -- unchanged by this
+              move, only its position on the page changed. */}
+          <blockquote className="mb-12">
+            <VfinalQuoteTypewriter />
+          </blockquote>
+
           <div
             className="grid gap-px border border-border-subtle bg-deep-obsidian md:grid-cols-3"
             data-list="signals"
