@@ -354,6 +354,23 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             {status === 'sending' ? '···' : '↗'}
           </button>
         </form>
+        {/* REAL ADDITION (explicit owner instruction, 2026-09-05):
+            standard chat-assistant disclaimer, placed directly below
+            the input, matching the same established convention every
+            other real chat interface uses (e.g. ChatGPT's own "can
+            make mistakes" line in the same position). Text grounded
+            in a real, deliberate distinction from the homepage's own
+            manifesto quote -- discussed and confirmed explicitly with
+            the owner: the manifesto is a slow, read-once statement
+            about forecasts and the future in general; this is a
+            plain, always-visible, small-print warning about this
+            specific tool's real, concrete failure mode right now
+            (misreading or misstating this project's own real Signals/
+            Evidence), not a shortened copy of the manifesto's words. */}
+        <p className="border-t border-border-subtle bg-deep-obsidian px-4 pb-3 pt-2 text-xs text-silver-haze">
+          The Assistant explains data — it doesn&rsquo;t create it. Answers can distort the
+          underlying Signals and Evidence — verify against the record, not the reply.
+        </p>
       </aside>
     </div>
   )
