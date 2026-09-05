@@ -13,6 +13,7 @@ import {
   OBSERVATION_ASSETS,
 } from '@/components/layout/vfinal-landing-assets'
 import { getFeaturedSignals, getSignals } from '@/modules/signals/queries'
+import { getObservationStats } from '@/modules/observations/queries'
 import type { Signal } from '@/types/database'
 
 export const metadata: Metadata = {
@@ -61,9 +62,10 @@ export const revalidate = 3600
  * typed local WebP map. No external or temporary image URLs are used.
  */
 export default async function HomePage(): Promise<React.JSX.Element> {
-  const [featuredSignals, widerPool] = await Promise.all([
+  const [featuredSignals, widerPool, obsStats] = await Promise.all([
     getFeaturedSignals(),
     getSignals({ limit: 12 }),
+    getObservationStats(),
   ])
 
   const featuredIds = new Set(featuredSignals.map((s) => s.id))
@@ -95,7 +97,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="hero" data-section="hero" className="textured-bg relative px-6 pb-24 pt-40">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <VfinalHeroDensityScan />
+          <VfinalHeroDensityScan observationCount={obsStats.total} />
           <h1 className="font-display text-[15vw] text-frost md:text-[120px]">
             Intelligence
             <br />

@@ -5,8 +5,32 @@ import { useEffect, useRef } from 'react'
 const LINE_COUNT = 34
 const CYCLE_SECONDS = 4.5
 
-/** Dense raw input resolving into a sparse extracted signal. */
-export function VfinalHeroDensityScan(): React.JSX.Element {
+/**
+ * Dense raw input resolving into a sparse extracted signal.
+ *
+ * REAL BUG FIXED (explicit owner instruction, 2026-09-05): the "SIG
+ * 574,780" count was a static, hardcoded number with no connection to
+ * any real data at all -- inherited from the original design mockup
+ * and never questioned. Confirmed by checking the actual source: no
+ * query, no prop, just a literal string. This directly contradicted
+ * the project's own no-fabricated-numbers principle.
+ *
+ * Real fix: this component now takes a real `observationCount` prop,
+ * fed from the same real `getObservationStats()` query already used
+ * on /observatory (confirmed live: that page's own real, database-
+ * backed "Observations" count was 16,698 at the time of this fix --
+ * not a round or suspicious number, a genuine live count). Label
+ * changed from "SIG" to "OBS" to accurately describe what the number
+ * now really is: raw, unprocessed observations gathered so far, not a
+ * signal count (the real signal count is still a small, known test
+ * dataset per explicit internal guidance not to present it as a
+ * production asset).
+ */
+export function VfinalHeroDensityScan({
+  observationCount,
+}: {
+  observationCount: number
+}): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -97,8 +121,10 @@ export function VfinalHeroDensityScan(): React.JSX.Element {
         <span className="font-caption text-silver-haze">SYSTEM: SCANNING</span>
       </div>
       <div className="hero-density-scan-label">
-        <span className="font-caption text-silver-haze">SIG</span>
-        <span className="font-caption text-mint-signal">574,780</span>
+        <span className="font-caption text-silver-haze">OBS</span>
+        <span className="font-caption text-mint-signal">
+          {observationCount.toLocaleString('en-US')}
+        </span>
       </div>
       <div className="hero-density-scan-container">
         <canvas ref={canvasRef} id="hero-density-scan" aria-hidden="true" />
