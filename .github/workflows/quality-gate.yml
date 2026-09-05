@@ -23,7 +23,7 @@ jobs:
   quality:
     name: Quality Gate (format, lint, type-check, test, build)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout (full history for merge-base computation)
