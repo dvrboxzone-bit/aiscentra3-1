@@ -304,11 +304,8 @@ export default async function HomePage(): Promise<React.JSX.Element> {
             communities, and methodological approaches that gradually aligned around one question:
             could intelligence itself be treated as a computational object?
           </p>
-          <Link
-            href="/editorial/the-convergence"
-            className="reveal font-caption mb-12 inline-block text-mint-signal hover:underline"
-          >
-            Read the full story →
+          <Link href="/editorial/the-convergence" className="reveal arrow-link magnetic mb-12">
+            Read the full story <span>→</span>
           </Link>
           <div className="grid gap-6">
             {/* REAL RESTRUCTURE (explicit owner instruction,
@@ -319,8 +316,16 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                 text -- no cycling animation on the article page
                 itself, per direct instruction. This single remaining
                 window now cycles through all 8 real images instead
-                of the previous two 2-image sliders. */}
-            <div className="reveal group aspect-video border border-border-subtle bg-surface-tonal md:aspect-[21/9]">
+                of the previous two 2-image sliders.
+                REAL SIZE FIX (explicit owner instruction,
+                2026-09-05): reverted to the original card photo's
+                real footprint (plain aspect-video, no wide 21:9
+                stretch) and constrained to a real, modest max-width
+                instead of the full 1200px section -- the block was
+                meant to become more compact overall, not larger, and
+                an earlier version had enlarged the photo well beyond
+                what the two original 2-image sliders ever occupied. */}
+            <div className="reveal group aspect-video max-w-2xl border border-border-subtle bg-surface-tonal">
               <VfinalSlider8 assets={HISTORY_ASSETS} className="h-full w-full" />
             </div>
           </div>
