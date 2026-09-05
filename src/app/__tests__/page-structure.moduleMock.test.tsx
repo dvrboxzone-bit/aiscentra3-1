@@ -18,12 +18,35 @@
  */
 import '../../lib/test-utils/dom-setup'
 
-import { test, describe, mock } from 'node:test'
+import { test, describe, mock, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render } from '@testing-library/react'
+import { render, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { sixRealSignals, twoRealObservations, forceReducedMotion } from './homepage-fixtures'
+
+/**
+ * REAL BUG FIXED (root cause of a real, repeated CI hang, found
+ * 2026-09-05): this file renders the REAL, full HomePage component --
+ * which, since the quote was moved into the Signals section, now
+ * includes the real VfinalQuoteTypewriter. That component's own
+ * useEffect deliberately runs a genuinely infinite async cycle (type
+ * -> read pause -> erase -> rest -> repeat forever), scheduling real
+ * setTimeout handles via a real recursive `cycle()` call -- correct
+ * or a live page, but fatal for a test process, since Node's test
+ * runner will not exit while the event loop still has pending timers.
+ * This file's single test rendered the component and NEVER called
+ * `cleanup()` afterward -- meaning React never unmounted it, its
+ * effect's own real cleanup (which does call `cancelledRef.current =
+ * true` and clears every tracked timer) never ran, and the process
+ * hung waiting for an event loop that could never drain on its own.
+ * Fixed with the same real `afterEach(cleanup)` convention already
+ * used correctly by every OTHER real test file with a render() call
+ * in this project.
+ */
+afterEach(() => {
+  cleanup()
+})
 
 describe('HomePage (vfinal) — structural regressions: section order/count, slider, image slots, forbidden URLs', () => {
   test('all real structural invariants hold on a single full-data render', async (t) => {
@@ -34,6 +57,30 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
       namedExports: {
         getFeaturedSignals: async () => sixRealSignals(),
         getSignals: async () => twoRealObservations(),
+      },
+    })
+    // REAL BUG FIXED (the actual root cause of the real, repeated CI
+    // hang, found 2026-09-05 -- the earlier afterEach(cleanup) fix
+    // was necessary but not sufficient): HomePage was changed today to
+    // also call getObservationStats() (a real Supabase network query,
+    // added for the real observation-count hero fix). This file never
+    // mocked it, so the real function ran against this test
+    // environment's fake placeholder Supabase credentials -- an
+    // actual network call to a non-resolving host, left as an open
+    // Socket handle that never resolves or times out on its own,
+    // which is exactly what kept this test's process alive
+    // indefinitely (confirmed directly via a diagnostic check of
+    // process._getActiveHandles(): zero timers remained after
+    // unmount, but 2 real Sockets did).
+    mock.module('@/modules/observations/queries', {
+      namedExports: {
+        getObservationStats: async () => ({
+          total: 16698,
+          processed: 16698,
+          unprocessed: 0,
+          errors: 0,
+          oldestPendingAgeSeconds: null,
+        }),
       },
     })
     const { default: HomePage } = await import('../(public)/page')

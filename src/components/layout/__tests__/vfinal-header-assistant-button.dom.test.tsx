@@ -14,12 +14,16 @@
  */
 import '../../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, cleanup } from '@testing-library/react'
 import { VfinalHeader } from '../vfinal-header'
 import { VfinalAssistantPanelProvider } from '../vfinal-assistant-context'
 import { VfinalAssistantPanel } from '../vfinal-assistant-panel'
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('VfinalHeader — Assistant button opens the real sliding panel', () => {
   test('the Assistant element is a real button (not a Link with an href) on both the desktop and mobile-menu placements', () => {

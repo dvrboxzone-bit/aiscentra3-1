@@ -58,16 +58,25 @@ afterEach(() => {
 })
 
 describe('VfinalHeroDensityScan', () => {
-  test('renders the approved status, SIG count and canvas without placeholder symbols', () => {
-    const { container } = render(<VfinalHeroDensityScan />)
+  test('renders the approved status, real observation count and canvas without placeholder symbols', () => {
+    const { container } = render(<VfinalHeroDensityScan observationCount={16698} />)
     // REAL SITE STRUCTURE CHANGE, then REVERTED (explicit owner
     // instruction, 2026-09-03): "SYSTEM: SCANNING" was briefly removed
     // in an earlier commit this same session, then explicitly
     // restored by the owner in a later, direct correction. Real,
     // current state: present.
     assert.match(container.textContent ?? '', /SYSTEM: SCANNING/)
-    assert.match(container.textContent ?? '', /SIG/)
-    assert.match(container.textContent ?? '', /574,780/)
+    // REAL BUG FIXED (explicit owner instruction, 2026-09-05): "SIG
+    // 574,780" was a static, fabricated number with no connection to
+    // any real data -- confirmed by reading the source, it was a
+    // literal string. Replaced with a real `observationCount` prop
+    // (fed from the same real getObservationStats() query already
+    // used on /observatory) and relabeled "OBS" to accurately
+    // describe what the number now is.
+    assert.match(container.textContent ?? '', /OBS/)
+    assert.doesNotMatch(container.textContent ?? '', /\bSIG\b/)
+    assert.match(container.textContent ?? '', /16,698/)
+    assert.doesNotMatch(container.textContent ?? '', /574,780/)
     assert.doesNotMatch(container.textContent ?? '', /SIGNALS INDEXED|—/)
     const canvas = container.querySelector<HTMLCanvasElement>('canvas#hero-density-scan')
     assert.ok(canvas)
@@ -77,7 +86,7 @@ describe('VfinalHeroDensityScan', () => {
 
   test('keeps the required breathing animation running under reduced motion', () => {
     reducedMotion = true
-    render(<VfinalHeroDensityScan />)
+    render(<VfinalHeroDensityScan observationCount={16698} />)
     assert.equal(rafCalls, 1)
     assert.ok(rafCallback, 'the breathing loop schedules its next frame')
     assert.ok(observerCallback, 'the canvas still registers viewport cleanup')

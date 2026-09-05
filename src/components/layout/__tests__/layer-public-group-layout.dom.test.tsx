@@ -1,9 +1,13 @@
 import '../../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render } from '@testing-library/react'
+import { render, cleanup } from '@testing-library/react'
 import { forceReducedMotion } from '../../../app/__tests__/homepage-fixtures'
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('(public) route group layout — real shared header/footer, mounted exactly once', () => {
   test('the real (public)/layout.tsx renders VfinalPublicShell (shared header + footer) around its children, exactly the content every one of the 19 real public pages used to duplicate individually', async (t) => {
