@@ -284,30 +284,42 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="signal-001" data-section="history" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">05 — Signal 001</span>
-          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
-            The Convergence.
-          </h2>
-          {/* REAL CONTENT UPDATE (explicit owner instruction,
-              2026-09-05): this intro paragraph now matches the real,
-              sourced article this block links to (previously written
-              independently, by a different author, not drawn from any
-              specific researched source). The full article moved to
-              its own dedicated page (/editorial/the-convergence) --
-              this block keeps only the title and this one paragraph,
-              plus a single real link to the full piece, duplicated in
-              the footer per direct instruction (not added to the
-              header nav). */}
-          <p className="reveal mb-8 max-w-2xl text-xl text-silver-haze">
-            1943 → 1956. The emergence of artificial intelligence was not the result of a single
-            invention. It was a convergence of independent theoretical developments, research
-            communities, and methodological approaches that gradually aligned around one question:
-            could intelligence itself be treated as a computational object?
-          </p>
-          <Link href="/editorial/the-convergence" className="reveal arrow-link magnetic mb-12">
-            Read the full story <span>→</span>
-          </Link>
-          <div className="grid gap-6">
+          {/* REAL LAYOUT FIX (explicit owner instruction, 2026-09-05):
+              the photo block used to sit BELOW the text, stacking the
+              whole section's height. Moved into a real two-column
+              grid -- text on the left, a real, compact photo window
+              on the right, matching the same real side-by-side
+              pattern already used elsewhere on this page (e.g. the
+              hero's own heading+paragraph beside its density-scan
+              visual) -- and the section's overall height drops
+              accordingly, since nothing stacks vertically anymore. */}
+          <div className="grid items-center gap-10 md:grid-cols-[1fr_360px]">
+            <div>
+              <span className="font-caption mb-8 block text-silver-haze">05 — Signal 001</span>
+              <h2 className="font-display reveal mb-8 text-[10vw] text-frost md:text-[64px]">
+                The Convergence.
+              </h2>
+              {/* REAL CONTENT UPDATE (explicit owner instruction,
+                  2026-09-05): this intro paragraph now matches the
+                  real, sourced article this block links to
+                  (previously written independently, by a different
+                  author, not drawn from any specific researched
+                  source). The full article moved to its own dedicated
+                  page (/editorial/the-convergence) -- this block
+                  keeps only the title and this one paragraph, plus a
+                  single real link to the full piece, duplicated in
+                  the footer per direct instruction (not added to the
+                  header nav). */}
+              <p className="reveal mb-8 text-xl text-silver-haze">
+                1943 → 1956. The emergence of artificial intelligence was not the result of a single
+                invention. It was a convergence of independent theoretical developments, research
+                communities, and methodological approaches that gradually aligned around one
+                question: could intelligence itself be treated as a computational object?
+              </p>
+              <Link href="/editorial/the-convergence" className="reveal arrow-link magnetic">
+                Read the full story <span>→</span>
+              </Link>
+            </div>
             {/* REAL RESTRUCTURE (explicit owner instruction,
                 2026-09-05): the two detail cards (with their own
                 2-image sliders) that used to sit here moved to the
@@ -315,17 +327,11 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                 are placed statically at their correct place in the
                 text -- no cycling animation on the article page
                 itself, per direct instruction. This single remaining
-                window now cycles through all 8 real images instead
-                of the previous two 2-image sliders.
-                REAL SIZE FIX (explicit owner instruction,
-                2026-09-05): reverted to the original card photo's
-                real footprint (plain aspect-video, no wide 21:9
-                stretch) and constrained to a real, modest max-width
-                instead of the full 1200px section -- the block was
-                meant to become more compact overall, not larger, and
-                an earlier version had enlarged the photo well beyond
-                what the two original 2-image sliders ever occupied. */}
-            <div className="reveal group aspect-video max-w-2xl border border-border-subtle bg-surface-tonal">
+                window now cycles through all 8 real images instead of
+                the previous two 2-image sliders -- now sized to sit
+                beside the text (aspect-square, full column width,
+                genuinely compact) rather than stretching under it. */}
+            <div className="reveal group aspect-square border border-border-subtle bg-surface-tonal">
               <VfinalSlider8 assets={HISTORY_ASSETS} className="h-full w-full" />
             </div>
           </div>
