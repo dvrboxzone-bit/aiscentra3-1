@@ -60,6 +60,11 @@ afterEach(() => {
 describe('VfinalHeroDensityScan', () => {
   test('renders the approved status, SIG count and canvas without placeholder symbols', () => {
     const { container } = render(<VfinalHeroDensityScan />)
+    // REAL SITE STRUCTURE CHANGE, then REVERTED (explicit owner
+    // instruction, 2026-09-03): "SYSTEM: SCANNING" was briefly removed
+    // in an earlier commit this same session, then explicitly
+    // restored by the owner in a later, direct correction. Real,
+    // current state: present.
     assert.match(container.textContent ?? '', /SYSTEM: SCANNING/)
     assert.match(container.textContent ?? '', /SIG/)
     assert.match(container.textContent ?? '', /574,780/)

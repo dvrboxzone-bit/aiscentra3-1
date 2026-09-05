@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { VfinalHeroDensityScan } from '@/components/layout/vfinal-hero-density-scan'
+import { VfinalQuoteTypewriter } from '@/components/layout/vfinal-quote-typewriter'
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
 import { VfinalSlider } from '@/components/layout/vfinal-slider'
@@ -100,18 +101,11 @@ export default async function HomePage(): Promise<React.JSX.Element> {
             <br />
             Observatory.
           </h1>
-          <div className="mt-12 grid gap-12 md:grid-cols-2">
-            <div>
-              <p className="max-w-[60ch] text-xl font-normal leading-snug text-silver-haze md:text-2xl">
-                AIscentra is continuous monitoring of the global AI ecosystem. We separate
-                significant changes from noise and preserve the provenance of every statement.
-              </p>
-            </div>
-            <div className="flex items-end justify-start md:justify-end">
-              <a href="#signals" className="arrow-link magnetic">
-                View signals <span>↓</span>
-              </a>
-            </div>
+          <div className="mt-12">
+            <p className="max-w-[68ch] text-xl font-normal leading-snug text-silver-haze md:text-2xl">
+              AIscentra is continuous monitoring of the global AI ecosystem. We separate significant
+              changes from noise and preserve the provenance of every statement.
+            </p>
           </div>
         </div>
       </section>
@@ -123,9 +117,22 @@ export default async function HomePage(): Promise<React.JSX.Element> {
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
           <span className="font-caption mb-8 block text-silver-haze">01 — Signals</span>
-          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
+          <h2 className="font-display reveal mb-8 text-[12vw] text-frost md:text-[100px]">
             Scarce signals.
           </h2>
+
+          {/* REAL MOVE (explicit owner instruction, 2026-09-04): the
+              quote used to be its own standalone section between the
+              hero and Signals -- moved here instead, directly under
+              this heading, inside the real Signals block. See
+              VfinalQuoteTypewriter's own comments for the animation's
+              full real history (typing logic, colors, cursor,
+              translate-crash protection, etc.) -- unchanged by this
+              move, only its position on the page changed. */}
+          <blockquote className="mb-12">
+            <VfinalQuoteTypewriter />
+          </blockquote>
+
           <div
             className="grid gap-px border border-border-subtle bg-deep-obsidian md:grid-cols-3"
             data-list="signals"

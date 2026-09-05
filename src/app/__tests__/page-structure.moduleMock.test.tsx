@@ -43,7 +43,11 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     // 1. Exact section order (6 sections, approved sequence after
     // Trajectories moved to /trajectories AND Assistant moved to the
     // real sliding side panel -- both independent-review corrections,
-    // explicit owner instruction).
+    // explicit owner instruction). A real "quote" section briefly
+    // existed as its own standalone block between hero and signals
+    // (2026-09-03), then was moved by direct owner instruction
+    // (2026-09-04) into the Signals section itself, directly under
+    // its own heading -- back to 6 real top-level sections, not 7.
     const sectionIds = Array.from(container.querySelectorAll('section')).map((el) => el.id)
     assert.deepEqual(
       sectionIds,
