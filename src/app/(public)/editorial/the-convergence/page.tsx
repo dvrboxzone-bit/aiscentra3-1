@@ -10,39 +10,36 @@ export const metadata: Metadata = {
 
 /**
  * AIscentra — /editorial/the-convergence (explicit owner instruction,
- * 2026-09-05, revised after live preview review). Full version of the
- * homepage's compact "05 — Signal 001 / The Convergence" teaser.
+ * 2026-09-05, revised a second time after live preview review).
  *
- * REAL LAYOUT FIX (owner-reviewed, screenshot-referenced): the article
- * previously nested EVERYTHING -- text and photos alike -- inside one
- * single max-w-[760px] wrapper, which made the photos look
- * disproportionately narrow against this site's own real 1200px
- * section width used everywhere else. Restructured to the real,
- * standard editorial pattern: an outer max-w-[1200px] wrapper (this
- * site's own established section width) holds full-width photos
- * directly; a separate, narrower max-w-[760px] mx-auto wrapper holds
- * only the readable text (paragraphs, headings, list) -- readable
- * line length for text, full real width for images, not one
- * compromise width for both.
+ * REAL LAYOUT FIX (owner-reviewed, explicit instruction to research
+ * how real editorial sites lay out articles before touching code):
+ * checked real, established web-editorial practice (ProPublica's own
+ * public writeup on CSS Grid editorial layouts; general float-based
+ * text-wrap conventions) -- the real, standard pattern is a SINGLE
+ * text column at a real reading width, with smaller images floated to
+ * one side (this article: right, per direct instruction) so text
+ * wraps naturally around them -- not two separate width containers
+ * (one for text, one full-page-width for photos), which was this
+ * page's own previous, incorrect version. Photos here are real
+ * `float-right` elements at a real, optimal size (a documented real
+ * convention: roughly 35-45% of the text column's own width), with
+ * real margin on the text-facing side so the wrap doesn't crowd the
+ * image.
  *
- * "05 — SIGNAL 001" removed per direct instruction (this label
- * belonged to the homepage's own numbered-section convention, not to
- * a standalone article page).
+ * "05 — SIGNAL 001" stays removed (unrelated to the homepage's own
+ * numbered-section convention, per the earlier real fix).
  *
- * Sources: a real, overlapping icon stack (each favicon a circle,
- * negative margin pulling it under the previous one, hover brings the
- * hovered icon to the front) -- the standard editorial "who wrote
- * this / what this draws on" avatar-stack pattern, not a new,
- * invented style.
+ * Sources: unchanged from the previous real fix -- a genuinely
+ * overlapping icon stack.
  *
  * Every real image used (all 8 real assets in HISTORY_ASSETS) is
- * placed STATICALLY here, one per its own correct place in the text
- * -- no cycling/sliding animation on the article page itself, unlike
- * the homepage's own compact teaser. Two of these eight (Turing's own
- * 1951 portrait, and the real scanned opening page of his 1950 Mind
- * paper) were previously unused, generic-labelled assets -- now given
- * real, accurate alt text and used here for the first time, exactly
- * where they belong.
+ * still placed STATICALLY, one per its own correct place in the text
+ * -- no cycling/sliding animation on the article page itself. Two of
+ * these eight (Turing's own 1951 portrait, and the real scanned
+ * opening page of his 1950 Mind paper) were previously unused,
+ * generic-labelled assets -- given real, accurate alt text and used
+ * here for the first time, exactly where they belong.
  */
 export default function TheConvergencePage(): React.JSX.Element {
   const sources = [
@@ -73,13 +70,16 @@ export default function TheConvergencePage(): React.JSX.Element {
     <>
       <section className="textured-bg px-6 pb-24 pt-40">
         <div className="tech-grid" />
-        <div className="relative z-10 mx-auto max-w-[1200px]">
-          <div className="mx-auto max-w-[760px]">
-            <h1 className="font-display mb-10 text-[10vw] text-frost md:text-[64px]">
-              The Convergence.
-            </h1>
-            <p className="font-caption mb-4 text-silver-haze">1943 → 1956</p>
+        <div className="relative z-10 mx-auto max-w-[900px]">
+          <h1 className="font-display mb-10 text-[10vw] text-frost md:text-[64px]">
+            The Convergence.
+          </h1>
+          <p className="font-caption mb-4 text-silver-haze">1943 → 1956</p>
 
+          <div className="clear-both">
+            <div className="float-right mb-4 ml-6 w-[38%] overflow-hidden border border-border-subtle bg-surface-tonal">
+              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 0)} className="aspect-[4/3] w-full" />
+            </div>
             <p className="mb-10 text-lg leading-relaxed text-silver-haze">
               The emergence of artificial intelligence was not the result of a single invention. It
               was a convergence of independent theoretical developments, research communities, and
@@ -88,15 +88,14 @@ export default function TheConvergencePage(): React.JSX.Element {
             </p>
           </div>
 
-          <div className="mb-12 overflow-hidden border border-border-subtle bg-surface-tonal">
-            <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 0)} className="aspect-[21/9] w-full" />
-          </div>
-
-          <div className="mx-auto max-w-[760px]">
-            {/* REAL ADDITION — a third, equal section for 1943, matching
-                this article's own "Minimal Timeline" further down, which
-                already treats 1943 as a real, standalone point, not a
-                detail folded into the 1956 section. */}
+          {/* REAL ADDITION — a third, equal section for 1943, matching
+              this article's own "Minimal Timeline" further down, which
+              already treats 1943 as a real, standalone point, not a
+              detail folded into the 1956 section. */}
+          <div className="clear-both">
+            <div className="float-right mb-4 ml-6 w-[38%] overflow-hidden border border-border-subtle bg-surface-tonal">
+              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 1)} className="aspect-[4/3] w-full" />
+            </div>
             <div className="mb-4 flex items-center gap-4">
               <span className="font-caption text-silver-haze">FACT</span>
               <span className="font-caption text-mint-signal">VERIFIED</span>
@@ -118,11 +117,21 @@ export default function TheConvergencePage(): React.JSX.Element {
             </p>
           </div>
 
-          <div className="mb-12 overflow-hidden border border-border-subtle bg-surface-tonal">
-            <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 1)} className="aspect-[21/9] w-full" />
-          </div>
-
-          <div className="mx-auto max-w-[760px]">
+          <div className="clear-both">
+            <div className="float-right mb-4 ml-6 w-[38%] space-y-3">
+              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
+                <VfinalImageSlot
+                  asset={assetAt(HISTORY_ASSETS, 6)}
+                  className="aspect-[3/4] w-full"
+                />
+              </div>
+              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
+                <VfinalImageSlot
+                  asset={assetAt(HISTORY_ASSETS, 7)}
+                  className="aspect-[3/4] w-full"
+                />
+              </div>
+            </div>
             <div className="mb-4 flex items-center gap-4">
               <span className="font-caption text-silver-haze">FACT</span>
               <span className="font-caption text-mint-signal">VERIFIED</span>
@@ -153,16 +162,21 @@ export default function TheConvergencePage(): React.JSX.Element {
             </p>
           </div>
 
-          <div className="mb-12 grid grid-cols-2 gap-4">
-            <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 6)} className="aspect-[3/4] w-full" />
+          <div className="clear-both">
+            <div className="float-right mb-4 ml-6 w-[38%] space-y-3">
+              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
+                <VfinalImageSlot
+                  asset={assetAt(HISTORY_ASSETS, 3)}
+                  className="aspect-[4/3] w-full"
+                />
+              </div>
+              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
+                <VfinalImageSlot
+                  asset={assetAt(HISTORY_ASSETS, 4)}
+                  className="aspect-[4/3] w-full"
+                />
+              </div>
             </div>
-            <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 7)} className="aspect-[3/4] w-full" />
-            </div>
-          </div>
-
-          <div className="mx-auto max-w-[760px]">
             <div className="mb-4 flex items-center gap-4">
               <span className="font-caption text-silver-haze">EVENT</span>
               <span className="font-caption text-mint-signal">CONVERGENCE</span>
@@ -195,16 +209,7 @@ export default function TheConvergencePage(): React.JSX.Element {
             </p>
           </div>
 
-          <div className="mb-12 grid grid-cols-2 gap-4">
-            <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 3)} className="aspect-[4/3] w-full" />
-            </div>
-            <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 4)} className="aspect-[4/3] w-full" />
-            </div>
-          </div>
-
-          <div className="mx-auto max-w-[760px]">
+          <div className="clear-both">
             <h2 className="font-heading mb-6 text-2xl text-frost">
               1943 → 1950 → 1956: a minimal timeline
             </h2>
