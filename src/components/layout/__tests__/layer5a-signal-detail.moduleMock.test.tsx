@@ -15,13 +15,16 @@ describe('/signals/[slug] — real detail-page functions preserved', () => {
       title: 'Real Detail Signal',
     })
     mock.module('@/modules/signals/queries', {
-      namedExports: { getSignalById: async () => signal },
+      namedExports: { getSignalById: async () => signal, getSignalsByEntity: async () => [] },
     })
     mock.module('@/modules/events/queries', {
       namedExports: { getEventsBySignal: async () => [] },
     })
     mock.module('@/modules/observations/queries', {
-      namedExports: { getSourceLinksForSignal: async () => [] },
+      namedExports: { getEvidenceForSignal: async () => [] },
+    })
+    mock.module('@/modules/entities/queries', {
+      namedExports: { getEntityById: async () => null },
     })
     const { default: SignalPage } = await import('../../../app/(public)/signals/[slug]/page')
     const jsx = await SignalPage({

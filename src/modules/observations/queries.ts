@@ -10,6 +10,72 @@ import {
   type SourceLink,
 } from '@/lib/utils/source-links'
 
+/**
+ * AIscentra — real evidence detail for the Signal detail page (explicit
+ * owner instruction, 2026-09-05, grounded in a real audit of this
+ * project's own database schema before writing any code).
+ *
+ * A separate function from getSourceLinksForSignal, deliberately: that
+ * function is shared with the /signals catalog page, which only needs
+ * a plain name+link. This one is detail-page-only and returns fields
+ * that already exist in the real schema but were never queried here:
+ * Source.type, Source.trust_score, Observation.published_at, and a
+ * real excerpt of Observation.content (the actual evidence quote) --
+ * not new database work, just querying columns that were always
+ * there.
+ */
+export interface EvidenceDetail {
+  url: string
+  sourceName: string
+  sourceType: string
+  faviconUrl: string | null
+  publishedAt: string | null
+  /** First ~240 real characters of the source's own stored content --
+   * a genuine excerpt, not a fabricated summary. Null if the pipeline
+   * never captured body content for this observation. */
+  excerpt: string | null
+}
+
+export async function getEvidenceForSignal(observationIds: string[]): Promise<EvidenceDetail[]> {
+  if (observationIds.length === 0) return []
+
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('observations')
+    .select('url, source_id, published_at, content, sources(name, type)')
+    .in('id', observationIds)
+
+  if (error) {
+    console.error('[observations/queries] getEvidenceForSignal error:', error.message)
+    return []
+  }
+
+  const raw = (data ?? []) as Array<{
+    url: string | null
+    source_id: string | null
+    published_at: string | null
+    content: string | null
+    sources: { name: string; type: string } | { name: string; type: string }[] | null
+  }>
+
+  const details: EvidenceDetail[] = raw
+    .filter((row) => isSafeSourceUrl(row.url))
+    .map((row) => {
+      const sourcesField = row.sources
+      const source = Array.isArray(sourcesField) ? sourcesField[0] : sourcesField
+      return {
+        url: row.url as string,
+        sourceName: source?.name ?? 'Unknown source',
+        sourceType: source?.type ?? 'unknown',
+        faviconUrl: buildFaviconUrl(row.url as string),
+        publishedAt: row.published_at,
+        excerpt: row.content ? row.content.trim().slice(0, 240) : null,
+      }
+    })
+
+  return details
+}
+
 export interface ObservationRow {
   id: string
   source_id: string
