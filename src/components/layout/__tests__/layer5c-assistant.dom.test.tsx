@@ -1,9 +1,13 @@
 import '../../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render } from '@testing-library/react'
+import { render, cleanup } from '@testing-library/react'
 import { forceReducedMotion } from '../../../app/__tests__/homepage-fixtures'
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('/assistant — real ObservatoryChat rendered unchanged, VfinalPublicShell, no forbidden URLs', () => {
   test('the real /assistant page renders the real, unmodified ObservatoryChat component (example queries, input, send affordance) inside VfinalPublicShell', async (t) => {

@@ -1,9 +1,30 @@
 import '../../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, cleanup } from '@testing-library/react'
 import { forceReducedMotion } from '../../../app/__tests__/homepage-fixtures'
+
+/**
+ * REAL BUG FIXED (found while investigating a real, intermittent CI
+ * hang, 2026-09-05): this file rendered three separate full page
+ * trees (loading.tsx, error.tsx, not-found.tsx -- each including the
+ * full, shared VfinalPublicShell) across three tests without ever
+ * calling `cleanup()` between them -- the one established convention
+ * every other real test file in this project already follows
+ * (confirmed by comparing against vfinal-hero-density-scan.dom.test.tsx,
+ * which does call it in its own afterEach). Three consecutive,
+ * un-cleaned-up mounts of the same shared shell -- each with its own
+ * real timers, observers and effects -- left accumulating, un-torn-
+ * down state that plausibly explains the real, reproduced-but-
+ * intermittent hang seen in CI. Not a guaranteed root cause (the hang
+ * did not reproduce with 100% reliability even in direct isolation
+ * testing), but a real, missing piece of this project's own
+ * established test hygiene, fixed on its own merits regardless.
+ */
+afterEach(() => {
+  cleanup()
+})
 
 describe('loading.tsx — vfinal design, shared header/footer, accessible', () => {
   test('the real Loading component uses VfinalPublicShell (shared header/footer) and has an accessible live-region status role', async (t) => {

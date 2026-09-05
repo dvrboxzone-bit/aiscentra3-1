@@ -16,11 +16,15 @@
  */
 import '../../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render } from '@testing-library/react'
+import { render, cleanup } from '@testing-library/react'
 import { forceReducedMotion } from '../../../app/__tests__/homepage-fixtures'
 import { VfinalInteractionController } from '../vfinal-interaction-controller'
+
+afterEach(() => {
+  cleanup()
+})
 
 interface FakeIntersectionObserver {
   observe: (el: Element) => void

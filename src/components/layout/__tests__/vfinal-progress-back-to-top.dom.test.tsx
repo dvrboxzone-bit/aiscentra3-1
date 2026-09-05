@@ -9,10 +9,14 @@
  */
 import '../../../lib/test-utils/dom-setup'
 
-import { test, describe } from 'node:test'
+import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { render } from '@testing-library/react'
+import { render, cleanup } from '@testing-library/react'
 import { VfinalProgressAndBackToTop } from '../vfinal-progress-back-to-top'
+
+afterEach(() => {
+  cleanup()
+})
 
 function setScrollMetrics(scrollTop: number, scrollHeight: number, clientHeight: number): void {
   Object.defineProperty(document.documentElement, 'scrollTop', {
