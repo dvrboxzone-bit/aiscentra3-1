@@ -4,12 +4,10 @@ import { VfinalHeroDensityScan } from '@/components/layout/vfinal-hero-density-s
 import { VfinalQuoteTypewriter } from '@/components/layout/vfinal-quote-typewriter'
 import { VfinalStrategicMemoryCanvas } from '@/components/layout/vfinal-strategic-memory-canvas'
 import { VfinalImageSlot } from '@/components/layout/vfinal-image-slot'
-import { VfinalSlider } from '@/components/layout/vfinal-slider'
 import {
   assetAt,
   FORECAST_ASSETS,
   getFeaturedSignalAsset,
-  HISTORY_ASSETS,
   OBSERVATION_ASSETS,
 } from '@/components/layout/vfinal-landing-assets'
 import { getFeaturedSignals, getSignals } from '@/modules/signals/queries'
@@ -266,76 +264,6 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </div>
             </div>
             <VfinalStrategicMemoryCanvas />
-          </div>
-        </div>
-      </section>
-
-      <div className="section-gap" />
-
-      {/* ── 05 — History ("Signal 001" — genuine static editorial content).
-          Renumbered 04 -> 05 (independent-review correction, explicit
-          owner instruction, 2026-08-27): Strategic Memory's own label
-          was found reading 05/06 in two different places while
-          sitting BEFORE this section in the real page order -- fixed
-          to a real, consistent sequence: 01 Signals, 02 Forecasts,
-          03 Observations, 04 Strategic Memory, 05 this section. Only
-          this numbering label changed -- the protected "Convergence"
-          content below remains byte-identical, untouched. ── */}
-      <section id="signal-001" data-section="history" className="textured-bg px-6 py-24">
-        <div className="tech-grid" />
-        <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">05 — Signal 001</span>
-          <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
-            The Convergence.
-          </h2>
-          <p className="reveal mb-12 max-w-2xl text-xl text-silver-haze">
-            1943 → 1956. The beginning of AI was not an invention. It was a convergence of
-            independent ideas, researchers, and approaches, gradually moving toward the same
-            question: Could intelligence itself become a computational object?
-          </p>
-          <div className="grid gap-6">
-            <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalSlider
-                assets={[assetAt(HISTORY_ASSETS, 0), assetAt(HISTORY_ASSETS, 1)]}
-                className="aspect-video border-0 md:aspect-auto md:w-2/5"
-              />
-              <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
-                <div className="mb-4 flex items-center gap-4">
-                  <span className="font-caption text-silver-haze">FACT</span>
-                  <span className="font-caption text-mint-signal">VERIFIED</span>
-                </div>
-                <h3 className="font-heading mb-4 text-3xl text-frost md:text-4xl">
-                  Can machines think?
-                </h3>
-                <p className="mb-6 max-w-[60ch] text-silver-haze">
-                  In 1950, British mathematician Alan Turing published &quot;Computing Machinery and
-                  Intelligence&quot;. He introduced the imitation game — a thought experiment later
-                  known as the Turing Test. He moved the discussion from abstract philosophy toward
-                  questions that could be investigated through computation and behavior.
-                </p>
-              </div>
-            </div>
-            <div className="reveal group border border-border-subtle bg-surface-tonal md:flex">
-              <VfinalSlider
-                assets={[assetAt(HISTORY_ASSETS, 2), assetAt(HISTORY_ASSETS, 3)]}
-                className="aspect-video border-0 md:aspect-auto md:w-2/5"
-              />
-              <div className="flex flex-col justify-center p-8 md:w-3/5 md:p-12">
-                <div className="mb-4 flex items-center gap-4">
-                  <span className="font-caption text-silver-haze">EVENT</span>
-                  <span className="font-caption text-mint-signal">CONVERGENCE</span>
-                </div>
-                <h3 className="font-heading mb-4 text-3xl text-frost md:text-4xl">
-                  Dartmouth, Summer 1956
-                </h3>
-                <p className="mb-6 max-w-[60ch] text-silver-haze">
-                  In the summer of 1956, researchers gathered at Dartmouth College. Dartmouth did
-                  not create every idea that would become AI. What it did was arguably more
-                  important: It brought several emerging research directions together under a common
-                  intellectual framework.
-                </p>
-              </div>
-            </div>
           </div>
         </div>
       </section>

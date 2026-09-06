@@ -87,19 +87,23 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     const jsx = await HomePage()
     const { container } = render(jsx)
 
-    // 1. Exact section order (6 sections, approved sequence after
+    // 1. Exact section order (5 sections, approved sequence after
     // Trajectories moved to /trajectories AND Assistant moved to the
     // real sliding side panel -- both independent-review corrections,
     // explicit owner instruction). A real "quote" section briefly
     // existed as its own standalone block between hero and signals
     // (2026-09-03), then was moved by direct owner instruction
     // (2026-09-04) into the Signals section itself, directly under
-    // its own heading -- back to 6 real top-level sections, not 7.
+    // its own heading. The real "signal-001" / "The Convergence"
+    // section (a compact teaser for the full /editorial/the-
+    // convergence article) was REMOVED from the homepage entirely per
+    // direct owner instruction, 2026-09-05 -- 5 real top-level
+    // sections now, not 6.
     const sectionIds = Array.from(container.querySelectorAll('section')).map((el) => el.id)
     assert.deepEqual(
       sectionIds,
-      ['hero', 'signals', 'forecasts', 'news', 'memory', 'signal-001'],
-      'all 6 sections must be present in the exact approved order',
+      ['hero', 'signals', 'forecasts', 'news', 'memory'],
+      'all 5 sections must be present in the exact approved order',
     )
 
     // 2. Exactly 6 Featured Signal cards with a full real result.
@@ -117,26 +121,31 @@ describe('HomePage (vfinal) — structural regressions: section order/count, sli
     assert.equal(container.querySelectorAll('[data-section="telemetry"]').length, 0)
     assert.equal(container.querySelectorAll('.hero-globe-container').length, 0)
 
-    // 5. Exactly two History slider-container blocks, each with exactly
-    //    two slider-slide subblocks.
-    const sliders = container.querySelectorAll('.slider-container')
+    // 5. REAL REMOVAL (explicit owner instruction, 2026-09-05): the
+    // "signal-001" section (and its slider8-container 8-image cycling
+    // window) is gone from the homepage entirely -- both the old
+    // 2-image .slider-container system (untouched, still used
+    // correctly elsewhere) and the removed .slider8-container system
+    // (its component and CSS were deleted, this feature no longer
+    // exists) must be absent from the homepage now.
     assert.equal(
-      sliders.length,
-      2,
-      'the History section must have exactly 2 slider-container blocks',
+      container.querySelectorAll('.slider8-container').length,
+      0,
+      'the removed slider8-container must no longer appear on the homepage at all',
     )
-    sliders.forEach((slider, i) => {
-      assert.equal(
-        slider.querySelectorAll('.slider-slide').length,
-        2,
-        `slider ${i} must have exactly 2 slider-slide subblocks`,
-      )
-    })
+    assert.equal(
+      container.querySelectorAll('.slider-container').length,
+      0,
+      'the old 2-image .slider-container must no longer appear on the homepage itself',
+    )
 
-    // 6. Exactly 14 total image slots (6 Featured + 2 Forecasts + 2
-    //    Observations + 4 History slider slides).
-    assert.equal(container.querySelectorAll('[data-image-slot="local-asset"]').length, 14)
-    assert.equal(container.querySelectorAll('img[src^="/images/"][src$=".webp"]').length, 14)
+    // 6. Exactly 10 total image slots (6 Featured + 2 Forecasts + 2
+    //    Observations -- REAL CHANGE, explicit owner instruction
+    //    2026-09-05: the "signal-001" section and its 8 History
+    //    images are gone from the homepage entirely, moved to the
+    //    dedicated /editorial/the-convergence article page instead).
+    assert.equal(container.querySelectorAll('[data-image-slot="local-asset"]').length, 10)
+    assert.equal(container.querySelectorAll('img[src^="/images/"][src$=".webp"]').length, 10)
     assert.equal(
       container.querySelectorAll('[data-asset-purpose="forecast"].group > img.img-mono').length,
       2,
