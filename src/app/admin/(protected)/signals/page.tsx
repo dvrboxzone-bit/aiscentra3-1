@@ -81,19 +81,32 @@ export default async function AdminSignalsPage({
       </div>
 
       <div className="mb-6 flex flex-wrap gap-2">
-        {statusCounts.map(({ status: s, count: c }) => (
-          <Link
-            key={s}
-            href={`/admin/signals?status=${s}`}
-            className={`px-3 py-1 text-xs font-medium transition-colors ${
-              s === status
-                ? 'border border-border-subtle bg-surface-tonal text-frost'
-                : 'text-silver-haze hover:text-mint-signal'
-            }`}
-          >
-            {s} ({c})
-          </Link>
-        ))}
+        {statusCounts.map(({ status: s, count: c }) => {
+          // REAL ADDITION (explicit owner instruction, 2026-09-06):
+          // same real 3-tier tone as the public Signal detail page's
+          // own Status field -- kept consistent so the same 8 real
+          // status values don't carry two different color meanings
+          // in two different places on this project.
+          const tone =
+            s === 'ACTIVE' || s === 'PROMOTED'
+              ? 'text-mint-signal'
+              : s === 'REJECTED' || s === 'EXPIRED'
+                ? 'text-rejected'
+                : 'text-weak-signal'
+          return (
+            <Link
+              key={s}
+              href={`/admin/signals?status=${s}`}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                s === status
+                  ? `border border-border-subtle bg-surface-tonal ${tone}`
+                  : `${tone} opacity-60 hover:opacity-100`
+              }`}
+            >
+              {s} ({c})
+            </Link>
+          )
+        })}
       </div>
 
       <div className="divide-y divide-border-subtle border border-border-subtle bg-surface-tonal">
