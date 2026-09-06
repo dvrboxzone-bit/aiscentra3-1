@@ -118,19 +118,18 @@ export default function TheConvergencePage(): React.JSX.Element {
           </div>
 
           <div className="clear-both">
-            <div className="float-right mb-4 ml-6 w-[38%] space-y-3">
-              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-                <VfinalImageSlot
-                  asset={assetAt(HISTORY_ASSETS, 6)}
-                  className="aspect-[3/4] w-full"
-                />
-              </div>
-              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-                <VfinalImageSlot
-                  asset={assetAt(HISTORY_ASSETS, 7)}
-                  className="aspect-[3/4] w-full"
-                />
-              </div>
+            {/* REAL BUG FIXED (explicit owner instruction, screenshot-
+                annotated, 2026-09-05): removed the Mind journal scan
+                (asset index 7), same real reasoning as the earlier
+                Dartmouth duplicate-photo fix -- with two stacked
+                images the floated column ran taller than this
+                section's own paragraph text, leaving a visible empty
+                gap before the next heading while clear-both waited
+                for the float to finish. One image (Turing's own
+                portrait) keeps the column's height in proportion with
+                the text beside it. */}
+            <div className="float-right mb-4 ml-6 w-[38%] overflow-hidden border border-border-subtle bg-surface-tonal">
+              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 6)} className="aspect-[3/4] w-full" />
             </div>
             <div className="mb-4 flex items-center gap-4">
               <span className="font-caption text-silver-haze">FACT</span>
