@@ -313,8 +313,24 @@ function VfinalScoreBar({ value, label }: { value: number; label: string }): Rea
           Widened to w-24 (96px), confirmed via the same live
           measurement to comfortably fit every real label currently
           used on this page (Signal, Conf, Momentum, Impact, Actor,
-          Novelty, Verify, Strategic). */}
-      <span className="font-caption w-24 shrink-0 text-silver-haze">{label}</span>
+          Novelty, Verify, Strategic).
+          REAL FOLLOW-UP FIX (explicit owner instruction, 2026-09-05):
+          the 96px width was measured against the real ENGLISH text
+          only. Under a browser's own auto-translate (e.g. to
+          Russian, "Strategic" -> "Стратегический", 14 real
+          characters vs 9), the translated label is genuinely wider
+          and can overflow this same column again. These are short,
+          technical data labels (like "SIGNAL"/"CONF"), not prose
+          meant to be translated at all -- `translate="no"` +
+          `notranslate` is the same real, standard mitigation already
+          used elsewhere on this project for an unrelated but
+          analogous real translate-related bug (the homepage quote
+          animation's own crash-prevention fix), applied here to
+          remove the root cause instead of guessing at an even wider
+          column that still couldn't guarantee every language. */}
+      <span translate="no" className="font-caption notranslate w-24 shrink-0 text-silver-haze">
+        {label}
+      </span>
       <div className="h-1.5 flex-1 bg-border-subtle">
         <div className="h-full bg-mint-signal" style={{ width: `${clamped}%` }} />
       </div>
