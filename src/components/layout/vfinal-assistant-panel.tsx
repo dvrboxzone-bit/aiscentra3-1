@@ -366,8 +366,15 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             plain, always-visible, small-print warning about this
             specific tool's real, concrete failure mode right now
             (misreading or misstating this project's own real Signals/
-            Evidence), not a shortened copy of the manifesto's words. */}
-        <p className="border-t border-border-subtle bg-deep-obsidian px-4 pb-3 pt-2 text-xs text-silver-haze">
+            Evidence), not a shortened copy of the manifesto's words.
+            Real color fix (explicit owner instruction): plain
+            `text-silver-haze` reads as near-white (#e5e7eb -- the
+            name is misleading about how bright it actually is) --
+            paired with `opacity-60`, the same real, already-
+            established muting pattern this project's own footer uses
+            for its own small-print copyright line, not a new,
+            invented style. */}
+        <p className="border-t border-border-subtle bg-deep-obsidian px-4 pb-3 pt-2 text-xs text-silver-haze opacity-60">
           The Assistant explains data — it doesn&rsquo;t create it. Answers can distort the
           underlying Signals and Evidence — verify against the record, not the reply.
         </p>
