@@ -5,7 +5,8 @@ describe('/signals/[slug] malformed slug boundary', () => {
   test('returns not-found before any Supabase-bound query is called', async (t) => {
     let signalCalls = 0
     let eventCalls = 0
-    let sourceCalls = 0
+    let evidenceCalls = 0
+    let entityCalls = 0
 
     const navigationMock = mock.module('next/navigation', {
       namedExports: {
@@ -20,6 +21,7 @@ describe('/signals/[slug] malformed slug boundary', () => {
           signalCalls += 1
           return null
         },
+        getSignalsByEntity: async () => [],
       },
     })
     const eventsMock = mock.module('@/modules/events/queries', {
@@ -32,9 +34,17 @@ describe('/signals/[slug] malformed slug boundary', () => {
     })
     const observationsMock = mock.module('@/modules/observations/queries', {
       namedExports: {
-        getSourceLinksForSignal: async () => {
-          sourceCalls += 1
+        getEvidenceForSignal: async () => {
+          evidenceCalls += 1
           return []
+        },
+      },
+    })
+    const entitiesMock = mock.module('@/modules/entities/queries', {
+      namedExports: {
+        getEntityById: async () => {
+          entityCalls += 1
+          return null
         },
       },
     })
@@ -43,6 +53,7 @@ describe('/signals/[slug] malformed slug boundary', () => {
       signalsMock.restore()
       eventsMock.restore()
       observationsMock.restore()
+      entitiesMock.restore()
     })
 
     const { default: SignalPage } = await import(
@@ -55,6 +66,7 @@ describe('/signals/[slug] malformed slug boundary', () => {
     )
     assert.equal(signalCalls, 0)
     assert.equal(eventCalls, 0)
-    assert.equal(sourceCalls, 0)
+    assert.equal(evidenceCalls, 0)
+    assert.equal(entityCalls, 0)
   })
 })
