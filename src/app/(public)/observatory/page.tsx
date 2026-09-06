@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Pulse } from '@/components/ui/pulse'
+import { VfinalConfidenceBar } from '@/components/layout/vfinal-confidence-bar'
 import { getSignals, getSignalStats } from '@/modules/signals/queries'
 import { getEvents } from '@/modules/events/queries'
 import { getReports } from '@/modules/reports/queries'
@@ -57,9 +58,17 @@ export default async function ObservatoryPage(): Promise<React.JSX.Element> {
             <Pulse size="md" />
             <span className="font-caption text-mint-signal">GLOBAL MONITORING</span>
           </div>
-          <h1 className="font-display mb-12 text-[12vw] text-frost md:text-[80px]">
+          <h1 className="font-display mb-6 text-[12vw] text-frost md:text-[80px]">
             Observatory Dashboard.
           </h1>
+          {/* REAL ADDITION (explicit owner instruction, 2026-09-06,
+              following a real, agreed-upon "as-is / to-be" plan the
+              owner reviewed before any code was written): used here
+              in its "legend" mode -- no single level highlighted --
+              since this page is the one real place that explains the
+              whole real pipeline at once for a new visitor, not a
+              specific stage of it. */}
+          <VfinalConfidenceBar active={[]} />
 
           <div className="mb-px grid grid-cols-2 border border-border-subtle bg-deep-obsidian md:grid-cols-4">
             <MetricCell label="Observations" value={obsStats.total} />
