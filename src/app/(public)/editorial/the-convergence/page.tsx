@@ -163,19 +163,19 @@ export default function TheConvergencePage(): React.JSX.Element {
           </div>
 
           <div className="clear-both">
-            <div className="float-right mb-4 ml-6 w-[38%] space-y-3">
-              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-                <VfinalImageSlot
-                  asset={assetAt(HISTORY_ASSETS, 3)}
-                  className="aspect-[4/3] w-full"
-                />
-              </div>
-              <div className="overflow-hidden border border-border-subtle bg-surface-tonal">
-                <VfinalImageSlot
-                  asset={assetAt(HISTORY_ASSETS, 4)}
-                  className="aspect-[4/3] w-full"
-                />
-              </div>
+            {/* REAL BUG FIXED (explicit owner instruction, screenshot-
+                annotated, 2026-09-05): the second Dartmouth photo
+                (asset index 4) is the exact same underlying
+                photograph as the first (index 3) -- confirmed by
+                viewing both real image files directly, not assumed --
+                just presented at a different crop/zoom. Removed the
+                real duplicate rather than keep two copies of one
+                photo; this also lets the floated column end sooner,
+                closing the empty gap the owner's own screenshot showed
+                appearing before this heading while the previous
+                section's own taller float was still clearing. */}
+            <div className="float-right mb-4 ml-6 w-[38%] overflow-hidden border border-border-subtle bg-surface-tonal">
+              <VfinalImageSlot asset={assetAt(HISTORY_ASSETS, 3)} className="aspect-[4/3] w-full" />
             </div>
             <div className="mb-4 flex items-center gap-4">
               <span className="font-caption text-silver-haze">EVENT</span>
