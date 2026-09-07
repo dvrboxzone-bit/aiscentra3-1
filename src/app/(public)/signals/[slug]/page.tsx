@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { SignalIllustration } from '@/components/signals/signal-illustration'
+import { VfinalConfidenceBar } from '@/components/layout/vfinal-confidence-bar'
 import { getSignalById, getSignalsByEntity } from '@/modules/signals/queries'
 import { getEventsBySignal } from '@/modules/events/queries'
 import { getEvidenceForSignal } from '@/modules/observations/queries'
@@ -103,6 +104,8 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
             <span className="mx-2">›</span>
             <span>{formatCategory(signal.category)}</span>
           </nav>
+
+          <VfinalConfidenceBar active={['evidence', 'signal']} />
 
           <div className="mb-8 overflow-hidden border border-border-subtle">
             <SignalIllustration

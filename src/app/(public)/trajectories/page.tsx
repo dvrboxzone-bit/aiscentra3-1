@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { TRAJECTORIES } from '@/lib/trajectories'
 import { TrajectoryTable } from './trajectory-table'
+import { VfinalConfidenceBar } from '@/components/layout/vfinal-confidence-bar'
 
 export const metadata: Metadata = {
   title: 'Trajectories',
@@ -30,6 +32,7 @@ export default function TrajectoriesPage(): React.JSX.Element {
       <div className="tech-grid" />
       <div className="relative z-10 mx-auto max-w-[1200px]">
         <span className="font-caption mb-8 block text-mint-signal">TRAJECTORIES</span>
+        <VfinalConfidenceBar active={['trajectory']} />
         <h1 className="font-display mb-8 text-[12vw] text-frost md:text-[100px]">
           Company registry.
         </h1>
@@ -48,6 +51,10 @@ export default function TrajectoriesPage(): React.JSX.Element {
           Status reflects the company&rsquo;s current state; historical changes remain part of its
           trajectory.
         </p>
+
+        <Link href="/signals" className="arrow-link magnetic mb-8 inline-block">
+          ↓ See the signals this registry is built from <span>→</span>
+        </Link>
 
         <TrajectoryTable entities={TRAJECTORIES} />
       </div>
