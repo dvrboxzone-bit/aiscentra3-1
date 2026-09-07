@@ -109,6 +109,19 @@
   --color-frost: #ffffff;
   --color-silver-haze: #e5e7eb;
   --color-mint-signal: #8b9d83;
+  /* REAL ADDITION (explicit owner instruction, 2026-09-06, following a
+     real expert design review the owner explicitly approved):
+     semantic status colors, added ONLY where a real, existing scale
+     of states already exists on the site (Signal.status's 8 real
+     values, Signal.evidence_tier's 4 real values) -- not decorative,
+     not applied to raw score numbers (which are measured quantities,
+     not states, per the same real review). Deliberately just two new
+     colors, not a full traffic-light system: the owner's own explicit
+     principle throughout this review was to keep the existing,
+     already-good palette restrained and only add color where it
+     carries real, distinct meaning. */
+  --color-weak-signal: #788a96; /* early/uncertain state -- WEAK, CANDIDATE, DORMANT signal statuses; UNASSESSED evidence tier */
+  --color-rejected: #626862; /* did-not-clear-the-bar state -- REJECTED, EXPIRED signal statuses. Deliberately NOT red: rejected/expired ≠ false, per the same real review */
   --color-surface-tonal: #0a0a0a;
   --color-border-subtle: #1a1a1a;
   /* REAL BUG FIXED (independent review, build FAILURE): these

@@ -36,6 +36,13 @@ const config: Config = {
         // AIscentra-vfinal-adapt.html's own :root custom properties and
         // tailwind.config inline script.
         'mint-signal': '#8B9D83',
+        // REAL ADDITION (explicit owner instruction, 2026-09-06): see
+        // globals.css's own :root comment for the full real reasoning
+        // -- semantic status colors, only where a real, existing
+        // scale of states already exists (Signal.status,
+        // Signal.evidence_tier), not decorative.
+        'weak-signal': '#788A96',
+        rejected: '#626862',
         'deep-obsidian': '#030303',
         'pure-black': '#000000',
         frost: '#ffffff',
