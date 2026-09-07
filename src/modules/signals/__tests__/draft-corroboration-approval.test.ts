@@ -9,7 +9,7 @@ const migration = readFileSync(
 )
 const migrationSql = migration.replace(/--.*$/gm, '')
 const corroborationOperation = migration.match(
-  /CREATE OR REPLACE FUNCTION public\.corroborate_draft_signal[\s\S]*?\nEND;\n\$\$;/,
+  /CREATE OR REPLACE FUNCTION public\.corroborate_draft_signal[\s\S]*?\r?\nEND;\r?\n\$\$;/,
 )?.[0]
 const publicQueries = readFileSync(resolve('src/modules/signals/queries.ts'), 'utf8')
 const digestRoute = readFileSync(resolve('src/app/api/cron/signals-digest/route.ts'), 'utf8')

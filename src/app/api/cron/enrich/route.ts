@@ -10,6 +10,7 @@
  * Each enrichment call = one AI call = stays within 10s timeout.
  */
 import { NextResponse } from 'next/server'
+import { guardEnrichmentExecution } from '@/lib/security/enrichment-execution'
 import { createAdminClient } from '@/lib/supabase/server'
 
 export const maxDuration = 10
@@ -17,12 +18,15 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request): Promise<NextResponse> {
   const authHeader = request.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env['CRON_SECRET']}`) {
+  if (!process.env['CRON_SECRET'] || authHeader !== `Bearer ${process.env['CRON_SECRET']}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const supabase  = createAdminClient()
-  const appUrl    = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
+  const executionSkip = await guardEnrichmentExecution()
+  if (executionSkip) return executionSkip
+
+  const supabase = createAdminClient()
+  const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'
   const cronSecret = process.env['CRON_SECRET'] ?? ''
 
   // Fetch unprocessed observation IDs (limit 50 per cron run)
@@ -48,9 +52,9 @@ export async function GET(request: Request): Promise<NextResponse> {
   let triggered = 0
   for (const obs of observations) {
     fetch(`${appUrl}/api/enrich`, {
-      method:  'POST',
+      method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
+        'Content-Type': 'application/json',
         'x-cron-secret': cronSecret,
       },
       body: JSON.stringify({ observationId: obs.id }),
