@@ -194,9 +194,6 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                   validation.
                 </p>
               </div>
-              <Link href="/forecasts" className="arrow-link" data-field="forecasts-link">
-                EXPLORE FORECASTS <span>→</span>
-              </Link>
             </div>
             <div className="reveal grid grid-cols-2 gap-6">
               <VfinalImageSlot
@@ -208,6 +205,19 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                 className="group mt-12 aspect-[3/4] border border-border-subtle"
               />
             </div>
+          </div>
+          {/* REAL ADDITION (explicit owner instruction, 2026-09-06):
+              same real btn-pill magnetic button already used at the
+              bottom of the Signals block above, matching its exact
+              design (rounds, lightens on hover) -- replaces the
+              earlier inline "EXPLORE FORECASTS" arrow-link (same real
+              destination, /forecasts, just a different, inconsistent
+              visual treatment than the rest of the page). Placed
+              bottom-left of the whole block, per direct instruction. */}
+          <div className="mt-12">
+            <Link href="/forecasts" className="btn-pill magnetic">
+              Open forecast log ↗
+            </Link>
           </div>
         </div>
       </section>
@@ -264,6 +274,16 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </div>
             </div>
             <VfinalStrategicMemoryCanvas />
+          </div>
+          {/* REAL ADDITION (explicit owner instruction, 2026-09-06):
+              same real btn-pill magnetic button design as the
+              Signals and Forecasts blocks -- this block had no such
+              link at all before. Placed bottom-left of the whole
+              block, per direct instruction. */}
+          <div className="mt-12">
+            <Link href="/strategic-memory" className="btn-pill magnetic">
+              Open memory archive ↗
+            </Link>
           </div>
         </div>
       </section>
