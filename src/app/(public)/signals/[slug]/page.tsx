@@ -202,11 +202,32 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
               <section className="border border-border-subtle bg-surface-tonal p-4">
                 <h2 className="font-caption mb-3 text-silver-haze">SIGNAL STATUS</h2>
                 <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-                  <StatusItem label="Status" value={signal.status} />
-                  <StatusItem label="Category" value={formatCategory(signal.category)} />
+                  {/* REAL ADDITION (explicit owner instruction,
+                      2026-09-06, following a real, screenshot-driven
+                      review of exactly this block): tone is computed
+                      explicitly per field here, not guessed inside
+                      StatusItem from the label string -- only Status
+                      and Evidence have a real, existing scale of
+                      states (Signal.status's 8 real values,
+                      Signal.evidence_tier's 4 real values); Category
+                      and Decision are real facts, not states, and get
+                      a real, restrained secondary tone instead of an
+                      invented color; Entity and Last observed stay
+                      exactly as they were. */}
+                  <StatusItem
+                    label="Status"
+                    value={signal.status}
+                    tone={statusTone(signal.status)}
+                  />
+                  <StatusItem
+                    label="Category"
+                    value={formatCategory(signal.category)}
+                    tone="secondary"
+                  />
                   <StatusItem
                     label="Evidence"
                     value={EVIDENCE_TIER_LABEL[signal.evidence_tier] ?? signal.evidence_tier}
+                    tone={evidenceTone(signal.evidence_tier)}
                   />
                   <StatusItem
                     label="Entity"
@@ -223,6 +244,7 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
                         ? 'Manual editorial override'
                         : 'Automated · no editorial override'
                     }
+                    tone="secondary"
                   />
                   <StatusItem
                     label="Last observed"
@@ -270,7 +292,20 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
 
               <section className="border border-border-subtle bg-surface-tonal p-4">
                 <h2 className="font-caption mb-4 text-silver-haze">FACTOR BREAKDOWN</h2>
-                <div className="space-y-2">
+                {/* REAL ADDITION (explicit owner instruction,
+                    2026-09-06): these bars stay the same real sage
+                    color as SIGNAL SCORES above -- deliberately NOT a
+                    new hue, since a raw factor value (Impact 60,
+                    Novelty 80, etc.) is a measured quantity, not a
+                    state, and coloring it by magnitude would
+                    misleadingly imply "low number = uncertain state"
+                    (the exact confusion the owner's own review
+                    explicitly rejected). Only the real, restrained
+                    difference: reduced opacity, marking these as the
+                    real, secondary factors an already-shown composite
+                    score above is built from -- not a different
+                    meaning, a quieter one. */}
+                <div className="space-y-2 opacity-70">
                   <VfinalScoreBar value={signal.impact_factor * 10} label="Impact" />
                   <VfinalScoreBar value={signal.actor_factor * 10} label="Actor" />
                   <VfinalScoreBar value={signal.novelty_factor * 10} label="Novelty" />
@@ -293,11 +328,51 @@ export default async function SignalPage({ params }: SignalPageProps): Promise<R
   )
 }
 
-function StatusItem({ label, value }: { label: string; value: string }): React.JSX.Element {
+/**
+ * REAL, restrained tone system (explicit owner instruction,
+ * 2026-09-06): 'confirmed' (sage, the site's own existing brand
+ * accent -- reused, not a new color) for states that cleared the real
+ * bar; 'weak' (blue-gray) for real, early/uncertain states; 'rejected'
+ * (neutral gray, deliberately NOT red -- rejected/expired is not the
+ * same as false) for states that did not clear the bar; 'secondary'
+ * (a dimmed version of the existing silver-haze, not a new hue) for
+ * real facts that are not a state at all; 'default' (frost, unchanged)
+ * for the two fields that were already correct as plain facts.
+ */
+type StatusTone = 'default' | 'confirmed' | 'weak' | 'rejected' | 'secondary'
+
+function statusTone(status: string): StatusTone {
+  if (status === 'ACTIVE' || status === 'PROMOTED') return 'confirmed'
+  if (status === 'REJECTED' || status === 'EXPIRED') return 'rejected'
+  // WEAK, CANDIDATE, DRAFT, DORMANT -- real, early/uncertain states.
+  return 'weak'
+}
+
+function evidenceTone(tier: string): StatusTone {
+  if (tier === 'UNASSESSED') return 'weak'
+  return 'confirmed'
+}
+
+function StatusItem({
+  label,
+  value,
+  tone = 'default',
+}: {
+  label: string
+  value: string
+  tone?: StatusTone
+}): React.JSX.Element {
+  const toneClass: Record<StatusTone, string> = {
+    default: 'text-frost',
+    confirmed: 'text-mint-signal',
+    weak: 'text-weak-signal',
+    rejected: 'text-rejected',
+    secondary: 'text-silver-haze opacity-70',
+  }
   return (
     <div>
       <p className="font-caption mb-0.5 text-silver-haze">{label.toUpperCase()}</p>
-      <p className="text-frost">{value}</p>
+      <p className={toneClass[tone]}>{value}</p>
     </div>
   )
 }
