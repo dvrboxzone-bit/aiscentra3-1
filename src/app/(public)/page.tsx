@@ -116,7 +116,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="signals" data-section="signals" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">01 — Signals</span>
+          <span className="font-caption mb-8 block text-silver-haze">Signals</span>
           <h2 className="font-display reveal mb-8 text-[12vw] text-frost md:text-[100px]">
             Scarce signals.
           </h2>
@@ -163,7 +163,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       >
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">02 — Forecasts</span>
+          <span className="font-caption mb-8 block text-silver-haze">Forecasts</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             Forecasts.
           </h2>
@@ -228,7 +228,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="news" data-section="observations" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">03 — Observations</span>
+          <span className="font-caption mb-8 block text-silver-haze">Observations</span>
           <div className="mb-12 flex flex-col gap-8 md:flex-row md:items-end">
             <h2 className="font-display reveal flex-1 text-[12vw] text-frost md:text-[100px]">
               Observations.
@@ -255,7 +255,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="memory" data-section="strategic-memory" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">04 — Strategic Memory</span>
+          <span className="font-caption mb-8 block text-silver-haze">Strategic Memory</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             Institutional memory.
           </h2>
