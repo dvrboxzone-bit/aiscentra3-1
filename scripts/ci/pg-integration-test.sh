@@ -38,6 +38,14 @@ if [[ -z "$PGBIN" ]]; then
   exit 1
 fi
 export PATH="$PGBIN:$PATH"
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+  # Normalize native psql CRLF stdout for Bash read loops; preserve its exit status via pipefail.
+  psql() {
+    command psql "$@" | tr -d '\r'
+    PSQL_NATIVE_STATUS=${PIPESTATUS[0]}
+    return "$PSQL_NATIVE_STATUS"
+  }
+fi
 
 MIGRATION="supabase/migrations/20260808150000_create_ai_token_budget.sql"
 HARDENING_MIGRATION="supabase/migrations/20260809040000_harden_ai_token_budget_grants.sql"
@@ -93,14 +101,26 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Booting throwaway PostgreSQL in $DIR (port $PORT)..."
-run "initdb -D $DIR/data -U postgres --auth=trust" >/dev/null 2>&1
-run "pg_ctl -D $DIR/data -o '-p $PORT -k $DIR -c listen_addresses=' -l $DIR/log start" >/dev/null 2>&1
+INITDB_LOCALE_ARGS=""
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+  # The harness asserts stable English PostgreSQL error classes/messages.
+  INITDB_LOCALE_ARGS="--locale=C"
+fi
+run "initdb -D $DIR/data -U postgres --auth=trust $INITDB_LOCALE_ARGS" >/dev/null 2>&1
+PGTEST_HOST="$DIR"
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+  PGTEST_HOST="127.0.0.1"
+  # Windows PostgreSQL has no Unix-domain sockets. Bind loopback only.
+  run "pg_ctl -D $DIR/data -o '-p $PORT -h 127.0.0.1' -l $DIR/log start" >/dev/null 2>&1
+else
+  run "pg_ctl -D $DIR/data -o '-p $PORT -k $DIR -c listen_addresses=' -l $DIR/log start" >/dev/null 2>&1
+fi
 for _ in $(seq 1 20); do
-  psql -h "$DIR" -p "$PORT" -U postgres -tAqc "SELECT 1" >/dev/null 2>&1 && break
+  psql -h "$PGTEST_HOST" -p "$PORT" -U postgres -tAqc "SELECT 1" >/dev/null 2>&1 && break
   sleep 0.5
 done
 
-PG="psql -h $DIR -p $PORT -U postgres -tAq"
+PG="psql -h $PGTEST_HOST -p $PORT -U postgres -tAq"
 $PG -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null || { echo "FATAL: server did not start"; exit 1; }
 
 # Supabase-specific roles the migrations reference. anon/authenticated
@@ -1421,6 +1441,7 @@ check "repeated PRIMARY finalization is idempotent" "t|1|1|1" \
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then
+  PGTEST_HOST="$PGTEST_HOST" PGTEST_PORT="$PORT" node --import tsx scripts/ci/enrichment-execution-pg.ts
   echo "PASS: all PostgreSQL integration checks succeeded."
 else
   echo "FAIL: one or more PostgreSQL integration checks failed."

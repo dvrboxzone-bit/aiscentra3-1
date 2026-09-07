@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { guardEnrichmentExecution } from '@/lib/security/enrichment-execution'
 
 import { processBatchOfObservations, type BatchProcessingDeps } from '@/app/api/enrich/batch/route'
 import {
@@ -179,6 +180,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const executionSkip = await guardEnrichmentExecution()
+  if (executionSkip) return executionSkip
 
   let body: unknown
   try {

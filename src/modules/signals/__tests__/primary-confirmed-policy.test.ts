@@ -160,7 +160,7 @@ describe('PRIMARY_CONFIRMED policy V1', () => {
 
   test('trust, hostname, title, and model output are not policy predicates', () => {
     const operation = migration.match(
-      /CREATE OR REPLACE FUNCTION public\.apply_primary_confirmed_signal_v1[\s\S]*?\nEND;\n\$\$;/,
+      /CREATE OR REPLACE FUNCTION public\.apply_primary_confirmed_signal_v1[\s\S]*?\r?\nEND;\r?\n\$\$;/,
     )?.[0]
     assert.ok(operation)
     assert.doesNotMatch(operation, /trust_score|hostname|source\.name|observation\.title/i)

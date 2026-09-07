@@ -10,6 +10,7 @@
  * Called by: /api/cron/enrich (scheduled after collection)
  */
 import { NextResponse } from 'next/server'
+import { guardEnrichmentExecution } from '@/lib/security/enrichment-execution'
 import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation } from '@/modules/signals/engine'
 import { markObservationProcessed } from '@/modules/observations/queries'
@@ -29,6 +30,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const executionSkip = await guardEnrichmentExecution()
+  if (executionSkip) return executionSkip
 
   // Same shared-deadline contour as /api/enrich/batch (see
   // src/lib/ai/deadline.ts), sized to this route's own maxDuration=10.

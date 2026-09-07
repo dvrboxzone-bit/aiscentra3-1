@@ -68,6 +68,7 @@
  * Also available for manual drain.
  */
 import { NextResponse } from 'next/server'
+import { guardEnrichmentExecution } from '@/lib/security/enrichment-execution'
 import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation, type SignalEngineResult } from '@/modules/signals/engine'
 import {
@@ -1042,6 +1043,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const executionSkip = await guardEnrichmentExecution()
+  if (executionSkip) return executionSkip
 
   const startedAt = Date.now()
   const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
