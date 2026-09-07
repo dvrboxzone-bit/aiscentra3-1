@@ -373,8 +373,16 @@ export function VfinalAssistantPanel(): React.JSX.Element | null {
             paired with `opacity-60`, the same real, already-
             established muting pattern this project's own footer uses
             for its own small-print copyright line, not a new,
-            invented style. */}
-        <p className="border-t border-border-subtle bg-deep-obsidian px-4 pb-3 pt-2 text-xs text-silver-haze opacity-60">
+            invented style.
+            Real font-weight fix (explicit owner instruction,
+            2026-09-06): the real, computed weight was already 400
+            (browser default -- confirmed via getComputedStyle in a
+            live browser check), not a bold class, but the owner
+            reported it still reading as bold visually. Added explicit
+            `font-light` to guarantee it renders genuinely lighter
+            regardless of this specific self-hosted font's own default
+            glyph weight at 400. */}
+        <p className="border-t border-border-subtle bg-deep-obsidian px-4 pb-3 pt-2 text-xs font-light text-silver-haze opacity-60">
           The Assistant explains data — it doesn&rsquo;t create it. Answers can distort the
           underlying Signals and Evidence — verify against the record, not the reply.
         </p>

@@ -116,7 +116,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="signals" data-section="signals" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">01 — Signals</span>
+          <span className="font-caption mb-8 block text-silver-haze">Signals</span>
           <h2 className="font-display reveal mb-8 text-[12vw] text-frost md:text-[100px]">
             Scarce signals.
           </h2>
@@ -163,7 +163,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       >
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">02 — Forecasts</span>
+          <span className="font-caption mb-8 block text-silver-haze">Forecasts</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             Forecasts.
           </h2>
@@ -194,9 +194,6 @@ export default async function HomePage(): Promise<React.JSX.Element> {
                   validation.
                 </p>
               </div>
-              <Link href="/forecasts" className="arrow-link" data-field="forecasts-link">
-                EXPLORE FORECASTS <span>→</span>
-              </Link>
             </div>
             <div className="reveal grid grid-cols-2 gap-6">
               <VfinalImageSlot
@@ -209,6 +206,19 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               />
             </div>
           </div>
+          {/* REAL ADDITION (explicit owner instruction, 2026-09-06):
+              same real btn-pill magnetic button already used at the
+              bottom of the Signals block above, matching its exact
+              design (rounds, lightens on hover) -- replaces the
+              earlier inline "EXPLORE FORECASTS" arrow-link (same real
+              destination, /forecasts, just a different, inconsistent
+              visual treatment than the rest of the page). Placed
+              bottom-left of the whole block, per direct instruction. */}
+          <div className="mt-12">
+            <Link href="/forecasts" className="btn-pill magnetic">
+              Open forecast log ↗
+            </Link>
+          </div>
         </div>
       </section>
 
@@ -218,7 +228,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="news" data-section="observations" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">03 — Observations</span>
+          <span className="font-caption mb-8 block text-silver-haze">Observations</span>
           <div className="mb-12 flex flex-col gap-8 md:flex-row md:items-end">
             <h2 className="font-display reveal flex-1 text-[12vw] text-frost md:text-[100px]">
               Observations.
@@ -245,7 +255,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
       <section id="memory" data-section="strategic-memory" className="textured-bg px-6 py-24">
         <div className="tech-grid" />
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <span className="font-caption mb-8 block text-silver-haze">04 — Strategic Memory</span>
+          <span className="font-caption mb-8 block text-silver-haze">Strategic Memory</span>
           <h2 className="font-display reveal mb-12 text-[12vw] text-frost md:text-[100px]">
             Institutional memory.
           </h2>
@@ -264,6 +274,16 @@ export default async function HomePage(): Promise<React.JSX.Element> {
               </div>
             </div>
             <VfinalStrategicMemoryCanvas />
+          </div>
+          {/* REAL ADDITION (explicit owner instruction, 2026-09-06):
+              same real btn-pill magnetic button design as the
+              Signals and Forecasts blocks -- this block had no such
+              link at all before. Placed bottom-left of the whole
+              block, per direct instruction. */}
+          <div className="mt-12">
+            <Link href="/strategic-memory" className="btn-pill magnetic">
+              Open memory archive ↗
+            </Link>
           </div>
         </div>
       </section>
