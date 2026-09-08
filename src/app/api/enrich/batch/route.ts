@@ -68,7 +68,10 @@
  * Also available for manual drain.
  */
 import { NextResponse } from 'next/server'
-import { guardEnrichmentExecution } from '@/lib/security/enrichment-execution'
+import {
+  acquireEnrichmentExecutionAdmission,
+  releaseEnrichmentExecutionAdmission,
+} from '@/lib/security/enrichment-execution'
 import { createAdminClient } from '@/lib/supabase/server'
 import { processObservation, type SignalEngineResult } from '@/modules/signals/engine'
 import {
@@ -1044,135 +1047,141 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const executionSkip = await guardEnrichmentExecution()
-  if (executionSkip) return executionSkip
-
-  const startedAt = Date.now()
-  const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
-  const supabase = createAdminClient()
-
-  // ── Cross-platform execution lock ─────────────────────────────────────────
-  // Every automatic enrichment trigger funnels through THIS route:
-  // the GitHub schedule, a manual GitHub dispatch, and the Vercel cron
-  // (/api/cron/pipeline awaits /api/enrich/batch). Taking the lease
-  // here therefore covers all of them, which GitHub's own
-  // `concurrency:` cannot -- it is blind to the Vercel trigger.
-  //
-  // A losing run exits 200 with acquired_lock=false and, critically,
-  // WITHOUT contacting Groq: an overlapping cycle is a normal outcome
-  // to skip, not an error to report.
-  const lockHolder = `enrich-batch:${startedAt}:${Math.random().toString(36).slice(2, 10)}`
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- repo convention for Supabase RPC calls
-  const lockClient = supabase as any
-  const gotLock = await acquireEnrichmentLock(lockClient, lockHolder)
-  if (!gotLock) {
-    console.warn(`[enrich/batch] another enrichment cycle holds the lock; skipping (${lockHolder})`)
-    return NextResponse.json({
-      skipped: true,
-      reason: 'enrichment_already_running',
-      acquired_lock: false,
-      duration_ms: Date.now() - startedAt,
-      timestamp: new Date().toISOString(),
-    })
-  }
-
-  // Ledger maintenance, run opportunistically now that we hold the
-  // lock. Deliberately NOT a separate cron: an extra schedule would be
-  // one more thing to configure by hand in production, and the ledger
-  // grew unbounded precisely because cleanup existed only as an
-  // uncalled function. Never throws.
-  const prunedRows = await pruneTokenLedger(lockClient)
-  if (prunedRows > 0) {
-    console.info(`[enrich/batch] pruned ${prunedRows} expired token-ledger row(s)`)
-  }
+  const execution = await acquireEnrichmentExecutionAdmission(maxDuration + 5)
+  if (execution.response) return execution.response
 
   try {
-    const deps: BatchProcessingDeps = {
-      fetchSourceInfo: async (sourceId: string): Promise<FetchSourceInfoResult> => {
-        const { data: source, error: sourceReadError } = (await supabase
-          .from('sources')
-          .select('trust_score, name, type')
-          .eq('id', sourceId)
-          .single()) as {
-          data: { trust_score: number | null; name: string | null; type: string | null } | null
-          error: { message: string } | null
-        }
-        // REAL BUG FIXED: the `error` field was previously destructured
-        // out entirely and discarded -- a genuine read failure (network
-        // error, RLS issue, connection reset) was indistinguishable from
-        // "this source legitimately has no name/trust_score," and both
-        // silently fell back to trustScore=0.5/sourceName='Unknown
-        // Source'. A real read failure must be surfaced honestly so the
-        // caller can requeue instead of scoring against fabricated
-        // values.
-        if (sourceReadError) {
-          return { ok: false, trustScore: 0, sourceName: '', error: sourceReadError.message }
-        }
-        return {
-          ok: true,
-          trustScore: source?.trust_score ?? 0.5,
-          sourceName: source?.name ?? 'Unknown Source',
-        }
-      },
-      fetchObservationsPage: (pageIndex: number, limit: number) =>
-        fetchNextReadyPage(supabase, pageIndex, limit),
-      processObservation,
-      markObservationProcessed,
-      markObservationForRetry,
+    const startedAt = Date.now()
+    const deadlineAt = startedAt + maxDuration * 1000 - DEADLINE_BUFFER_MS
+    const supabase = createAdminClient()
+
+    // ── Cross-platform execution lock ─────────────────────────────────────────
+    // Every automatic enrichment trigger funnels through THIS route:
+    // the GitHub schedule, a manual GitHub dispatch, and the Vercel cron
+    // (/api/cron/pipeline awaits /api/enrich/batch). Taking the lease
+    // here therefore covers all of them, which GitHub's own
+    // `concurrency:` cannot -- it is blind to the Vercel trigger.
+    //
+    // A losing run exits 200 with acquired_lock=false and, critically,
+    // WITHOUT contacting Groq: an overlapping cycle is a normal outcome
+    // to skip, not an error to report.
+    const lockHolder = `enrich-batch:${startedAt}:${Math.random().toString(36).slice(2, 10)}`
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- repo convention for Supabase RPC calls
+    const lockClient = supabase as any
+    const gotLock = await acquireEnrichmentLock(lockClient, lockHolder)
+    if (!gotLock) {
+      console.warn(
+        `[enrich/batch] another enrichment cycle holds the lock; skipping (${lockHolder})`,
+      )
+      return NextResponse.json({
+        skipped: true,
+        reason: 'enrichment_already_running',
+        acquired_lock: false,
+        duration_ms: Date.now() - startedAt,
+        timestamp: new Date().toISOString(),
+      })
     }
 
-    // Real queue-depth/oldest-pending snapshot taken BEFORE this cycle
-    // drains anything -- "at the start of this cycle," not after.
-    const queueSnapshot = await getObservationStats()
+    // Ledger maintenance, run opportunistically now that we hold the
+    // lock. Deliberately NOT a separate cron: an extra schedule would be
+    // one more thing to configure by hand in production, and the ledger
+    // grew unbounded precisely because cleanup existed only as an
+    // uncalled function. Never throws.
+    const prunedRows = await pruneTokenLedger(lockClient)
+    if (prunedRows > 0) {
+      console.info(`[enrich/batch] pruned ${prunedRows} expired token-ledger row(s)`)
+    }
 
-    const combinedStats = await runEnrichmentCycle(deadlineAt, deps)
+    try {
+      const deps: BatchProcessingDeps = {
+        fetchSourceInfo: async (sourceId: string): Promise<FetchSourceInfoResult> => {
+          const { data: source, error: sourceReadError } = (await supabase
+            .from('sources')
+            .select('trust_score, name, type')
+            .eq('id', sourceId)
+            .single()) as {
+            data: { trust_score: number | null; name: string | null; type: string | null } | null
+            error: { message: string } | null
+          }
+          // REAL BUG FIXED: the `error` field was previously destructured
+          // out entirely and discarded -- a genuine read failure (network
+          // error, RLS issue, connection reset) was indistinguishable from
+          // "this source legitimately has no name/trust_score," and both
+          // silently fell back to trustScore=0.5/sourceName='Unknown
+          // Source'. A real read failure must be surfaced honestly so the
+          // caller can requeue instead of scoring against fabricated
+          // values.
+          if (sourceReadError) {
+            return { ok: false, trustScore: 0, sourceName: '', error: sourceReadError.message }
+          }
+          return {
+            ok: true,
+            trustScore: source?.trust_score ?? 0.5,
+            sourceName: source?.name ?? 'Unknown Source',
+          }
+        },
+        fetchObservationsPage: (pageIndex: number, limit: number) =>
+          fetchNextReadyPage(supabase, pageIndex, limit),
+        processObservation,
+        markObservationProcessed,
+        markObservationForRetry,
+      }
 
-    const duration = Date.now() - startedAt
+      // Real queue-depth/oldest-pending snapshot taken BEFORE this cycle
+      // drains anything -- "at the start of this cycle," not after.
+      const queueSnapshot = await getObservationStats()
 
-    // Real, persisted metrics -- previously this data existed only in
-    // this HTTP response body, never queryable after the fact.
-    //
-    // REAL BUG FIXED (production incident: metrics contradicted the
-    // decision log): itemsAttempted was previously computed as
-    // `processed + errors + rejected`, but `processed` ALREADY
-    // included both the rejected and error-classified subsets (it was
-    // incremented unconditionally before the success/rejected/error
-    // sub-classification) -- rejected and error items were counted
-    // TWICE. combinedStats.attempted is now a single, directly-
-    // maintained counter (see the classifyOutcome-based accounting
-    // above), honestly satisfying the real, enforced contract:
-    //
-    //     attempted = succeeded + rejected + failed + retried
-    //
-    // (see BatchStats.attempted's own comment for the full invariant)
-    // -- with no addition needed here.
-    await recordCycleMetrics(lockClient, {
-      cycleType: 'enrichment',
-      startedAt,
-      completedAt: startedAt + duration,
-      itemsAttempted: combinedStats.attempted,
-      itemsSucceeded: combinedStats.succeeded,
-      itemsRejected: combinedStats.rejected,
-      itemsRetried: combinedStats.retried,
-      itemsFailed: combinedStats.failed,
-      failureBreakdown: combinedStats.error_breakdown as unknown as Record<string, number>,
-      stoppedReason: combinedStats.stopped_reason,
-      itemLatenciesMs: combinedStats.item_latencies_ms,
-      queueDepth: queueSnapshot.unprocessed,
-      oldestPendingAgeSeconds: queueSnapshot.oldestPendingAgeSeconds,
-    })
+      const combinedStats = await runEnrichmentCycle(deadlineAt, deps)
 
-    return NextResponse.json({
-      ...combinedStats,
-      acquired_lock: true,
-      pruned_ledger_rows: prunedRows,
-      duration_ms: duration,
-      timestamp: new Date().toISOString(),
-    })
+      const duration = Date.now() - startedAt
+
+      // Real, persisted metrics -- previously this data existed only in
+      // this HTTP response body, never queryable after the fact.
+      //
+      // REAL BUG FIXED (production incident: metrics contradicted the
+      // decision log): itemsAttempted was previously computed as
+      // `processed + errors + rejected`, but `processed` ALREADY
+      // included both the rejected and error-classified subsets (it was
+      // incremented unconditionally before the success/rejected/error
+      // sub-classification) -- rejected and error items were counted
+      // TWICE. combinedStats.attempted is now a single, directly-
+      // maintained counter (see the classifyOutcome-based accounting
+      // above), honestly satisfying the real, enforced contract:
+      //
+      //     attempted = succeeded + rejected + failed + retried
+      //
+      // (see BatchStats.attempted's own comment for the full invariant)
+      // -- with no addition needed here.
+      await recordCycleMetrics(lockClient, {
+        cycleType: 'enrichment',
+        startedAt,
+        completedAt: startedAt + duration,
+        itemsAttempted: combinedStats.attempted,
+        itemsSucceeded: combinedStats.succeeded,
+        itemsRejected: combinedStats.rejected,
+        itemsRetried: combinedStats.retried,
+        itemsFailed: combinedStats.failed,
+        failureBreakdown: combinedStats.error_breakdown as unknown as Record<string, number>,
+        stoppedReason: combinedStats.stopped_reason,
+        itemLatenciesMs: combinedStats.item_latencies_ms,
+        queueDepth: queueSnapshot.unprocessed,
+        oldestPendingAgeSeconds: queueSnapshot.oldestPendingAgeSeconds,
+      })
+
+      return NextResponse.json({
+        ...combinedStats,
+        acquired_lock: true,
+        pruned_ledger_rows: prunedRows,
+        duration_ms: duration,
+        timestamp: new Date().toISOString(),
+      })
+    } finally {
+      // Always released, including on an unexpected throw. Even if this
+      // never runs (process killed mid-flight), the lease expires on its
+      // own -- that is the whole point of a TTL row over an advisory lock.
+      await releaseEnrichmentLock(lockClient, lockHolder)
+    }
   } finally {
-    // Always released, including on an unexpected throw. Even if this
-    // never runs (process killed mid-flight), the lease expires on its
-    // own -- that is the whole point of a TTL row over an advisory lock.
-    await releaseEnrichmentLock(lockClient, lockHolder)
+    await releaseEnrichmentExecutionAdmission(execution.admission)
   }
 }

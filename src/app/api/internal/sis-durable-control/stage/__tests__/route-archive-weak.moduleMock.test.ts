@@ -157,6 +157,7 @@ test('score 2.8 ARCHIVE reaches parser and finalizes a non-public WEAK signal', 
   const { POST } = await import('../route')
   const request = new Request('https://aiscentra.test/api/internal/sis-durable-control/stage', {
     method: 'POST',
+    headers: { 'x-sis-canary-holder': 'github:100:1' },
   })
 
   assert.equal((await POST(request)).status, 200)

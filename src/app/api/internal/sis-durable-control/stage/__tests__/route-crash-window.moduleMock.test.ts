@@ -70,6 +70,7 @@ test('FINALIZE redelivery retries only finalization and never invokes a provider
   const { POST } = await import('../route')
   const request = new Request('https://aiscentra.test/api/internal/sis-durable-control/stage', {
     method: 'POST',
+    headers: { 'x-sis-canary-holder': 'github:100:1' },
   })
 
   const first = await POST(request)

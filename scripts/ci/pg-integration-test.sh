@@ -71,6 +71,8 @@ DURABLE_SIS_REPAIR_MIGRATION="supabase/migrations/20260828143422_fix_durable_sis
 [[ -f "$DURABLE_SIS_REPAIR_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_REPAIR_MIGRATION not found (run from repo root)"; exit 1; }
 DURABLE_SIS_CANARY_MIGRATION="supabase/migrations/20260829035009_unlock_durable_sis_canary.sql"
 [[ -f "$DURABLE_SIS_CANARY_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_CANARY_MIGRATION not found (run from repo root)"; exit 1; }
+DURABLE_SIS_ISOLATION_MIGRATION="supabase/migrations/20260907154204_isolate_durable_sis_canary.sql"
+[[ -f "$DURABLE_SIS_ISOLATION_MIGRATION" ]] || { echo "FATAL: $DURABLE_SIS_ISOLATION_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$HARDENING_MIGRATION" ]] || { echo "FATAL: $HARDENING_MIGRATION not found (run from repo root)"; exit 1; }
 [[ -f "$MIGRATION" ]] || { echo "FATAL: $MIGRATION not found (run from repo root)"; exit 1; }
 
@@ -645,7 +647,13 @@ $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_REPAIR_MIGRATION" >/dev/null
 $PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_CANARY_MIGRATION" >/dev/null
-FULL_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
+FULL_SCHEMA_MISSING="$($PG -v ON_ERROR_STOP=1 <<SQL
+BEGIN;
+\i $DURABLE_SIS_ISOLATION_MIGRATION
+\i scripts/release/schema-check.sql
+ROLLBACK;
+SQL
+)"
 check "the complete schema produces zero missing-object rows (gate passes)" "" "$FULL_SCHEMA_MISSING"
 
 echo ""
@@ -1038,7 +1046,7 @@ SQL
 
 PHASE1_SCHEMA_MISSING="$($PG -f scripts/release/schema-check.sql)"
 PHASE1_SCHEMA_MISSING_COUNT="$(echo "$PHASE1_SCHEMA_MISSING" | grep -c '^MISSING' || true)"
-check "a schema without Phase 1 produces exactly 24 quality missing-object rows" "24" "$PHASE1_SCHEMA_MISSING_COUNT"
+check "a schema without Phase 1 plus pending isolation produces exactly 29 missing-object rows" "29" "$PHASE1_SCHEMA_MISSING_COUNT"
 check "the missing quality enum is named" "1" \
   "$(echo "$PHASE1_SCHEMA_MISSING" | grep -c 'MISSING TYPE: public.signal_quality_state')"
 check "the missing quality ledger is named" "1" \
@@ -1071,7 +1079,7 @@ OLD_SCHEMA_MISSING_COUNT="$(echo "$OLD_SCHEMA_MISSING" | grep -c '^MISSING' || t
 # = 13. (An earlier version of this test asserted 9, undercounting the
 # pipeline_metrics column cascade -- caught by running this exact test
 # and correcting the expectation, not the query.)
-check "the real PR #44 schema (incomplete) produces exactly 39 missing-object rows (15 PR #45 gaps + 24 Phase 1 gaps)" "39" "$OLD_SCHEMA_MISSING_COUNT"
+check "the real PR #44 schema plus pending isolation produces exactly 44 missing-object rows" "44" "$OLD_SCHEMA_MISSING_COUNT"
 check "the specific incident-causing gap (has_verified_source) is named in the output" "1" \
   "$(echo "$OLD_SCHEMA_MISSING" | grep -c 'MISSING COLUMN: signals.has_verified_source')"
 check "the missing pipeline_metrics table is named" "1" \
@@ -1187,7 +1195,8 @@ check "items_retried's real column comment does NOT contain the old, contradicto
 echo "  -- final restore: apply Phase 1 after all tests that intentionally mutate Signals --"
 $PG -v ON_ERROR_STOP=1 -f "$QUALITY_FOUNDATION_MIGRATION" >/dev/null
 POST_RESTORE_MISSING="$($PG -f scripts/release/schema-check.sql)"
-check "schema restoration after TEST 17's intentional drops is genuinely complete" "" "$POST_RESTORE_MISSING"
+check "schema restoration leaves only the five intentionally pending isolation objects" "5" \
+  "$(echo "$POST_RESTORE_MISSING" | grep -c .)"
 
 echo ""
 echo "TEST 19 — DRAFT corroboration/approval is provenance-aware, atomic, and idempotent"
@@ -1438,6 +1447,75 @@ check "retry after transaction rollback succeeds exactly once" "ACTIVE|APPROVED|
 PRIMARY_DUPLICATE="$($PG -c "SELECT (public.finalize_durable_sis_v1('$PRIMARY_ROLLBACK_RUN',(SELECT finalization_message_id FROM public.sis_execution_runs WHERE id='$PRIMARY_ROLLBACK_RUN'))->>'duplicate')::boolean;")"
 check "repeated PRIMARY finalization is idempotent" "t|1|1|1" \
   "$PRIMARY_DUPLICATE|$($PG -c "SELECT (SELECT count(*) FROM signals WHERE '$PRIMARY_ROLLBACK_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$PRIMARY_ROLLBACK_OBS')||'|'||(SELECT count(*) FROM signal_primary_evidence_audits WHERE observation_id='$PRIMARY_ROLLBACK_OBS');")"
+
+echo ""
+echo "TEST 21 — Durable canary and legacy admission are transactionally isolated"
+$PG -v ON_ERROR_STOP=1 -f "$DURABLE_SIS_ISOLATION_MIGRATION" >/dev/null
+check "schema gate passes after the isolation migration" "" \
+  "$($PG -f scripts/release/schema-check.sql)"
+ISOLATION_SOURCE="71717171-7171-4717-8717-717171717171"
+ISOLATION_OBS_A="78787878-7878-4787-8787-787878787878"
+ISOLATION_OBS_B="79797979-7979-4797-8797-797979797979"
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+DELETE FROM pgmq.q_durable_sis_v1;
+DELETE FROM public.execution_locks;
+INSERT INTO public.sources(id,name,type,status,url)
+VALUES ('$ISOLATION_SOURCE','Isolation source','research','ACTIVE','https://example.test/source')
+ON CONFLICT (id) DO UPDATE SET status='ACTIVE';
+INSERT INTO public.observations(id,source_id,title,content,url,processed,url_verified_ok)
+VALUES
+  ('$ISOLATION_OBS_A','$ISOLATION_SOURCE','Exact canary A','Substantive fixture A','https://example.test/a',false,true),
+  ('$ISOLATION_OBS_B','$ISOLATION_SOURCE','Exact canary B','Substantive fixture B','https://example.test/b',false,true)
+ON CONFLICT (id) DO UPDATE SET processed=false,signal_id=null,qualification_result=null,rejection_code=null;
+UPDATE public.sis_execution_controls
+SET execution_enabled=false,execution_scope='LEGACY',groq_daily_token_limit=30000,
+    cloudflare_daily_request_limit=20,max_attempts_per_stage=3
+WHERE control_key='durable_sis_v1_control_20260825';
+SQL
+
+check "disabled state denies legacy admission without a lease" "DISABLED|0" \
+  "$($PG -c "SELECT public.acquire_legacy_enrichment_admission('disabled',65)||'|'||(SELECT count(*) FROM execution_locks);")"
+$PG -c "UPDATE public.sis_execution_controls SET execution_enabled=true WHERE control_key='durable_sis_v1_control_20260825';" >/dev/null
+( $PG -c "SELECT public.acquire_legacy_enrichment_admission('legacy-a',65);" > "$DIR/legacy-a" ) &
+( $PG -c "SELECT public.acquire_legacy_enrichment_admission('legacy-b',65);" > "$DIR/legacy-b" ) &
+wait
+check "two concurrent legacy requests receive distinct shared admissions" "2" \
+  "$($PG -c "SELECT count(*) FROM execution_locks WHERE lock_name LIKE 'legacy-enrichment-admission:%' AND expires_at>now();")"
+$PG -c "UPDATE public.sis_execution_controls SET execution_enabled=false WHERE control_key='durable_sis_v1_control_20260825';" >/dev/null
+check "already-admitted legacy requests block canary atomically" "BUSY|false" \
+  "$($PG -c "SELECT result->>'status'||'|'||(result->>'started') FROM (SELECT public.start_durable_sis_v1_control('$ISOLATION_OBS_A','groq','fixture',100,'groq_tokens','github:1:1',780) result) q;")"
+$PG -c "DELETE FROM execution_locks WHERE lock_name LIKE 'legacy-enrichment-admission:%';" >/dev/null
+
+( $PG -c "SELECT public.start_durable_sis_v1_control('$ISOLATION_OBS_A','groq','fixture',100,'groq_tokens','github:2:1',780);" > "$DIR/canary-a" ) &
+( $PG -c "SELECT public.start_durable_sis_v1_control('$ISOLATION_OBS_B','groq','fixture',100,'groq_tokens','github:3:1',780);" > "$DIR/canary-b" ) &
+wait
+check "concurrent canary starts create exactly one nonfailed run and one message" "1|1|DURABLE_CANARY|true" \
+  "$($PG -c "SELECT (SELECT count(*) FROM sis_execution_runs WHERE status NOT IN ('FINALIZED','FAILED'))||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1)||'|'||execution_scope||'|'||execution_enabled FROM sis_execution_controls WHERE control_key='durable_sis_v1_control_20260825';")"
+ACTIVE_ISOLATION_OBS="$($PG -c "SELECT observation_id FROM sis_execution_runs WHERE status NOT IN ('FINALIZED','FAILED') LIMIT 1;")"
+ACTIVE_HOLDER="$($PG -c "SELECT holder FROM execution_locks WHERE lock_name='durable-sis-canary';")"
+check "canary scope blocks every new legacy admission" "SCOPE_BLOCKED" \
+  "$($PG -c "SELECT public.acquire_legacy_enrichment_admission('legacy-during-canary',65);")"
+check "wrong holder cannot claim or mutate the queued attempt" "0|QUEUED" \
+  "$($PG -c "SELECT (SELECT count(*) FROM public.claim_durable_sis_v1_attempt('github:999:1',55))||'|'||(SELECT status FROM sis_execution_attempts LIMIT 1);")"
+CLAIMED_ISOLATION_OBS="$($PG -c "SELECT observation_id FROM public.claim_durable_sis_v1_attempt('$ACTIVE_HOLDER',55);")"
+check "lease holder claims only the exact selected observation" "$ACTIVE_ISOLATION_OBS|RUNNING" \
+  "$CLAIMED_ISOLATION_OBS|$($PG -c "SELECT status FROM sis_execution_attempts LIMIT 1;")"
+STOP_RESULT="$($PG -c "SELECT public.stop_durable_sis_v1_canary('$ACTIVE_HOLDER')->>'status';")"
+check "bounded stop handles cancellation as technical FAILED and restores kill-switch" "STOPPED|false|LEGACY|FAILED|0|0" \
+  "$STOP_RESULT|$($PG -c "SELECT control.execution_enabled||'|'||control.execution_scope||'|'||run.status||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1)||'|'||(SELECT count(*) FROM execution_locks WHERE lock_name='durable-sis-canary') FROM sis_execution_controls control JOIN sis_execution_runs run ON run.observation_id='$ACTIVE_ISOLATION_OBS' WHERE control.control_key='durable_sis_v1_control_20260825';")"
+check "cancelled canary leaves observation retryable with no Signal or decision" "false|0|0" \
+  "$($PG -c "SELECT processed||'|'||(SELECT count(*) FROM signals WHERE '$ACTIVE_ISOLATION_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$ACTIVE_ISOLATION_OBS') FROM observations WHERE id='$ACTIVE_ISOLATION_OBS';")"
+check "FAILED run permits one fresh exact-ID retry" "QUEUED|true" \
+  "$($PG -c "SELECT result->>'status'||'|'||(result->>'started') FROM (SELECT public.start_durable_sis_v1_control('$ACTIVE_ISOLATION_OBS','groq','fixture',100,'groq_tokens','github:4:1',780) result) q;")"
+$PG -c "UPDATE execution_locks SET expires_at=now()-interval '1 second' WHERE lock_name='durable-sis-canary';" >/dev/null
+check "expired canary lease denies provider claim" "0" \
+  "$($PG -c "SELECT count(*) FROM public.claim_durable_sis_v1_attempt('github:4:1',55);")"
+check "first legacy request after timeout reconciles but is not admitted" "SCOPE_BLOCKED|0" \
+  "$($PG -c "SELECT public.acquire_legacy_enrichment_admission('legacy-after-timeout',65)||'|'||(SELECT count(*) FROM execution_locks WHERE lock_name LIKE 'legacy-enrichment-admission:%');")"
+check "timeout reconciliation restores disabled state and preserves FAILED audit" "false|LEGACY|FAILED|0|0" \
+  "$($PG -c "SELECT control.execution_enabled||'|'||control.execution_scope||'|'||run.status||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1)||'|'||(SELECT count(*) FROM execution_locks WHERE lock_name='durable-sis-canary') FROM sis_execution_controls control JOIN sis_execution_runs run ON run.observation_id='$ACTIVE_ISOLATION_OBS' WHERE control.control_key='durable_sis_v1_control_20260825' ORDER BY run.created_at DESC LIMIT 1;")"
+check "subsequent legacy request observes the restored disabled switch" "DISABLED" \
+  "$($PG -c "SELECT public.acquire_legacy_enrichment_admission('legacy-after-reconcile',65);")"
 
 echo ""
 if [[ "$fail" -eq 0 ]]; then

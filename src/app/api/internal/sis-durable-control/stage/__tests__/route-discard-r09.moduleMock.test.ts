@@ -108,6 +108,7 @@ test('score below 2 DISCARD finalizes R-09 without parser or Signal', async (t) 
   const { POST } = await import('../route')
   const request = new Request('https://aiscentra.test/api/internal/sis-durable-control/stage', {
     method: 'POST',
+    headers: { 'x-sis-canary-holder': 'github:100:1' },
   })
   const response = await POST(request)
 

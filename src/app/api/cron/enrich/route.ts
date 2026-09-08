@@ -10,7 +10,7 @@
  * Each enrichment call = one AI call = stays within 10s timeout.
  */
 import { NextResponse } from 'next/server'
-import { guardEnrichmentExecution } from '@/lib/security/enrichment-execution'
+import { acquireEnrichmentExecutionAdmission } from '@/lib/security/enrichment-execution'
 import { createAdminClient } from '@/lib/supabase/server'
 
 export const maxDuration = 10
@@ -22,8 +22,11 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const executionSkip = await guardEnrichmentExecution()
-  if (executionSkip) return executionSkip
+  // This route dispatches child requests without awaiting them. Keep its
+  // admission until TTL instead of releasing at response time, so a canary
+  // cannot start in the network gap before each child acquires its own lease.
+  const execution = await acquireEnrichmentExecutionAdmission(maxDuration + 5)
+  if (execution.response) return execution.response
 
   const supabase = createAdminClient()
   const appUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://aiscentra.com'

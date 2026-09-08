@@ -34,6 +34,9 @@ const repairMigration = (): string =>
 const canaryMigration = (): string =>
   readFileSync('supabase/migrations/20260829035009_unlock_durable_sis_canary.sql', 'utf8')
 
+const isolationMigration = (): string =>
+  readFileSync('supabase/migrations/20260907154204_isolate_durable_sis_canary.sql', 'utf8')
+
 test('canary preserves separate provider reservation units and exact parser budget', () => {
   const messages = [{ role: 'user' as const, content: 'classify this observation' }]
   assert.equal(
@@ -341,14 +344,32 @@ test('manual canary workflow is owner-only, bounded, one-ID, and cannot call bat
   assert.doesNotMatch(workflow, /schedule:/)
   assert.match(workflow, /environment: production/)
   assert.match(workflow, /group: enrich-batch/)
-  assert.equal((workflow.match(/--retry 0/g) ?? []).length, 2)
+  assert.equal((workflow.match(/--retry 0/g) ?? []).length, 3)
   assert.equal((workflow.match(/--request POST/g) ?? []).length, 2)
+  assert.equal((workflow.match(/--request DELETE/g) ?? []).length, 1)
+  assert.equal((workflow.match(/x-sis-canary-holder/g) ?? []).length, 3)
+  assert.match(workflow, /if: always\(\)/)
   assert.match(workflow, /for pass in 1 2 3 4 5 6 7 8 9 10 11 12/)
   assert.match(workflow, /\{observation_id:\$observation_id\}/)
   assert.match(workflow, /test "\$started" = 1/)
   assert.match(workflow, /api\/internal\/sis-durable-control\/start/)
   assert.match(workflow, /api\/internal\/sis-durable-control\/stage/)
   assert.doesNotMatch(workflow, /api\/enrich\/batch|api\/internal\/sis-replay|api\/cron\//)
+})
+
+test('isolation migration uses existing leases for exact-ID canary and fail-closed legacy admission', () => {
+  const sql = isolationMigration()
+  assert.match(sql, /execution_scope in \('LEGACY', 'DURABLE_CANARY'\)/)
+  assert.match(sql, /acquire_legacy_enrichment_admission/)
+  assert.match(sql, /pg_advisory_xact_lock\(hashtext\('aiscentra\.execution-admission\.v1'\)\)/)
+  assert.match(sql, /legacy-enrichment-admission:%/)
+  assert.match(sql, /control_observation_id = p_observation_id/)
+  assert.match(sql, /holder = p_lease_holder and expires_at >= now\(\)/)
+  assert.match(sql, /stop_durable_sis_v1_canary/)
+  assert.match(sql, /expires_at < now\(\)[\s\S]*stop_durable_sis_v1_canary/)
+  assert.match(sql, /status='FAILED'/)
+  assert.match(sql, /'RELEASED'/)
+  assert.doesNotMatch(sql, /create table .*lease/is)
 })
 
 test('production schema gate requires PGMQ and every durable SIS contract', () => {
@@ -365,7 +386,7 @@ test('production schema gate requires PGMQ and every durable SIS contract', () =
     'finalize_durable_sis_v1',
     'finalization_outcome',
     'finalization_message_id',
-    'start_durable_sis_v1_control\\(uuid,text,text,integer,text\\)',
+    'start_durable_sis_v1_control\\(uuid,text,text,integer,text,text,integer\\)',
     'finalize_durable_sis_v1\\(uuid,bigint\\)',
   ]) {
     assert.match(gate, new RegExp(object))

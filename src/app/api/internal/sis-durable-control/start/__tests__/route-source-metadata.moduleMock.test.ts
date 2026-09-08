@@ -6,12 +6,6 @@ test('real source type reaches the Durable SIS start payload without fallback', 
   const reservations: string[] = []
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = []
 
-  const lockMock = mock.module('@/lib/ai/execution-lock', {
-    namedExports: {
-      acquireEnrichmentLock: async () => true,
-      releaseEnrichmentLock: async () => true,
-    },
-  })
   const modelsMock = mock.module('@/lib/ai/models', {
     namedExports: {
       getModelChain: () => [{ provider: 'groq', model: 'classifier-primary' }],
@@ -68,14 +62,16 @@ test('real source type reaches the Durable SIS start payload without fallback', 
     durableMock.restore()
     guardMock.restore()
     modelsMock.restore()
-    lockMock.restore()
   })
 
   const { POST } = await import('../route')
   const response = await POST(
     new Request('https://aiscentra.test/api/internal/sis-durable-control/start', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-sis-canary-holder': 'github:100:1',
+      },
       body: JSON.stringify({ observation_id: observation.id }),
     }),
   )
@@ -93,6 +89,8 @@ test('real source type reaches the Durable SIS start payload without fallback', 
         p_model: 'classifier-primary',
         p_units: 123,
         p_unit_kind: 'groq_tokens',
+        p_lease_holder: 'github:100:1',
+        p_lease_seconds: 780,
       },
     },
   ])

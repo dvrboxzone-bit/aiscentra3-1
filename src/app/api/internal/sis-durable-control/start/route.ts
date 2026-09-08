@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 
-import { acquireEnrichmentLock, releaseEnrichmentLock } from '@/lib/ai/execution-lock'
 import { getModelChain } from '@/lib/ai/models'
 import { isAuthorizedCronRequest } from '@/lib/security/cron-guard'
 import { createAdminClient } from '@/lib/supabase/server'
@@ -17,6 +16,7 @@ import {
 export const dynamic = 'force-dynamic'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const HOLDER_PATTERN = /^github:[0-9]+:[0-9]+$/
 
 async function readCanaryObservationId(request: Request): Promise<string | null> {
   const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null
@@ -35,6 +35,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!observationId) {
     return NextResponse.json({ error: 'Invalid canary observation' }, { status: 400 })
   }
+  const leaseHolder = request.headers.get('x-sis-canary-holder')
+  if (!leaseHolder || !HOLDER_PATTERN.test(leaseHolder)) {
+    return NextResponse.json({ error: 'Invalid canary lease holder' }, { status: 400 })
+  }
   const classifier = getModelChain('classifier')[0]
   if (!classifier) return NextResponse.json({ error: 'Classifier unavailable' }, { status: 503 })
 
@@ -45,62 +49,77 @@ export async function POST(request: Request): Promise<NextResponse> {
     ) => Promise<{ data: unknown; error: { message: string } | null }>
     from: (table: string) => any // eslint-disable-line @typescript-eslint/no-explicit-any
   }
-  const holder = `durable-sis-v1-start:${crypto.randomUUID()}`
-  if (!(await acquireEnrichmentLock(db, holder))) {
-    return NextResponse.json({ error: 'Enrichment locked' }, { status: 409 })
+  const { data: observation, error: observationError } = await db
+    .from('observations')
+    .select('id,source_id,title,content,url')
+    .eq('id', observationId)
+    .single()
+  if (observationError || !observation) {
+    return NextResponse.json({ error: 'Canary observation unavailable' }, { status: 503 })
   }
-  try {
-    const { data: observation, error: observationError } = await db
-      .from('observations')
-      .select('id,source_id,title,content,url')
-      .eq('id', observationId)
-      .single()
-    if (observationError || !observation) {
-      return NextResponse.json({ error: 'Canary observation unavailable' }, { status: 503 })
-    }
-    const { data: source, error: sourceError } = await db
-      .from('sources')
-      .select('name,type,status,url')
-      .eq('id', observation.source_id)
-      .single()
-    if (sourceError || !source || source.status !== 'ACTIVE') {
-      return NextResponse.json({ error: 'Canary source unavailable' }, { status: 503 })
-    }
-    const evidencePolicy = primaryEvidencePromptContext(
-      assessPrimaryEvidencePolicyV1({
-        sourceId: observation.source_id,
-        sourceUrl: source.url,
-        observationUrl: observation.url,
-      }),
-    )
-    const messages = [
-      { role: 'system' as const, content: SIS_SYSTEM_PROMPT },
-      {
-        role: 'user' as const,
-        content: buildSISPrompt(
-          observation.title,
-          observation.content,
-          source.name,
-          source.type,
-          evidencePolicy,
-        ),
-      },
-    ]
-    const reservation = budgetReservationFor(
-      messages,
-      classifier,
-      DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
-    )
-    const { data, error } = await db.rpc('start_durable_sis_v1_control', {
-      p_observation_id: observationId,
-      p_provider: classifier.provider,
-      p_model: classifier.model,
-      p_units: reservation.units,
-      p_unit_kind: reservation.unitKind,
-    })
-    if (error) return NextResponse.json({ error: 'Control start failed' }, { status: 503 })
-    return NextResponse.json(data)
-  } finally {
-    await releaseEnrichmentLock(db, holder)
+  const { data: source, error: sourceError } = await db
+    .from('sources')
+    .select('name,type,status,url')
+    .eq('id', observation.source_id)
+    .single()
+  if (sourceError || !source || source.status !== 'ACTIVE') {
+    return NextResponse.json({ error: 'Canary source unavailable' }, { status: 503 })
   }
+  const evidencePolicy = primaryEvidencePromptContext(
+    assessPrimaryEvidencePolicyV1({
+      sourceId: observation.source_id,
+      sourceUrl: source.url,
+      observationUrl: observation.url,
+    }),
+  )
+  const messages = [
+    { role: 'system' as const, content: SIS_SYSTEM_PROMPT },
+    {
+      role: 'user' as const,
+      content: buildSISPrompt(
+        observation.title,
+        observation.content,
+        source.name,
+        source.type,
+        evidencePolicy,
+      ),
+    },
+  ]
+  const reservation = budgetReservationFor(
+    messages,
+    classifier,
+    DURABLE_SIS_V1_CLASSIFIER_MAX_TOKENS,
+  )
+  const { data, error } = await db.rpc('start_durable_sis_v1_control', {
+    p_observation_id: observationId,
+    p_provider: classifier.provider,
+    p_model: classifier.model,
+    p_units: reservation.units,
+    p_unit_kind: reservation.unitKind,
+    p_lease_holder: leaseHolder,
+    p_lease_seconds: 780,
+  })
+  if (error) return NextResponse.json({ error: 'Control start failed' }, { status: 503 })
+  return NextResponse.json(data)
+}
+
+export async function DELETE(request: Request): Promise<NextResponse> {
+  if (!isAuthorizedCronRequest(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const leaseHolder = request.headers.get('x-sis-canary-holder')
+  if (!leaseHolder || !HOLDER_PATTERN.test(leaseHolder)) {
+    return NextResponse.json({ error: 'Invalid canary lease holder' }, { status: 400 })
+  }
+  const db = createAdminClient() as never as {
+    rpc: (
+      name: string,
+      args: Record<string, unknown>,
+    ) => Promise<{ data: unknown; error: { message: string } | null }>
+  }
+  const { data, error } = await db.rpc('stop_durable_sis_v1_canary', {
+    p_lease_holder: leaseHolder,
+  })
+  if (error) return NextResponse.json({ error: 'Control stop failed' }, { status: 503 })
+  return NextResponse.json(data)
 }
