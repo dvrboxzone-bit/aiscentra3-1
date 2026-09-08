@@ -17,7 +17,7 @@ test('only literal true admits enrichment; false and unavailable state fail clos
   assert.equal((await failure?.text())?.includes('private'), false)
 })
 
-test('real route boundaries: auth first; disabled/error perform only control SELECT, never mutations/providers', async () => {
+test('real route boundaries: auth first; denied admission performs no downstream work', async () => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://placeholder.supabase.co'
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key-placeholder'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-placeholder'
@@ -38,23 +38,22 @@ test('real route boundaries: auth first; disabled/error perform only control SEL
         globalThis.fetch = async (input, init) => {
           const url = String(input)
           calls.push(url)
-          if (url.includes('/sis_execution_controls?')) {
-            assert.equal(init?.method ?? 'GET', 'GET')
-            assert.ok(url.includes('control_key=eq.durable_sis_v1_control_20260825'))
+          if (url.includes('/rpc/acquire_legacy_enrichment_admission')) {
+            assert.equal(init?.method, 'POST')
             return new Response(
               JSON.stringify(
-                state === 'error'
-                  ? { message: 'unavailable' }
-                  : { execution_enabled: state === 'enabled' },
+                state === 'enabled'
+                  ? 'ADMITTED'
+                  : state === 'disabled'
+                    ? 'DISABLED'
+                    : { message: 'unavailable' },
               ),
-              {
-                status: state === 'error' ? 400 : 200,
-                headers: { 'Content-Type': 'application/json' },
-              },
+              { status: state === 'error' ? 400 : 200 },
             )
           }
           // Enabled batch hits its existing lock, but does not acquire it.
           if (url.includes('/rpc/acquire_execution_lock')) return new Response('false')
+          if (url.includes('/rpc/release_execution_lock')) return new Response('true')
           // Enabled single-item route finds an empty queue.
           if (url.includes('/observations?')) return new Response('null')
           throw new Error(`Unexpected downstream call: ${new URL(url).pathname}`)
@@ -80,10 +79,10 @@ test('real route boundaries: auth first; disabled/error perform only control SEL
             skipped: true,
             reason: state === 'disabled' ? 'execution_disabled' : 'execution_state_unavailable',
           })
-          assert.equal(calls.length, 1, 'zero lock, queue, ledger, metrics, engine/provider calls')
+          assert.equal(calls.length, 1, 'zero queue, ledger, metrics, engine/provider calls')
         } else {
           assert.ok([200, 400].includes(response.status))
-          assert.ok(calls[0]?.includes('/sis_execution_controls?'))
+          assert.ok(calls[0]?.includes('/rpc/acquire_legacy_enrichment_admission'))
         }
       }
     }

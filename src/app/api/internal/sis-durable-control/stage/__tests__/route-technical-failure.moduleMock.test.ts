@@ -156,6 +156,7 @@ test('production parser schema-validation then truncated envelope end as technic
   const { POST } = await import('../route')
   const request = new Request('https://aiscentra.test/api/internal/sis-durable-control/stage', {
     method: 'POST',
+    headers: { 'x-sis-canary-holder': 'github:100:1' },
   })
   for (let index = 0; index < 2; index += 1) {
     const response = await POST(request)

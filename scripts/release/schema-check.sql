@@ -39,6 +39,7 @@ WITH required_columns(table_name, column_name) AS (
     ('pipeline_metrics', 'items_rejected'),
     ('pipeline_metrics', 'items_retried'),
     ('sis_execution_controls', 'execution_enabled'),
+    ('sis_execution_controls', 'execution_scope'),
     ('sis_execution_controls', 'control_observation_id'),
     ('sis_execution_controls', 'groq_daily_token_limit'),
     ('sis_execution_controls', 'cloudflare_daily_request_limit'),
@@ -87,8 +88,10 @@ missing_functions AS (
 ),
 required_function_signatures(function_signature) AS (
   VALUES
-    ('start_durable_sis_v1_control(uuid,text,text,integer,text)'),
-    ('claim_durable_sis_v1_attempt(integer)'),
+    ('start_durable_sis_v1_control(uuid,text,text,integer,text,text,integer)'),
+    ('acquire_legacy_enrichment_admission(text,integer)'),
+    ('claim_durable_sis_v1_attempt(text,integer)'),
+    ('stop_durable_sis_v1_canary(text)'),
     ('complete_durable_sis_v1_attempt(uuid,bigint,text,jsonb,jsonb,text,text,text,integer,text,text,jsonb,jsonb,jsonb)'),
     ('fail_durable_sis_v1_stage(uuid,bigint,text,jsonb,jsonb)'),
     ('recover_durable_sis_v1_technical_failure(uuid,uuid)'),

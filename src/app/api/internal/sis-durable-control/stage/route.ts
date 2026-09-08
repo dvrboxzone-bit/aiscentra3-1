@@ -41,6 +41,8 @@ import type { ObservationRow } from '@/modules/observations/queries'
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
+const HOLDER_PATTERN = /^github:[0-9]+:[0-9]+$/
+
 type RpcClient = {
   rpc: (
     name: string,
@@ -164,6 +166,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+  const leaseHolder = request.headers.get('x-sis-canary-holder')
+  if (!leaseHolder || !HOLDER_PATTERN.test(leaseHolder)) {
+    return NextResponse.json({ error: 'Invalid canary lease holder' }, { status: 400 })
+  }
   const db = createAdminClient() as never as RpcClient
   const holder = `durable-sis-v1:${crypto.randomUUID()}`
   if (!(await acquireEnrichmentLock(db, holder))) {
@@ -172,6 +178,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const { data: claimData, error: claimError } = await db.rpc('claim_durable_sis_v1_attempt', {
+      p_lease_holder: leaseHolder,
       p_visibility_seconds: 55,
     })
     if (claimError)

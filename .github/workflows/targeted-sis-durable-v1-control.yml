@@ -44,12 +44,14 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           OBSERVATION_ID: ${{ inputs.observation_id }}
+          CANARY_HOLDER: github:${{ github.run_id }}:${{ github.run_attempt }}
         run: |
           set -euo pipefail
           payload=$(jq -cn --arg observation_id "$OBSERVATION_ID" '{observation_id:$observation_id}')
           status=$(curl --silent --show-error --output start.json --write-out '%{http_code}' \
             --request POST \
             --header "x-cron-secret: ${CRON_SECRET}" \
+            --header "x-sis-canary-holder: ${CANARY_HOLDER}" \
             --header 'content-type: application/json' \
             --data-binary "$payload" \
             --retry 0 \
@@ -65,6 +67,7 @@ jobs:
       - name: Execute bounded durable stages
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CANARY_HOLDER: github:${{ github.run_id }}:${{ github.run_attempt }}
         run: |
           set -euo pipefail
           attempted=0
@@ -74,6 +77,7 @@ jobs:
             status=$(curl --silent --show-error --output stage.json --write-out '%{http_code}' \
               --request POST \
               --header "x-cron-secret: ${CRON_SECRET}" \
+              --header "x-sis-canary-holder: ${CANARY_HOLDER}" \
               --retry 0 \
               --max-time 55 \
               https://aiscentra.com/api/internal/sis-durable-control/stage)
@@ -92,3 +96,22 @@ jobs:
           printf 'attempted=%s finalized=%s diagnostic_counts=%s\n' \
             "$attempted" "$finalized" "$diagnostics"
           test "$finalized" = 1
+
+      - name: Stop canary and restore global kill-switch
+        if: always()
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CANARY_HOLDER: github:${{ github.run_id }}:${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --output stop.json --write-out '%{http_code}' \
+            --request DELETE \
+            --header "x-cron-secret: ${CRON_SECRET}" \
+            --header "x-sis-canary-holder: ${CANARY_HOLDER}" \
+            --retry 0 \
+            --max-time 55 \
+            https://aiscentra.com/api/internal/sis-durable-control/start)
+          state=$(jq -r '.status // "MALFORMED"' stop.json)
+          printf 'stop_http=%s status=%s\n' "$status" "$state"
+          test "$status" = 200
+          test "$state" = STOPPED -o "$state" = ALREADY_STOPPED
