@@ -1518,6 +1518,63 @@ check "subsequent legacy request observes the restored disabled switch" "DISABLE
   "$($PG -c "SELECT public.acquire_legacy_enrichment_admission('legacy-after-reconcile',65);")"
 
 echo ""
+echo "TEST 22 — Durable stop serializes with provider completion and fallback reservation"
+RACE_HOLDER="github:race:1"
+check "race fixture starts one retryable canary run" "QUEUED|true" \
+  "$($PG -c "SELECT result->>'status'||'|'||(result->>'started') FROM (SELECT public.start_durable_sis_v1_control('$ACTIVE_ISOLATION_OBS','groq','fixture-primary',100,'groq_tokens','$RACE_HOLDER',780) result) q;")"
+RACE_RUN="$($PG -c "SELECT id FROM sis_execution_runs WHERE observation_id='$ACTIVE_ISOLATION_OBS' AND status NOT IN ('FINALIZED','FAILED') ORDER BY created_at DESC LIMIT 1;")"
+RACE_CLAIM="$($PG -c "SELECT attempt_id||'|'||message_id FROM public.claim_durable_sis_v1_attempt('$RACE_HOLDER',55);")"
+IFS='|' read -r RACE_ATTEMPT RACE_MESSAGE <<< "$RACE_CLAIM"
+
+$PG -v ON_ERROR_STOP=1 <<SQL >/dev/null
+CREATE FUNCTION public.pause_racing_completion() RETURNS trigger LANGUAGE plpgsql AS \$\$
+BEGIN
+  IF NEW.id='$RACE_ATTEMPT' AND OLD.status='RUNNING' AND NEW.status='RETRYABLE' THEN
+    PERFORM pg_sleep(2);
+  END IF;
+  RETURN NEW;
+END \$\$;
+CREATE TRIGGER pause_racing_completion
+  BEFORE UPDATE ON public.sis_execution_attempts
+  FOR EACH ROW EXECUTE FUNCTION public.pause_racing_completion();
+SQL
+
+set +e
+PGAPPNAME=sis-race-complete $PG -v ON_ERROR_STOP=1 -c "SELECT public.complete_durable_sis_v1_attempt(
+  '$RACE_ATTEMPT',$RACE_MESSAGE,'RETRYABLE',
+  '{\"type\":\"provider_error\",\"provider\":\"groq\",\"model\":\"fixture-primary\",\"http_status\":503,\"finish_reason\":null,\"content_length\":0}'::jsonb,
+  null,'CLASSIFIER','cloudflare','fixture-fallback',1,'provider_request'
+);" > "$DIR/race-complete" 2>&1 &
+RACE_COMPLETE_PID=$!
+RACE_SLEEPING="f"
+for _ in $(seq 1 100); do
+  RACE_SLEEPING="$($PG -c "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name='sis-race-complete' AND wait_event='PgSleep');")"
+  [[ "$RACE_SLEEPING" == "t" ]] && break
+  sleep 0.05
+done
+PGAPPNAME=sis-race-stop $PG -v ON_ERROR_STOP=1 -c "SELECT public.stop_durable_sis_v1_canary('$RACE_HOLDER');" > "$DIR/race-stop" 2>&1 &
+RACE_STOP_PID=$!
+wait "$RACE_COMPLETE_PID"
+RACE_COMPLETE_CODE=$?
+wait "$RACE_STOP_PID"
+RACE_STOP_CODE=$?
+set -e
+
+check "two controlled sessions reached the intended completion-stop overlap" "t" "$RACE_SLEEPING"
+check "completion and stop serialize without deadlock" "0|0" "$RACE_COMPLETE_CODE|$RACE_STOP_CODE"
+check "stop removes fallback work and preserves consumed/released budget accounting" \
+  "FAILED|RETRYABLE,TERMINAL|CONSUMED,RELEASED|0|false" \
+  "$($PG -c "SELECT run.status||'|'||(SELECT string_agg(status,',' ORDER BY ordinal) FROM sis_execution_attempts WHERE run_id=run.id)||'|'||(SELECT string_agg(reservation.status,',' ORDER BY attempt.ordinal) FROM sis_provider_budget_reservations reservation JOIN sis_execution_attempts attempt ON attempt.id=reservation.attempt_id WHERE attempt.run_id=run.id)||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1)||'|'||observation.processed FROM sis_execution_runs run JOIN observations observation ON observation.id=run.observation_id WHERE run.id='$RACE_RUN';")"
+check "stopped race creates no Signal or content decision" "0|0" \
+  "$($PG -c "SELECT (SELECT count(*) FROM signals WHERE '$ACTIVE_ISOLATION_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$ACTIVE_ISOLATION_OBS');")"
+check "late completion is duplicate-only and cannot enqueue work" "true|0|2" \
+  "$($PG -c "SELECT (result->>'duplicate')||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1)||'|'||(SELECT count(*) FROM sis_execution_attempts WHERE run_id='$RACE_RUN') FROM (SELECT public.complete_durable_sis_v1_attempt('$RACE_ATTEMPT',$RACE_MESSAGE,'RETRYABLE','{\"type\":\"provider_error\",\"provider\":\"groq\",\"model\":\"fixture-primary\",\"http_status\":503,\"finish_reason\":null,\"content_length\":0}'::jsonb,null,'CLASSIFIER','cloudflare','fixture-fallback',1,'provider_request') result) q;")"
+RACE_FALLBACK_ATTEMPT="$($PG -c "SELECT id FROM sis_execution_attempts WHERE run_id='$RACE_RUN' ORDER BY ordinal DESC LIMIT 1;")"
+check "late failure is duplicate-only and cannot create work or content" "true|0|0|0" \
+  "$($PG -c "SELECT (result->>'duplicate')||'|'||(SELECT count(*) FROM pgmq.q_durable_sis_v1)||'|'||(SELECT count(*) FROM signals WHERE '$ACTIVE_ISOLATION_OBS'=ANY(observation_ids))||'|'||(SELECT count(*) FROM signal_decision_log WHERE observation_id='$ACTIVE_ISOLATION_OBS') FROM (SELECT public.fail_durable_sis_v1_stage('$RACE_FALLBACK_ATTEMPT',0,'TERMINAL','{\"type\":\"provider_error\",\"provider\":\"cloudflare\",\"model\":\"fixture-fallback\",\"http_status\":503,\"finish_reason\":null,\"content_length\":0}'::jsonb,null) result) q;")"
+$PG -c "DROP TRIGGER pause_racing_completion ON public.sis_execution_attempts; DROP FUNCTION public.pause_racing_completion();" >/dev/null
+
+echo ""
 if [[ "$fail" -eq 0 ]]; then
   PGTEST_HOST="$PGTEST_HOST" PGTEST_PORT="$PORT" node --import tsx scripts/ci/enrichment-execution-pg.ts
   echo "PASS: all PostgreSQL integration checks succeeded."

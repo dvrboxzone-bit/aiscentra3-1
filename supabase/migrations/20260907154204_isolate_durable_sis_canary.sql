@@ -245,6 +245,164 @@ begin
 end
 $$;
 
+-- Provider completion/failure and canary stop share one lock order:
+-- admission mutex first, then attempt/run/budget/queue rows. Without this,
+-- completion can hold the attempt while stop holds the run and deadlock; it
+-- can also enqueue a fallback after stop has begun cleanup.
+create or replace function public.fail_durable_sis_v1_stage(
+  p_attempt_id uuid,
+  p_message_id bigint,
+  p_attempt_status text,
+  p_safe_diagnostic jsonb,
+  p_validated_output jsonb default null
+) returns jsonb
+language plpgsql security definer
+set search_path = public, pgmq, extensions
+as $$
+declare
+  v_attempt public.sis_execution_attempts%rowtype;
+begin
+  perform pg_advisory_xact_lock(hashtext('aiscentra.execution-admission.v1'));
+  select * into v_attempt from public.sis_execution_attempts where id=p_attempt_id for update;
+  if not found then raise exception 'attempt missing'; end if;
+  if v_attempt.status <> 'RUNNING' then
+    return jsonb_build_object('status',v_attempt.status,'duplicate',true);
+  end if;
+  if p_attempt_status not in ('SUCCEEDED','TERMINAL','DELIVERY_UNCERTAIN') then
+    raise exception 'invalid technical failure attempt status';
+  end if;
+  if p_attempt_status = 'SUCCEEDED' and p_validated_output is null then
+    raise exception 'successful stage output missing';
+  end if;
+  if p_safe_diagnostic is null or
+     p_safe_diagnostic->>'type' not in (
+       'json_parse','schema_validation','output_truncated','invalid_response_envelope',
+       'provider_error','deadline_exceeded','budget_unavailable','delivery_uncertain'
+     ) then
+    raise exception 'invalid technical failure diagnostic';
+  end if;
+  if p_safe_diagnostic ?| array['raw_prompt','raw_response','content','reasoning'] then
+    raise exception 'unsafe diagnostic keys';
+  end if;
+
+  update public.sis_execution_attempts
+  set status=p_attempt_status, safe_diagnostic=p_safe_diagnostic,
+      validated_output=p_validated_output, completed_at=now()
+  where id=p_attempt_id;
+  update public.sis_provider_budget_reservations
+  set status='CONSUMED', settled_at=now()
+  where attempt_id=p_attempt_id;
+  update public.sis_execution_runs
+  set status='FAILED', current_stage=v_attempt.stage,
+      classifier_output=case
+        when v_attempt.stage='CLASSIFIER' and p_attempt_status='SUCCEEDED'
+          then p_validated_output
+        else classifier_output
+      end,
+      parser_output=case
+        when v_attempt.stage='PARSER' and p_attempt_status='SUCCEEDED'
+          then p_validated_output
+        else parser_output
+      end,
+      safe_last_failure=p_safe_diagnostic,
+      finalization_outcome=null, finalization_signal=null,
+      finalization_decision=null, finalization_message_id=null,
+      updated_at=now()
+  where id=v_attempt.run_id;
+  perform pgmq.archive('durable_sis_v1',p_message_id);
+  return jsonb_build_object('status','FAILED','stage',v_attempt.stage);
+end
+$$;
+
+create or replace function public.complete_durable_sis_v1_attempt(
+  p_attempt_id uuid,
+  p_message_id bigint,
+  p_status text,
+  p_safe_diagnostic jsonb default null,
+  p_validated_output jsonb default null,
+  p_next_stage text default null,
+  p_next_provider text default null,
+  p_next_model text default null,
+  p_next_units integer default null,
+  p_next_unit_kind text default null,
+  p_finalization_outcome text default null,
+  p_finalization_signal jsonb default null,
+  p_finalization_decision jsonb default null,
+  p_budget_unavailable_decision jsonb default null
+) returns jsonb
+language plpgsql security definer
+set search_path = public, pgmq, extensions
+as $$
+declare
+  v_attempt public.sis_execution_attempts%rowtype;
+  v_next_id uuid;
+  v_next_ordinal smallint;
+  v_next_msg bigint;
+  v_final_msg bigint;
+  v_budget_diagnostic jsonb;
+begin
+  perform pg_advisory_xact_lock(hashtext('aiscentra.execution-admission.v1'));
+  select * into v_attempt from public.sis_execution_attempts where id=p_attempt_id for update;
+  if not found then raise exception 'attempt missing'; end if;
+  if v_attempt.status <> 'RUNNING' then return jsonb_build_object('status',v_attempt.status,'duplicate',true); end if;
+  if p_status not in ('SUCCEEDED','RETRYABLE','TERMINAL','DELIVERY_UNCERTAIN') then raise exception 'invalid status'; end if;
+  if p_safe_diagnostic ?| array['raw_prompt','raw_response','content','reasoning'] then raise exception 'unsafe diagnostic keys'; end if;
+
+  update public.sis_execution_attempts set status=p_status, safe_diagnostic=p_safe_diagnostic,
+    validated_output=p_validated_output, completed_at=now() where id=p_attempt_id;
+  update public.sis_provider_budget_reservations set status='CONSUMED', settled_at=now() where attempt_id=p_attempt_id;
+  update public.sis_execution_runs set
+    classifier_output=case when v_attempt.stage='CLASSIFIER' and p_status='SUCCEEDED' then p_validated_output else classifier_output end,
+    parser_output=case when v_attempt.stage='PARSER' and p_status='SUCCEEDED' then p_validated_output else parser_output end,
+    safe_last_failure=case when p_status<>'SUCCEEDED' then p_safe_diagnostic else safe_last_failure end,
+    updated_at=now() where id=v_attempt.run_id;
+
+  if p_next_stage is null then
+    if p_status <> 'SUCCEEDED' then
+      raise exception 'technical terminal failures must use fail_durable_sis_v1_stage';
+    end if;
+    if p_finalization_outcome not in ('SIGNAL','WEAK_SIGNAL','DISCARD') or
+       p_finalization_signal is null or p_finalization_decision is null then
+      raise exception 'durable SIS finalization payload missing';
+    end if;
+    select pgmq.send('durable_sis_v1',jsonb_build_object('stage','FINALIZE','run_id',v_attempt.run_id)) into v_final_msg;
+    update public.sis_execution_runs set status='READY_TO_FINALIZE',current_stage='FINALIZE',
+      finalization_outcome=p_finalization_outcome,finalization_signal=p_finalization_signal,
+      finalization_decision=p_finalization_decision,finalization_message_id=v_final_msg,updated_at=now()
+    where id=v_attempt.run_id;
+    perform pgmq.archive('durable_sis_v1',p_message_id);
+    return jsonb_build_object('status','QUEUED','stage','FINALIZE','message_id',v_final_msg);
+  end if;
+  if p_next_stage not in ('CLASSIFIER','PARSER') or p_next_provider not in ('groq','cloudflare') or nullif(p_next_model,'') is null then
+    raise exception 'invalid next attempt';
+  end if;
+  select coalesce(max(ordinal),0)+1 into v_next_ordinal from public.sis_execution_attempts
+    where run_id=v_attempt.run_id and stage=p_next_stage;
+  insert into public.sis_execution_attempts(run_id,stage,ordinal,provider,model)
+  values(v_attempt.run_id,p_next_stage,v_next_ordinal,p_next_provider,p_next_model) returning id into v_next_id;
+  if not public.reserve_durable_sis_v1_budget(v_next_id, p_next_units, p_next_unit_kind) then
+    v_budget_diagnostic := jsonb_build_object(
+      'type','budget_unavailable','provider',p_next_provider,'model',p_next_model,'http_status',0,
+      'finish_reason',null,'content_length',0
+    );
+    update public.sis_execution_attempts set status='TERMINAL',completed_at=now(),safe_diagnostic=v_budget_diagnostic
+    where id=v_next_id;
+    update public.sis_execution_runs set status='FAILED',current_stage=p_next_stage,
+      safe_last_failure=v_budget_diagnostic,
+      finalization_outcome=null,finalization_signal=null,
+      finalization_decision=null,finalization_message_id=null,updated_at=now()
+    where id=v_attempt.run_id;
+    perform pgmq.archive('durable_sis_v1',p_message_id);
+    return jsonb_build_object('status','FAILED','stage',p_next_stage,'reason','budget_unavailable');
+  end if;
+  select pgmq.send('durable_sis_v1',jsonb_build_object('attempt_id',v_next_id)) into v_next_msg;
+  update public.sis_execution_attempts set pgmq_message_id=v_next_msg where id=v_next_id;
+  update public.sis_execution_runs set status='QUEUED',current_stage=p_next_stage,updated_at=now() where id=v_attempt.run_id;
+  perform pgmq.archive('durable_sis_v1',p_message_id);
+  return jsonb_build_object('status','QUEUED','attempt_id',v_next_id);
+end
+$$;
+
 create or replace function public.stop_durable_sis_v1_canary(
   p_lease_holder text
 ) returns jsonb

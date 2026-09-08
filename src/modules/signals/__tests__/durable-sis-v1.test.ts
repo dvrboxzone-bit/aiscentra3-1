@@ -359,6 +359,14 @@ test('manual canary workflow is owner-only, bounded, one-ID, and cannot call bat
 
 test('isolation migration uses existing leases for exact-ID canary and fail-closed legacy admission', () => {
   const sql = isolationMigration()
+  const failFunction = sql.match(
+    /create or replace function public\.fail_durable_sis_v1_stage[\s\S]*?\n\$\$;/,
+  )?.[0]
+  const completeFunction = sql.match(
+    /create or replace function public\.complete_durable_sis_v1_attempt[\s\S]*?\n\$\$;/,
+  )?.[0]
+  assert.ok(failFunction)
+  assert.ok(completeFunction)
   assert.match(sql, /execution_scope in \('LEGACY', 'DURABLE_CANARY'\)/)
   assert.match(sql, /acquire_legacy_enrichment_admission/)
   assert.match(sql, /pg_advisory_xact_lock\(hashtext\('aiscentra\.execution-admission\.v1'\)\)/)
@@ -369,6 +377,12 @@ test('isolation migration uses existing leases for exact-ID canary and fail-clos
   assert.match(sql, /expires_at < now\(\)[\s\S]*stop_durable_sis_v1_canary/)
   assert.match(sql, /status='FAILED'/)
   assert.match(sql, /'RELEASED'/)
+  for (const providerResultFunction of [failFunction, completeFunction]) {
+    assert.match(
+      providerResultFunction,
+      /begin\s+perform pg_advisory_xact_lock\(hashtext\('aiscentra\.execution-admission\.v1'\)\);\s+select \* into v_attempt/s,
+    )
+  }
   assert.doesNotMatch(sql, /create table .*lease/is)
 })
 
