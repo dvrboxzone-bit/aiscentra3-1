@@ -1,0 +1,22 @@
+[
+  {
+    "id": "15557125-fad0-46e4-89b9-0d357040cd88",
+    "title": "Uncensored Open-weight Models: Redistribution as the Persistence Layer",
+    "content": "arXiv:2609.05241v1 Announce Type: new Abstract: A rapidly expanding ecosystem of actors is removing built-in safety guardrails from open-weight AI models. We profile this ecosystem by identifying key producers, downstream reproductions, and emerging applications. Between January 2024 and March 2026, we identified 3,471 original uncensored models on HuggingFace, each repackaged an average of 2.4 times; three actors account for 52% of all 8,164 compressed redistributions. Once quantized and mirrored across separate accounts, formats, and registries such as Ollama, these models persist regardless of upstream removal and become easier to deploy downstream. Of the 1,643 identified GitHub applications integrating uncensored large language models (ULLMs), 25% were classified as explicitly malicious.",
+    "source_name": "ArXiv CS.AI",
+    "sourceType": "research",
+    "sourceId": "bd3a13c6-ea98-4e4f-aefa-4063af595653",
+    "sourceUrl": "https://arxiv.org/list/cs.AI/recent",
+    "observationUrl": "https://arxiv.org/abs/2609.05241"
+  },
+  {
+    "id": "22da1087-1d20-4d4a-8efb-ac3a316e1706",
+    "title": "KVMem: Virtualizing Million-Token Agent Workspaces on a Consumer GPU",
+    "content": "arXiv:2609.04852v1 Announce Type: new Abstract: Modern LLM agents operate in persistent workspaces whose accumulated history can exceed both GPU KV capacity and the model's native context window. Existing systems typically compact older context into summaries or retrieve it later as text, either losing fine-grained execution evidence or repeatedly prefilling content that the model has already processed. We present KVMem, a KV-context virtualization system that preserves overflowed workspace history as paged KV state across GPU memory, host memory, and NVMe. KVMem uses lightweight, model-native attention-space indexes to select relevant historical blocks and materializes a query-dependent execution view bounded by the model's native context window. Extensive evaluations on long-context agent benchmarks spanning histories up to one million tokens, including LongMemEval, MemoryAgentBench, and AgentLongBench, show that KVMem generally achieves higher task utility and greater inference efficiency than compaction-based approaches, the de facto standard for handling context overflow. In the DeepSWE long-context test with Qwen3.8-27B, KVMem improves task success from 43.8% with compaction-only context management to 48.4%. In our local-deployment evaluation, KVMem runs Qwen3.6/3.8-27B NVFP4 with MTP on an off-the-shelf laptop equipped with a 24\\,GB RTX 5090 Laptop GPU, virtualizing agent workspaces of up to 1M tokens-four times the model's native 256K-token context window. In a single-session setting, KVMem generates $\\sim$50 tokens/s, providing interactive responsiveness for local agent execution. More broadly, by decoupling addressable workspace size from the LLM's native context window, KVMem provides a practical path toward long-running agents whose workspaces can grow beyond that window.",
+    "source_name": "ArXiv CS.LG",
+    "sourceType": "research",
+    "sourceId": "d0b027dd-b139-4f56-958a-830377d59e0b",
+    "sourceUrl": "https://arxiv.org/list/cs.LG/recent",
+    "observationUrl": "https://arxiv.org/abs/2609.04852"
+  }
+]

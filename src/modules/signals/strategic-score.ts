@@ -133,12 +133,19 @@ engine_justification: 2-3 sentences. State explicitly whether this is "normal sc
 or genuine "ecosystem-changing intelligence" and why. If high score, name the SPECIFIC
 actor/market/direction that changes.`
 
+export const SIS_CONTENT_MAX_CHARS = 2_000
+
 function promptEvidence(value: string, maxChars: number): string {
-  return value
-    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .slice(0, maxChars)
+  return (
+    value
+      .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      // Source text cannot forge the surrounding trust-boundary tags.
+      .replace(/</gu, '＜')
+      .replace(/>/gu, '＞')
+      .slice(0, maxChars)
+  )
 }
 
 export function buildSISPrompt(
@@ -148,11 +155,14 @@ export function buildSISPrompt(
   sourceType: string,
   evidencePolicy = 'EVIDENCE_POLICY: eligible=false; reason=NOT_EVALUATED',
 ): string {
+  const normalizedContent = promptEvidence(content, Infinity)
+  const truncationContext =
+    normalizedContent.length > SIS_CONTENT_MAX_CHARS ? 'CONTENT_TRUNCATED: true\n' : ''
   return `${evidencePolicy}
-<UNTRUSTED_SOURCE>
+${truncationContext}<UNTRUSTED_SOURCE>
 SOURCE: ${promptEvidence(sourceName, 120)} (${promptEvidence(sourceType, 48)})
 TITLE: ${promptEvidence(title, 500)}
-CONTENT: ${promptEvidence(content, 400)}
+CONTENT: ${normalizedContent.slice(0, SIS_CONTENT_MAX_CHARS)}
 </UNTRUSTED_SOURCE>
 
 Evaluate strategic importance. Return JSON only.`
